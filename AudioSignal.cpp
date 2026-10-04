@@ -39,9 +39,9 @@ static_assert(sizeof(WaveData) == 44 + sequenceSampleCount * sizeof(std::int16_t
 
 } // namespace
 
-bool AudioSignal::playForMinute(unsigned int minute) {
+bool AudioSignal::play() {
     constexpr double pi = 3.14159265358979323846;
-    const double frequency = 440.0 + (minute / 5) * 50.0;
+    constexpr double frequency = 440.0;
     WaveData wave{
         {'R', 'I', 'F', 'F'},
         static_cast<DWORD>(sizeof(WaveData) - 8),

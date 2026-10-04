@@ -28,7 +28,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     previousMinute = localTime.wMinute;
                     InvalidateRect(window, nullptr, TRUE);
                     if (localTime.wMinute % 5 == 0) {
-                        if (!AudioSignal::playForMinute(localTime.wMinute)) {
+                        if (!AudioSignal::play()) {
                             MessageBoxA(window, "Windows could not play the audio signal.",
                                         "Audio error", MB_ICONERROR);
                         }
