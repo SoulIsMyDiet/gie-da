@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include "AudioSignal.h"
+#include "MainWindowDisplay.h"
 
 namespace {
 
@@ -40,14 +41,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             HDC deviceContext = BeginPaint(window, &paint);
             RECT clientArea{};
             GetClientRect(window, &clientArea);
-            SetTextColor(deviceContext, RGB(255, 0, 0));
-            SYSTEMTIME localTime{};
-            GetLocalTime(&localTime);
-            char displayText[32]{};
-            wsprintfA(displayText, "hello world\r\n%02u:%02u",
-                      localTime.wHour, localTime.wMinute);
-            DrawTextA(deviceContext, displayText, -1, &clientArea,
-                      DT_CENTER | DT_VCENTER);
+            MainWindowDisplay::draw(deviceContext, clientArea);
             EndPaint(window, &paint);
             return 0;
         }
