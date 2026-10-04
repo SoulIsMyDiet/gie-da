@@ -12,6 +12,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             HDC deviceContext = BeginPaint(window, &paint);
             RECT clientArea{};
             GetClientRect(window, &clientArea);
+            SetTextColor(deviceContext, RGB(255, 0, 0));
             DrawTextA(deviceContext, "hello world", -1, &clientArea,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             EndPaint(window, &paint);
