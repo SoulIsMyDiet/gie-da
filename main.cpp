@@ -12,6 +12,9 @@ constexpr UINT_PTR clockTimerId = 1;
 constexpr DWORD sampleRate = 44100;
 constexpr DWORD signalDurationMs = 350;
 constexpr DWORD sampleCount = sampleRate * signalDurationMs / 1000;
+constexpr DWORD signalGapMs = 150;
+constexpr DWORD gapSampleCount = sampleRate * signalGapMs / 1000;
+constexpr DWORD sequenceSampleCount = sampleCount * 3 + gapSampleCount * 2;
 
 #pragma pack(push, 1)
 struct WaveData {
@@ -28,11 +31,11 @@ struct WaveData {
     WORD bitsPerSample;
     char dataId[4];
     DWORD dataSize;
-    std::int16_t samples[sampleCount];
+    std::int16_t samples[sequenceSampleCount];
 };
 #pragma pack(pop)
 
-static_assert(sizeof(WaveData) == 44 + sampleCount * sizeof(std::int16_t));
+static_assert(sizeof(WaveData) == 44 + sequenceSampleCount * sizeof(std::int16_t));
 
 bool PlayMinuteSignal(WORD minute) {
     constexpr double pi = 3.14159265358979323846;
@@ -50,13 +53,16 @@ bool PlayMinuteSignal(WORD minute) {
         sizeof(std::int16_t),
         16,
         {'d', 'a', 't', 'a'},
-        sampleCount * sizeof(std::int16_t),
+        sequenceSampleCount * sizeof(std::int16_t),
         {}
     };
 
-    for (DWORD i = 0; i < sampleCount; ++i) {
-        const double phase = 2.0 * pi * frequency * i / sampleRate;
-        wave.samples[i] = static_cast<std::int16_t>(12000.0 * std::sin(phase));
+    for (DWORD signal = 0; signal < 3; ++signal) {
+        const DWORD start = signal * (sampleCount + gapSampleCount);
+        for (DWORD i = 0; i < sampleCount; ++i) {
+            const double phase = 2.0 * pi * frequency * i / sampleRate;
+            wave.samples[start + i] = static_cast<std::int16_t>(12000.0 * std::sin(phase));
+        }
     }
 
     return PlaySoundA(reinterpret_cast<LPCSTR>(&wave), nullptr, SND_MEMORY | SND_SYNC);
