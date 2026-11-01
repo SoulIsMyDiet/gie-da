@@ -37,8 +37,7 @@ void drawClock(
     RECT bounds = clientArea;
     bounds.top = top;
     bounds.bottom = top + height;
-    drawCenteredText(deviceContext, "hello world\r\n" + clockText, bounds,
-                     DT_CENTER | DT_WORDBREAK);
+    drawCenteredText(deviceContext, clockText, bounds, DT_CENTER | DT_SINGLELINE);
 }
 
 void drawStatus(
@@ -119,10 +118,9 @@ void drawProductRow(
 void MainWindowDisplay::draw(
     HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot) {
     const std::string clockText = currentTimeText();
-    const std::string headerText = "hello world\r\n" + clockText;
     RECT headerBounds = clientArea;
-    DrawTextA(deviceContext, headerText.c_str(), -1, &headerBounds,
-              DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+    DrawTextA(deviceContext, clockText.c_str(), -1, &headerBounds,
+              DT_CENTER | DT_SINGLELINE | DT_CALCRECT);
     const LONG headerHeight = headerBounds.bottom - headerBounds.top;
 
     TEXTMETRICA textMetrics{};
