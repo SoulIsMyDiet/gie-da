@@ -11,15 +11,25 @@
 
 namespace {
 
+// Endpoint configuration and a defensive cap on the downloaded response size.
 constexpr wchar_t apiHost[] = L"api.twelvedata.com";
 constexpr wchar_t apiPath[] = L"/price?symbol=EUR%2FUSD&apikey=";
 constexpr DWORD maxResponseSize = 64 * 1024;
 
+/**
+ * Owns a WinHTTP handle and closes it automatically when it leaves scope.
+ */
 struct InternetHandle {
     HINTERNET value;
 
+    /**
+     * Takes ownership of a WinHTTP handle returned by a WinHTTP API call.
+     */
     explicit InternetHandle(HINTERNET handle) : value(handle) {}
 
+    /**
+     * Closes the owned handle if it is valid.
+     */
     ~InternetHandle() {
         if (value != nullptr) {
             WinHttpCloseHandle(value);
@@ -30,6 +40,9 @@ struct InternetHandle {
     InternetHandle& operator=(const InternetHandle&) = delete;
 };
 
+/**
+ * Reads and validates the API key from the process environment.
+ */
 bool readApiKey(std::wstring& apiKey) {
     const DWORD requiredSize = GetEnvironmentVariableW(L"TWELVE_DATA_API_KEY", nullptr, 0);
     if (requiredSize == 0) {
@@ -57,6 +70,9 @@ bool readApiKey(std::wstring& apiKey) {
     return true;
 }
 
+/**
+ * Extracts and validates the numeric "price" field from the JSON response.
+ */
 bool extractPrice(const std::string& response, std::string& price) {
     const std::string key = "\"price\"";
     const std::size_t keyPosition = response.find(key);
@@ -89,6 +105,9 @@ bool extractPrice(const std::string& response, std::string& price) {
     return true;
 }
 
+/**
+ * Converts common HTTP failure codes into user-readable diagnostics.
+ */
 std::string describeHttpError(DWORD statusCode) {
     std::string error = "Twelve Data HTTP " + std::to_string(statusCode);
     switch (statusCode) {
@@ -110,6 +129,9 @@ std::string describeHttpError(DWORD statusCode) {
 
 } // namespace
 
+/**
+ * Fetches EUR/USD over HTTPS and returns either the validated price or an error.
+ */
 bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) {
     std::wstring apiKey;
     if (!readApiKey(apiKey)) {

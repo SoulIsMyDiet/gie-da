@@ -9,6 +9,7 @@
 
 namespace {
 
+// Audio format and signal timing used to construct the in-memory WAV data.
 constexpr DWORD sampleRate = 44100;
 constexpr DWORD signalDurationMs = 350;
 constexpr DWORD sampleCount = sampleRate * signalDurationMs / 1000;
@@ -17,6 +18,7 @@ constexpr DWORD gapSampleCount = sampleRate * signalGapMs / 1000;
 constexpr DWORD sequenceSampleCount = sampleCount * 3 + gapSampleCount * 2;
 
 #pragma pack(push, 1)
+// WAV header followed by the generated mono, 16-bit PCM samples.
 struct WaveData {
     char riffId[4];
     DWORD riffSize;
@@ -39,6 +41,10 @@ static_assert(sizeof(WaveData) == 44 + sequenceSampleCount * sizeof(std::int16_t
 
 } // namespace
 
+/**
+ * Builds a three-pulse 440 Hz WAV signal and plays it synchronously.
+ * @return true if playback succeeds; otherwise false.
+ */
 bool AudioSignal::play() {
     constexpr double pi = 3.14159265358979323846;
     constexpr double frequency = 440.0;

@@ -9,5 +9,11 @@
 
 class MainWindowDisplay {
 public:
+    /**
+     * Draws the clock and current Forex status centered in the client area.
+     * @param deviceContext Windows drawing context for the target window.
+     * @param clientArea Window client rectangle to draw within.
+     * @param forexStatus Price or status message to display below the clock.
+     */
     static void draw(HDC deviceContext, RECT& clientArea, const std::string& forexStatus);
 };

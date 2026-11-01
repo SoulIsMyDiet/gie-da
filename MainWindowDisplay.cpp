@@ -1,5 +1,8 @@
 #include "MainWindowDisplay.h"
 
+/**
+ * Renders the current local time and Forex status as centered red text.
+ */
 void MainWindowDisplay::draw(
     HDC deviceContext, RECT& clientArea, const std::string& forexStatus) {
     SetTextColor(deviceContext, RGB(255, 0, 0));
