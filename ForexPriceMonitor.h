@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <deque>
 #include <string>
 
 class ForexPriceMonitor {
@@ -31,7 +32,7 @@ public:
     void stop();
 
     /**
-     * Returns a thread-safe copy of the latest price or error status.
+     * Returns a thread-safe display of the latest eight prices or current status.
      */
     std::string status() const;
 
@@ -51,9 +52,15 @@ private:
      */
     void setStatus(std::string status);
 
+    /**
+     * Adds a successful price to the front of the bounded display history.
+     */
+    void addPrice(std::string price, const SYSTEMTIME& fetchedAt);
+
     HWND notificationWindow_ = nullptr;
     HANDLE stopEvent_ = nullptr;
     HANDLE workerThread_ = nullptr;
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
     std::string status_ = "Connecting to Twelve Data...";
+    std::deque<std::string> priceHistory_;
 };

@@ -2,6 +2,7 @@
 
 #include "TwelveDataClient.h"
 
+#include <cstdio>
 #include <utility>
 
 namespace {
@@ -67,11 +68,22 @@ void ForexPriceMonitor::stop() {
 }
 
 /**
- * Copies the latest monitor status under a shared lock.
+ * Builds a display snapshot of the latest prices and any current error.
  */
 std::string ForexPriceMonitor::status() const {
     AcquireSRWLockShared(&statusLock_);
-    const std::string currentStatus = status_;
+    std::string currentStatus;
+    if (priceHistory_.empty()) {
+        currentStatus = status_;
+    } else {
+        currentStatus = status_;
+        for (const std::string& entry : priceHistory_) {
+            if (!currentStatus.empty()) {
+                currentStatus += "\r\n";
+            }
+            currentStatus += entry;
+        }
+    }
     ReleaseSRWLockShared(&statusLock_);
     return currentStatus;
 }
@@ -93,7 +105,13 @@ void ForexPriceMonitor::run() {
         std::string price;
         std::string error;
         const bool succeeded = TwelveDataClient::fetchEurUsdPrice(price, error);
-        setStatus(succeeded ? "EUR/USD: " + price : std::move(error));
+        if (succeeded) {
+            SYSTEMTIME fetchedAt{};
+            GetLocalTime(&fetchedAt);
+            addPrice(std::move(price), fetchedAt);
+        } else {
+            setStatus(std::move(error));
+        }
 
         if (!PostMessageA(notificationWindow_, forexUpdateMessage, 0, 0)) {
             break;
@@ -110,5 +128,25 @@ void ForexPriceMonitor::run() {
 void ForexPriceMonitor::setStatus(std::string status) {
     AcquireSRWLockExclusive(&statusLock_);
     status_ = std::move(status);
+    ReleaseSRWLockExclusive(&statusLock_);
+}
+
+/**
+ * Stores a timestamped price as the newest entry and retains only eight.
+ */
+void ForexPriceMonitor::addPrice(std::string price, const SYSTEMTIME& fetchedAt) {
+    char timestampedPrice[32]{};
+    std::snprintf(timestampedPrice, sizeof(timestampedPrice),
+                  "%02u:%02u:%02u  EUR/USD: ",
+                  static_cast<unsigned>(fetchedAt.wHour),
+                  static_cast<unsigned>(fetchedAt.wMinute),
+                  static_cast<unsigned>(fetchedAt.wSecond));
+
+    AcquireSRWLockExclusive(&statusLock_);
+    status_.clear();
+    priceHistory_.push_front(std::string(timestampedPrice) + price);
+    if (priceHistory_.size() > 8) {
+        priceHistory_.pop_back();
+    }
     ReleaseSRWLockExclusive(&statusLock_);
 }

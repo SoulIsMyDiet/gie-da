@@ -1,7 +1,9 @@
 #include "MainWindowDisplay.h"
 
+#include <cstdio>
+
 /**
- * Renders the current local time and Forex status as centered red text.
+ * Renders the current local time and timestamped Forex prices as centered red text.
  */
 void MainWindowDisplay::draw(
     HDC deviceContext, RECT& clientArea, const std::string& forexStatus) {
@@ -9,9 +11,12 @@ void MainWindowDisplay::draw(
 
     SYSTEMTIME localTime{};
     GetLocalTime(&localTime);
-    char displayText[256]{};
-    wsprintfA(displayText, "hello world\r\n%02u:%02u\r\n%s",
-              localTime.wHour, localTime.wMinute, forexStatus.c_str());
-    DrawTextA(deviceContext, displayText, -1, &clientArea,
+    char clockText[8]{};
+    std::snprintf(clockText, sizeof(clockText), "%02u:%02u",
+                  static_cast<unsigned>(localTime.wHour),
+                  static_cast<unsigned>(localTime.wMinute));
+    const std::string displayText =
+        "hello world\r\n" + std::string(clockText) + "\r\n" + forexStatus;
+    DrawTextA(deviceContext, displayText.c_str(), -1, &clientArea,
               DT_CENTER | DT_VCENTER | DT_WORDBREAK);
 }
