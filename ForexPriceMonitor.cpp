@@ -3,6 +3,7 @@
 #include "TwelveDataClient.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <utility>
 
 namespace {
@@ -68,24 +69,14 @@ void ForexPriceMonitor::stop() {
 }
 
 /**
- * Builds a display snapshot of the latest prices and any current error.
+ * Copies the current status and price history under a shared lock.
  */
-std::string ForexPriceMonitor::status() const {
+ForexPriceSnapshot ForexPriceMonitor::snapshot() const {
     AcquireSRWLockShared(&statusLock_);
-    std::string currentStatus;
-    if (priceHistory_.empty()) {
-        currentStatus = status_;
-    } else {
-        currentStatus = status_;
-        for (const std::string& entry : priceHistory_) {
-            if (!currentStatus.empty()) {
-                currentStatus += "\r\n";
-            }
-            currentStatus += entry;
-        }
-    }
+    ForexPriceSnapshot currentSnapshot{status_, {}};
+    currentSnapshot.prices.assign(priceHistory_.begin(), priceHistory_.end());
     ReleaseSRWLockShared(&statusLock_);
-    return currentStatus;
+    return currentSnapshot;
 }
 
 /**
@@ -108,7 +99,8 @@ void ForexPriceMonitor::run() {
         if (succeeded) {
             SYSTEMTIME fetchedAt{};
             GetLocalTime(&fetchedAt);
-            addPrice(std::move(price), fetchedAt);
+            const double numericPrice = std::strtod(price.c_str(), nullptr);
+            addPrice(std::move(price), numericPrice, fetchedAt);
         } else {
             setStatus(std::move(error));
         }
@@ -134,17 +126,19 @@ void ForexPriceMonitor::setStatus(std::string status) {
 /**
  * Stores a timestamped price as the newest entry and retains only eight.
  */
-void ForexPriceMonitor::addPrice(std::string price, const SYSTEMTIME& fetchedAt) {
-    char timestampedPrice[32]{};
-    std::snprintf(timestampedPrice, sizeof(timestampedPrice),
-                  "%02u:%02u:%02u  EUR/USD: ",
+void ForexPriceMonitor::addPrice(
+    std::string price, double numericPrice, const SYSTEMTIME& fetchedAt) {
+    char timestamp[9]{};
+    std::snprintf(timestamp, sizeof(timestamp),
+                  "%02u:%02u:%02u",
                   static_cast<unsigned>(fetchedAt.wHour),
                   static_cast<unsigned>(fetchedAt.wMinute),
                   static_cast<unsigned>(fetchedAt.wSecond));
 
     AcquireSRWLockExclusive(&statusLock_);
     status_.clear();
-    priceHistory_.push_front(std::string(timestampedPrice) + price);
+    priceHistory_.push_front(
+        ForexPriceEntry{timestamp, std::move(price), numericPrice});
     if (priceHistory_.size() > 8) {
         priceHistory_.pop_back();
     }

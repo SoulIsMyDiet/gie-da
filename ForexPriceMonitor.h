@@ -5,6 +5,18 @@
 
 #include <deque>
 #include <string>
+#include <vector>
+
+struct ForexPriceEntry {
+    std::string timestamp;
+    std::string price;
+    double numericPrice = 0.0;
+};
+
+struct ForexPriceSnapshot {
+    std::string status;
+    std::vector<ForexPriceEntry> prices;
+};
 
 class ForexPriceMonitor {
 public:
@@ -34,7 +46,7 @@ public:
     /**
      * Returns a thread-safe display of the latest eight prices or current status.
      */
-    std::string status() const;
+    ForexPriceSnapshot snapshot() const;
 
 private:
     /**
@@ -55,12 +67,12 @@ private:
     /**
      * Adds a successful price to the front of the bounded display history.
      */
-    void addPrice(std::string price, const SYSTEMTIME& fetchedAt);
+    void addPrice(std::string price, double numericPrice, const SYSTEMTIME& fetchedAt);
 
     HWND notificationWindow_ = nullptr;
     HANDLE stopEvent_ = nullptr;
     HANDLE workerThread_ = nullptr;
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
     std::string status_ = "Connecting to Twelve Data...";
-    std::deque<std::string> priceHistory_;
+    std::deque<ForexPriceEntry> priceHistory_;
 };

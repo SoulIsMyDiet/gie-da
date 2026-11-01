@@ -165,7 +165,7 @@ void MainWindow::onPaint() {
     HDC deviceContext = BeginPaint(handle_, &paint);
     RECT clientArea{};
     GetClientRect(handle_, &clientArea);
-    MainWindowDisplay::draw(deviceContext, clientArea, forexMonitor_.status());
+    MainWindowDisplay::draw(deviceContext, clientArea, forexMonitor_.snapshot());
     EndPaint(handle_, &paint);
 }
 

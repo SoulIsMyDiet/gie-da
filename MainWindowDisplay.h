@@ -6,14 +6,18 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
+
+#include "ForexPriceMonitor.h"
 
 class MainWindowDisplay {
 public:
     /**
-     * Draws the clock and current Forex status centered in the client area.
+     * Draws the clock, status, and color-coded Forex price history.
      * @param deviceContext Windows drawing context for the target window.
      * @param clientArea Window client rectangle to draw within.
-     * @param forexStatus Price or status message to display below the clock.
+     * @param snapshot Current status and price history to display.
      */
-    static void draw(HDC deviceContext, RECT& clientArea, const std::string& forexStatus);
+    static void draw(
+        HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot);
 };
