@@ -35,7 +35,7 @@ private:
     bool onCreate();
 
     /**
-     * Refreshes the clock and plays the five-minute audio reminder when due.
+     * Refreshes the clock when the displayed minute changes.
      */
     void onClockTimer();
 

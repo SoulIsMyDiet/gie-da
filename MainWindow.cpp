@@ -1,7 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "AudioSignal.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
 
@@ -137,7 +136,7 @@ bool MainWindow::onCreate() {
 }
 
 /**
- * Redraws the clock when its minute changes and plays the scheduled reminder.
+ * Redraws the clock when its minute changes.
  */
 void MainWindow::onClockTimer() {
     SYSTEMTIME localTime{};
@@ -156,10 +155,6 @@ void MainWindow::onClockTimer() {
     previousHour_ = localTime.wHour;
     previousMinute_ = localTime.wMinute;
     InvalidateRect(handle_, nullptr, TRUE);
-    if (localTime.wMinute % 5 == 0 && !AudioSignal::play()) {
-        MessageBoxA(handle_, "Windows could not play the audio signal.",
-                    "Audio error", MB_ICONERROR);
-    }
 }
 
 /**
