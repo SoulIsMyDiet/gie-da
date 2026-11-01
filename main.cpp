@@ -3,14 +3,61 @@
 
 #include "AudioSignal.h"
 #include "MainWindowDisplay.h"
+#include "TwelveDataClient.h"
+
+#include <string>
 
 namespace {
 
 constexpr char windowClassName[] = "HelloWorldWindow";
 constexpr UINT_PTR clockTimerId = 1;
+constexpr UINT forexUpdateMessage = WM_APP + 1;
+constexpr DWORD forexRefreshIntervalMs = 30000;
+
+SRWLOCK forexStatusLock = SRWLOCK_INIT;
+std::string forexStatus = "Connecting to Twelve Data...";
+HANDLE forexStopEvent = nullptr;
+HANDLE forexWorkerThread = nullptr;
+
+class ForexStatusLock {
+public:
+    ForexStatusLock() {
+        AcquireSRWLockExclusive(&forexStatusLock);
+    }
+
+    ~ForexStatusLock() {
+        ReleaseSRWLockExclusive(&forexStatusLock);
+    }
+
+    ForexStatusLock(const ForexStatusLock&) = delete;
+    ForexStatusLock& operator=(const ForexStatusLock&) = delete;
+};
+
+DWORD WINAPI updateForexPrice(LPVOID parameter) {
+    const HWND window = static_cast<HWND>(parameter);
+    while (true) {
+        std::string price;
+        std::string error;
+        const bool succeeded = TwelveDataClient::fetchEurUsdPrice(price, error);
+        {
+            const ForexStatusLock lock;
+            forexStatus = succeeded ? "EUR/USD: " + price : error;
+        }
+        if (!PostMessageA(window, forexUpdateMessage, 0, 0)) {
+            break;
+        }
+        if (WaitForSingleObject(forexStopEvent, forexRefreshIntervalMs) != WAIT_TIMEOUT) {
+            break;
+        }
+    }
+    return 0;
+}
 
 LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+        case forexUpdateMessage:
+            InvalidateRect(window, nullptr, TRUE);
+            return 0;
         case WM_TIMER:
             if (wParam == clockTimerId) {
                 static bool hasPreviousTime = false;
@@ -41,11 +88,28 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             HDC deviceContext = BeginPaint(window, &paint);
             RECT clientArea{};
             GetClientRect(window, &clientArea);
-            MainWindowDisplay::draw(deviceContext, clientArea);
+            std::string currentForexStatus;
+            {
+                const ForexStatusLock lock;
+                currentForexStatus = forexStatus;
+            }
+            MainWindowDisplay::draw(deviceContext, clientArea, currentForexStatus);
             EndPaint(window, &paint);
             return 0;
         }
         case WM_DESTROY:
+            if (forexStopEvent != nullptr) {
+                SetEvent(forexStopEvent);
+            }
+            if (forexWorkerThread != nullptr) {
+                WaitForSingleObject(forexWorkerThread, INFINITE);
+                CloseHandle(forexWorkerThread);
+                forexWorkerThread = nullptr;
+            }
+            if (forexStopEvent != nullptr) {
+                CloseHandle(forexStopEvent);
+                forexStopEvent = nullptr;
+            }
             PostQuitMessage(0);
             return 0;
         default:
@@ -79,6 +143,22 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
 
     if (window == nullptr) {
         MessageBoxA(nullptr, "Could not create the window.", "Error", MB_ICONERROR);
+        return 1;
+    }
+
+    forexStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (forexStopEvent == nullptr) {
+        MessageBoxA(window, "Could not start the Forex update service.",
+                    "Error", MB_ICONERROR);
+        DestroyWindow(window);
+        return 1;
+    }
+    forexWorkerThread = CreateThread(
+        nullptr, 0, updateForexPrice, window, 0, nullptr);
+    if (forexWorkerThread == nullptr) {
+        MessageBoxA(window, "Could not start the Forex update service.",
+                    "Error", MB_ICONERROR);
+        DestroyWindow(window);
         return 1;
     }
 

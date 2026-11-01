@@ -5,7 +5,9 @@
 #endif
 #include <windows.h>
 
+#include <string>
+
 class MainWindowDisplay {
 public:
-    static void draw(HDC deviceContext, RECT& clientArea);
+    static void draw(HDC deviceContext, RECT& clientArea, const std::string& forexStatus);
 };
