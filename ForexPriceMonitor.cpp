@@ -96,16 +96,18 @@ void ForexPriceMonitor::run() {
         std::string price;
         std::string error;
         const bool succeeded = TwelveDataClient::fetchEurUsdPrice(price, error);
+        bool playAlarm = false;
         if (succeeded) {
             SYSTEMTIME fetchedAt{};
             GetLocalTime(&fetchedAt);
             const double numericPrice = std::strtod(price.c_str(), nullptr);
-            addPrice(std::move(price), numericPrice, fetchedAt);
+            playAlarm = addPrice(std::move(price), numericPrice, fetchedAt);
         } else {
             setStatus(std::move(error));
         }
 
-        if (!PostMessageA(notificationWindow_, forexUpdateMessage, 0, 0)) {
+        if (!PostMessageA(notificationWindow_, forexUpdateMessage,
+                          playAlarm ? 1 : 0, 0)) {
             break;
         }
         if (WaitForSingleObject(stopEvent_, forexRefreshIntervalMs) != WAIT_TIMEOUT) {
@@ -126,7 +128,7 @@ void ForexPriceMonitor::setStatus(std::string status) {
 /**
  * Stores a timestamped price as the newest entry and retains only eight.
  */
-void ForexPriceMonitor::addPrice(
+bool ForexPriceMonitor::addPrice(
     std::string price, double numericPrice, const SYSTEMTIME& fetchedAt) {
     char timestamp[9]{};
     std::snprintf(timestamp, sizeof(timestamp),
@@ -137,10 +139,29 @@ void ForexPriceMonitor::addPrice(
 
     AcquireSRWLockExclusive(&statusLock_);
     status_.clear();
-    priceHistory_.push_front(
-        ForexPriceEntry{timestamp, std::move(price), numericPrice});
+    ForexRowColor color = ForexRowColor::gray;
+    if (!priceHistory_.empty()) {
+        const ForexPriceEntry& previous = priceHistory_.front();
+        if (numericPrice > previous.numericPrice) {
+            color = ForexRowColor::green;
+        } else if (numericPrice < previous.numericPrice) {
+            color = ForexRowColor::red;
+        } else {
+            color = previous.color;
+        }
+    }
+
+    if (!priceHistory_.empty() && priceHistory_.front().color == color) {
+        ++latestColorStreak_;
+    } else {
+        latestColorStreak_ = 1;
+    }
+
+    priceHistory_.push_front(ForexPriceEntry{
+        timestamp, std::move(price), numericPrice, color});
     if (priceHistory_.size() > 8) {
         priceHistory_.pop_back();
     }
     ReleaseSRWLockExclusive(&statusLock_);
+    return latestColorStreak_ == 3;
 }

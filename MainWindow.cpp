@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include "AudioSignal.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
 
@@ -104,6 +105,10 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         case forexUpdateMessage:
             InvalidateRect(handle_, nullptr, TRUE);
+            if (wParam != 0 && !AudioSignal::play()) {
+                MessageBoxA(handle_, "Windows could not play the audio signal.",
+                            "Audio error", MB_ICONERROR);
+            }
             return 0;
         case WM_PAINT:
             onPaint();

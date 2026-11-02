@@ -7,10 +7,17 @@
 #include <string>
 #include <vector>
 
+enum class ForexRowColor {
+    gray,
+    red,
+    green
+};
+
 struct ForexPriceEntry {
     std::string timestamp;
     std::string price;
     double numericPrice = 0.0;
+    ForexRowColor color = ForexRowColor::gray;
 };
 
 struct ForexPriceSnapshot {
@@ -67,7 +74,8 @@ private:
     /**
      * Adds a successful price to the front of the bounded display history.
      */
-    void addPrice(std::string price, double numericPrice, const SYSTEMTIME& fetchedAt);
+    bool addPrice(
+        std::string price, double numericPrice, const SYSTEMTIME& fetchedAt);
 
     HWND notificationWindow_ = nullptr;
     HANDLE stopEvent_ = nullptr;
@@ -75,4 +83,5 @@ private:
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
     std::string status_ = "Connecting to Twelve Data...";
     std::deque<ForexPriceEntry> priceHistory_;
+    std::size_t latestColorStreak_ = 0;
 };

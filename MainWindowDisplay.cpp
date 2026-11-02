@@ -49,28 +49,16 @@ void drawStatus(
     drawCenteredText(deviceContext, status, bounds, DT_CENTER | DT_WORDBREAK);
 }
 
-COLORREF assignPriceColor(
-    const ForexPriceEntry& current, const ForexPriceEntry& previous,
-    COLORREF previousColor) {
-    if (current.numericPrice > previous.numericPrice) {
-        return higherPriceColor;
+COLORREF rowColor(ForexRowColor color) {
+    switch (color) {
+        case ForexRowColor::red:
+            return lowerPriceColor;
+        case ForexRowColor::green:
+            return higherPriceColor;
+        case ForexRowColor::gray:
+            return firstPriceColor;
     }
-    if (current.numericPrice < previous.numericPrice) {
-        return lowerPriceColor;
-    }
-    return previousColor;
-}
-
-std::vector<COLORREF> assignPriceColors(const ForexPriceSnapshot& snapshot) {
-    std::vector<COLORREF> colors(snapshot.prices.size(), firstPriceColor);
-    for (std::size_t index = colors.size(); index > 1; --index) {
-        const std::size_t currentIndex = index - 2;
-        const std::size_t previousIndex = index - 1;
-        colors[currentIndex] = assignPriceColor(
-            snapshot.prices[currentIndex], snapshot.prices[previousIndex],
-            colors[previousIndex]);
-    }
-    return colors;
+    return firstPriceColor;
 }
 
 LONG drawProductTimestamp(
@@ -151,10 +139,9 @@ void MainWindowDisplay::draw(
         top += statusHeight;
     }
 
-    const std::vector<COLORREF> colors = assignPriceColors(snapshot);
     for (std::size_t index = 0; index < snapshot.prices.size(); ++index) {
         drawProductRow(deviceContext, clientArea, top, rowHeight,
-                       snapshot.prices[index], colors[index]);
+                       snapshot.prices[index], rowColor(snapshot.prices[index].color));
         top += rowHeight;
     }
 }
