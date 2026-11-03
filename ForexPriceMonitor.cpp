@@ -101,17 +101,18 @@ void ForexPriceMonitor::run() {
         if (succeeded) {
             SYSTEMTIME fetchedAt{};
             GetLocalTime(&fetchedAt);
-            SYSTEMTIME recordedAt{};
-            GetSystemTime(&recordedAt);
-
-            std::string storageError;
-            const bool savedToDatabase =
-                PriceHistoryClient::savePrice("EUR/USD", price, recordedAt, storageError);
-
             const double numericPrice = std::strtod(price.c_str(), nullptr);
-            playAlarm = addPrice(std::move(price), numericPrice, fetchedAt);
-            if (!savedToDatabase) {
-                setStatus("Price fetched, but database save failed: " + storageError);
+            playAlarm = addPrice(price, numericPrice, fetchedAt);
+
+            if (playAlarm) {
+                SYSTEMTIME recordedAt{};
+                GetSystemTime(&recordedAt);
+
+                std::string storageError;
+                if (!PriceHistoryClient::savePrice(
+                        "EUR/USD", price, recordedAt, storageError)) {
+                    setStatus("Price fetched, but database save failed: " + storageError);
+                }
             }
         } else {
             setStatus(std::move(error));
@@ -174,5 +175,5 @@ bool ForexPriceMonitor::addPrice(
         priceHistory_.pop_back();
     }
     ReleaseSRWLockExclusive(&statusLock_);
-    return latestColorStreak_ == 3;
+    return color != ForexRowColor::gray && latestColorStreak_ == 3;
 }

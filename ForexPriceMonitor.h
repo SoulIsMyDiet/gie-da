@@ -72,7 +72,8 @@ private:
     void setStatus(std::string status);
 
     /**
-     * Adds a successful price to the front of the bounded display history.
+     * Adds a price to display history and returns true only on the third
+     * consecutive red or green entry, when the alarm should sound and save.
      */
     bool addPrice(
         std::string price, double numericPrice, const SYSTEMTIME& fetchedAt);
