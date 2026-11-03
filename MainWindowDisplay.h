@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ForexPriceMonitor.h"
+#include "PriceHistoryClient.h"
 
 class MainWindowDisplay {
 public:
@@ -20,4 +21,15 @@ public:
      */
     static void draw(
         HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot);
+
+    /**
+     * Wyświetla tabelę wpisów pobranych przed kliknięciem przycisku „Raporty”.
+     * @param deviceContext Kontekst rysowania głównego okna.
+     * @param clientArea Obszar dostępny dla zawartości strony.
+     * @param entries Wiersze raportu pobrane z bazy.
+     * @param status Informacja o błędzie lub braku wpisów.
+     */
+    static void drawReportsPage(
+        HDC deviceContext, RECT& clientArea,
+        const std::vector<PriceReportEntry>& entries, const std::string& status);
 };

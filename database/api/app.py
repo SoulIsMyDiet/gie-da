@@ -4,12 +4,12 @@
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import mysql.connector
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
@@ -168,6 +168,44 @@ class PriceHistoryRepository:
                 cursor.close()
             connection.close()
 
+    def fetch_recent_before(self, cutoff: datetime) -> list[tuple[int, str, str, str, str]]:
+        """Pobiera do 20 najnowszych wpisów sprzed wskazanego czasu lokalnego."""
+        cutoff_local = cutoff.astimezone(WARSAW_TIME_ZONE).replace(tzinfo=None)
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        symbol,
+                        CAST(price AS CHAR),
+                        recorded_at,
+                        zlote_rady
+                    FROM price_history
+                    WHERE recorded_at < %s
+                    ORDER BY recorded_at DESC, id DESC
+                    LIMIT 20
+                    """,
+                    (cutoff_local,),
+                )
+                rows = cursor.fetchall()
+                return [
+                    (
+                        record_id,
+                        symbol,
+                        price,
+                        recorded_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        golden_advice,
+                    )
+                    for record_id, symbol, price, recorded_at, golden_advice in rows
+                ]
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     # :)
 
 
@@ -204,6 +242,33 @@ def save_price(
             detail="Nie udało się zapisać ceny w bazie MySQL.",
         ) from error
     return {"id": record_id}
+
+
+@app.get("/api/prices/report", response_class=Response)
+def price_report(
+    request: Request,
+    before_utc_us: int = Query(ge=0, le=253402300799999999),
+) -> Response:
+    """Zwraca do 20 wpisów sprzed chwili kliknięcia w formacie TSV dla aplikacji."""
+    cutoff_utc = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        microseconds=before_utc_us
+    )
+    try:
+        rows = request.app.state.repository.fetch_recent_before(cutoff_utc)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać raportu z bazy MySQL.",
+        ) from error
+
+    report_lines = [
+        "\t".join((str(record_id), recorded_at, symbol, price, golden_advice))
+        for record_id, symbol, price, recorded_at, golden_advice in rows
+    ]
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
 
 
 app.state.repository = repository

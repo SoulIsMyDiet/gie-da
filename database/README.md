@@ -43,4 +43,6 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Nie używaj `docke
 
 Przy uruchomieniu API istniejąca tabela zostanie uzupełniona o `zlote_rady`, a każdy wiersz bez wartości otrzyma losowy rzeczownik. Nowe wpisy również otrzymują rzeczownik automatycznie.
 
+Przycisk „Raporty” pobiera maksymalnie 20 najnowszych wpisów, których `recorded_at` jest wcześniejsze niż chwila kliknięcia. Każde ponowne kliknięcie wykonuje nowe zapytanie do bazy.
+
 Wpisy zapisane przed tą zmianą pozostają w UTC i nie są modyfikowane; nowe wpisy będą w czasie `Europe/Warsaw`. Oznacza to, że w tej samej kolumnie starsze i nowe rekordy mają różną interpretację czasu. API i baza są dostępne wyłącznie w lokalnej konfiguracji projektu; port MySQL nie jest wystawiony na sieć hosta. Dalsze zmiany struktury będą wymagały migracji w `database/api/app.py` — samo `CREATE TABLE IF NOT EXISTS` nie zmienia już istniejących tabel.

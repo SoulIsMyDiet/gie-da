@@ -3,7 +3,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <string>
+#include <vector>
+
 #include "ForexPriceMonitor.h"
+#include "PriceHistoryClient.h"
 
 class MainWindow {
 public:
@@ -46,7 +50,7 @@ private:
     void positionReportsButton();
 
     /**
-     * Informuje, że działanie przycisku zostanie dodane w kolejnej iteracji.
+     * Przełącza główną część okna na stronę raportów.
      */
     void onReportsClicked();
 
@@ -69,8 +73,11 @@ private:
     HWND handle_ = nullptr;
     int showCommand_ = SW_SHOW;
     bool hasPreviousTime_ = false;
+    bool reportsPageVisible_ = false;
     WORD previousHour_ = 0;
     WORD previousMinute_ = 0;
     HWND reportsButton_ = nullptr;
+    std::vector<PriceReportEntry> reportEntries_;
+    std::string reportsStatus_;
     ForexPriceMonitor forexMonitor_;
 };

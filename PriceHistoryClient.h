@@ -4,6 +4,18 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
+
+/**
+ * Przechowuje wartości jednego wiersza raportu z historii cen.
+ */
+struct PriceReportEntry {
+    std::string id;
+    std::string recordedAt;
+    std::string symbol;
+    std::string price;
+    std::string goldenAdvice;
+};
 
 class PriceHistoryClient {
 public:
@@ -19,5 +31,17 @@ public:
         const std::string& symbol,
         const std::string& price,
         const SYSTEMTIME& recordedAt,
+        std::string& error);
+
+    /**
+     * Pobiera maksymalnie 20 zapisów wcześniejszych niż podany czas UTC.
+     * @param beforeUtcMicroseconds Czas kliknięcia jako mikrosekundy od epoki Unix.
+     * @param entries Otrzymuje wiersze raportu, jeśli pobranie się powiedzie.
+     * @param error Otrzymuje opis błędu, jeśli żądanie się nie powiedzie.
+     * @return true, jeśli odpowiedź zawiera prawidłowe dane; w przeciwnym razie false.
+     */
+    static bool fetchRecentPrices(
+        unsigned long long beforeUtcMicroseconds,
+        std::vector<PriceReportEntry>& entries,
         std::string& error);
 }; // :)

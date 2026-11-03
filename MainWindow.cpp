@@ -4,6 +4,7 @@
 #include "AudioSignal.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
+#include "PriceHistoryClient.h"
 
 #include <algorithm>
 
@@ -208,14 +209,38 @@ void MainWindow::positionReportsButton() {
 }
 
 /**
- * Pokazuje informację tymczasową, dopóki widok raportów nie zostanie ustalony.
+ * Otwiera stronę raportów i odświeża zawartość głównego okna.
  */
 void MainWindow::onReportsClicked() {
-    MessageBoxA(
-        handle_,
-        "Widok raportow zostanie dodany w kolejnej iteracji.",
-        "Raporty",
-        MB_ICONINFORMATION | MB_OK);
+    reportsPageVisible_ = true;
+    FILETIME clickTime{};
+    GetSystemTimeAsFileTime(&clickTime);
+    ULARGE_INTEGER fileTimeValue{};
+    fileTimeValue.LowPart = clickTime.dwLowDateTime;
+    fileTimeValue.HighPart = clickTime.dwHighDateTime;
+    constexpr unsigned long long windowsToUnixEpochMicroseconds =
+        11644473600000000ULL;
+
+    if (fileTimeValue.QuadPart / 10 < windowsToUnixEpochMicroseconds) {
+        reportsStatus_ = "Nie można ustalić czasu kliknięcia.";
+        reportEntries_.clear();
+        InvalidateRect(handle_, nullptr, TRUE);
+        return;
+    }
+
+    const unsigned long long clickTimeMicroseconds =
+        fileTimeValue.QuadPart / 10 - windowsToUnixEpochMicroseconds;
+    std::vector<PriceReportEntry> receivedEntries;
+    std::string error;
+    if (!PriceHistoryClient::fetchRecentPrices(
+            clickTimeMicroseconds, receivedEntries, error)) {
+        reportsStatus_ = std::move(error);
+        reportEntries_.clear();
+    } else {
+        reportEntries_ = std::move(receivedEntries);
+        reportsStatus_.clear();
+    }
+    InvalidateRect(handle_, nullptr, TRUE);
 }
 
 /**
@@ -251,7 +276,12 @@ void MainWindow::onPaint() {
     clientArea.bottom = std::max(
         clientArea.top,
         clientArea.bottom - reportsButtonHeight - reportsButtonBottomMargin * 2);
-    MainWindowDisplay::draw(deviceContext, clientArea, forexMonitor_.snapshot());
+    if (reportsPageVisible_) {
+        MainWindowDisplay::drawReportsPage(
+            deviceContext, clientArea, reportEntries_, reportsStatus_);
+    } else {
+        MainWindowDisplay::draw(deviceContext, clientArea, forexMonitor_.snapshot());
+    }
     EndPaint(handle_, &paint);
 }
 
