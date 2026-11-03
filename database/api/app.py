@@ -2,6 +2,7 @@
 
 # Backend
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
@@ -12,6 +13,28 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
+RANDOM_NOUNS = (
+    "kot",
+    "kompas",
+    "latarnia",
+    "ogrod",
+    "chmura",
+    "zegarek",
+    "most",
+    "ksiazka",
+    "rower",
+    "kaktus",
+    "peron",
+    "lusterko",
+    "wiatrak",
+    "szuflada",
+    "statek",
+    "jabłko",
+    "żaba",
+    "źródło",
+    "pociąg",
+    "księżyc",
+)
 
 
 class PriceRecord(BaseModel):
@@ -68,6 +91,7 @@ class PriceHistoryRepository:
                         symbol VARCHAR(32) NOT NULL,
                         price DECIMAL(20, 10) NOT NULL,
                         recorded_at DATETIME(6) NOT NULL,
+                        zlote_rady VARCHAR(64) NULL,
                         created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                         INDEX idx_price_history_symbol_recorded_at (symbol, recorded_at),
                         CONSTRAINT fk_price_history_product
@@ -75,17 +99,47 @@ class PriceHistoryRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+                self._fill_random_nouns(cursor)
                 connection.commit()
             finally:
                 cursor.close()
         finally:
             connection.close()
 
+    def _fill_random_nouns(self, cursor: mysql.connector.cursor.MySQLCursor) -> None:
+        """Dodaje kolumnę i losowe rzeczowniki do wierszy, które jeszcze ich nie mają."""
+        cursor.execute("SHOW COLUMNS FROM price_history LIKE %s", ("zlote_rady",))
+        column = cursor.fetchone()
+        if column is None:
+            cursor.execute(
+                "ALTER TABLE price_history ADD COLUMN zlote_rady VARCHAR(64) NULL"
+            )
+            column_is_nullable = True
+        else:
+            column_is_nullable = column[2] == "YES"
+
+        cursor.execute("SELECT id FROM price_history WHERE zlote_rady IS NULL")
+        for (record_id,) in cursor.fetchall():
+            cursor.execute(
+                """
+                UPDATE price_history
+                SET zlote_rady = %s
+                WHERE id = %s AND zlote_rady IS NULL
+                """,
+                (secrets.choice(RANDOM_NOUNS), record_id),
+            )
+
+        if column_is_nullable:
+            cursor.execute(
+                "ALTER TABLE price_history MODIFY COLUMN zlote_rady VARCHAR(64) NOT NULL"
+            )
+
     def save(self, record: PriceRecord) -> int:
-        """Zapisuje produkt i jego cenę; zwraca identyfikator nowego wpisu."""
+        """Zapisuje produkt, cenę i losowy rzeczownik; zwraca identyfikator wpisu."""
         recorded_at_local = (
             record.recorded_at.astimezone(WARSAW_TIME_ZONE).replace(tzinfo=None)
         )
+        golden_advice = secrets.choice(RANDOM_NOUNS)
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
         try:
@@ -99,10 +153,10 @@ class PriceHistoryRepository:
             )
             cursor.execute(
                 """
-                INSERT INTO price_history (symbol, price, recorded_at)
-                VALUES (%s, %s, %s)
+                INSERT INTO price_history (symbol, price, recorded_at, zlote_rady)
+                VALUES (%s, %s, %s, %s)
                 """,
-                (record.symbol, record.price, recorded_at_local),
+                (record.symbol, record.price, recorded_at_local, golden_advice),
             )
             connection.commit()
             return int(cursor.lastrowid)

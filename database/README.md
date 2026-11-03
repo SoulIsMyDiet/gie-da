@@ -39,6 +39,8 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Nie używaj `docke
 ## Struktura danych
 
 - `products`: unikalne symbole produktów (np. `EUR/USD`).
-- `price_history`: osobny wiersz dla każdego odczytu, z ceną w typie dziesiętnym i czasem lokalnym `Europe/Warsaw`.
+- `price_history`: osobny wiersz dla każdego odczytu, z ceną w typie dziesiętnym, czasem lokalnym `Europe/Warsaw` oraz kolumną `zlote_rady` z losowym rzeczownikiem.
+
+Przy uruchomieniu API istniejąca tabela zostanie uzupełniona o `zlote_rady`, a każdy wiersz bez wartości otrzyma losowy rzeczownik. Nowe wpisy również otrzymują rzeczownik automatycznie.
 
 Wpisy zapisane przed tą zmianą pozostają w UTC i nie są modyfikowane; nowe wpisy będą w czasie `Europe/Warsaw`. Oznacza to, że w tej samej kolumnie starsze i nowe rekordy mają różną interpretację czasu. API i baza są dostępne wyłącznie w lokalnej konfiguracji projektu; port MySQL nie jest wystawiony na sieć hosta. Dalsze zmiany struktury będą wymagały migracji w `database/api/app.py` — samo `CREATE TABLE IF NOT EXISTS` nie zmienia już istniejących tabel.
