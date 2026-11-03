@@ -5,11 +5,17 @@
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
 
+#include <algorithm>
+
 namespace {
 
 constexpr char windowClassName[] = "HelloWorldWindow";
 constexpr UINT_PTR clockTimerId = 1;
 constexpr UINT forexUpdateMessage = WM_APP + 1;
+constexpr int reportsButtonId = 1001;
+constexpr int reportsButtonWidth = 128;
+constexpr int reportsButtonHeight = 36;
+constexpr int reportsButtonBottomMargin = 16;
 
 } // namespace
 
@@ -103,6 +109,16 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 onClockTimer();
             }
             return 0;
+        case WM_SIZE:
+            positionReportsButton();
+            return 0;
+        case WM_COMMAND:
+            if (LOWORD(wParam) == reportsButtonId &&
+                HIWORD(wParam) == BN_CLICKED) {
+                onReportsClicked();
+                return 0;
+            }
+            break;
         case forexUpdateMessage:
             InvalidateRect(handle_, nullptr, TRUE);
             if (wParam != 0 && !AudioSignal::play()) {
@@ -119,12 +135,19 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         default:
             return DefWindowProcA(handle_, message, wParam, lParam);
     }
+    return DefWindowProcA(handle_, message, wParam, lParam);
 }
 
 /**
  * Starts background price updates and the one-second clock timer.
  */
 bool MainWindow::onCreate() {
+    if (!createReportsButton()) {
+        MessageBoxA(handle_, "Could not create the Reports button.",
+                    "Error", MB_ICONERROR);
+        return false;
+    }
+
     if (!forexMonitor_.start(handle_)) {
         MessageBoxA(handle_, "Could not start the Forex update service.",
                     "Error", MB_ICONERROR);
@@ -138,6 +161,61 @@ bool MainWindow::onCreate() {
         return false;
     }
     return true;
+}
+
+/**
+ * Tworzy przycisk na dole okna; jego akcja zostanie podłączona później.
+ */
+bool MainWindow::createReportsButton() {
+    reportsButton_ = CreateWindowExA(
+        0,
+        "BUTTON",
+        "Raporty",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, reportsButtonWidth, reportsButtonHeight,
+        handle_,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(reportsButtonId)),
+        instance_,
+        nullptr);
+    if (reportsButton_ == nullptr) {
+        return false;
+    }
+
+    positionReportsButton();
+    return true;
+}
+
+/**
+ * Ustawia przycisk pośrodku dolnej krawędzi i ogranicza go do okna.
+ */
+void MainWindow::positionReportsButton() {
+    if (reportsButton_ == nullptr) {
+        return;
+    }
+
+    RECT clientArea{};
+    GetClientRect(handle_, &clientArea);
+    const int clientWidth = clientArea.right - clientArea.left;
+    const int clientHeight = clientArea.bottom - clientArea.top;
+    const int buttonWidth = std::min(reportsButtonWidth, clientWidth);
+    const int buttonHeight = std::min(reportsButtonHeight, clientHeight);
+    const int buttonX = (clientWidth - buttonWidth) / 2;
+    const int buttonY = std::max(
+        0, clientHeight - buttonHeight - reportsButtonBottomMargin);
+
+    MoveWindow(
+        reportsButton_, buttonX, buttonY, buttonWidth, buttonHeight, TRUE);
+}
+
+/**
+ * Pokazuje informację tymczasową, dopóki widok raportów nie zostanie ustalony.
+ */
+void MainWindow::onReportsClicked() {
+    MessageBoxA(
+        handle_,
+        "Widok raportow zostanie dodany w kolejnej iteracji.",
+        "Raporty",
+        MB_ICONINFORMATION | MB_OK);
 }
 
 /**
@@ -170,6 +248,9 @@ void MainWindow::onPaint() {
     HDC deviceContext = BeginPaint(handle_, &paint);
     RECT clientArea{};
     GetClientRect(handle_, &clientArea);
+    clientArea.bottom = std::max(
+        clientArea.top,
+        clientArea.bottom - reportsButtonHeight - reportsButtonBottomMargin * 2);
     MainWindowDisplay::draw(deviceContext, clientArea, forexMonitor_.snapshot());
     EndPaint(handle_, &paint);
 }

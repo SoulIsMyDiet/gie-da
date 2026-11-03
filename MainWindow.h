@@ -35,6 +35,22 @@ private:
     bool onCreate();
 
     /**
+     * Tworzy przycisk „Raporty” i ustawia go na dole głównego okna.
+     * @return true, jeśli przycisk został utworzony; w przeciwnym razie false.
+     */
+    bool createReportsButton();
+
+    /**
+     * Dopasowuje położenie przycisku „Raporty” do aktualnego rozmiaru okna.
+     */
+    void positionReportsButton();
+
+    /**
+     * Informuje, że działanie przycisku zostanie dodane w kolejnej iteracji.
+     */
+    void onReportsClicked();
+
+    /**
      * Refreshes the clock when the displayed minute changes.
      */
     void onClockTimer();
@@ -55,5 +71,6 @@ private:
     bool hasPreviousTime_ = false;
     WORD previousHour_ = 0;
     WORD previousMinute_ = 0;
+    HWND reportsButton_ = nullptr;
     ForexPriceMonitor forexMonitor_;
 };
