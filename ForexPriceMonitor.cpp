@@ -1,5 +1,6 @@
 #include "ForexPriceMonitor.h"
 
+#include "PriceHistoryClient.h"
 #include "TwelveDataClient.h"
 
 #include <cstdio>
@@ -100,8 +101,18 @@ void ForexPriceMonitor::run() {
         if (succeeded) {
             SYSTEMTIME fetchedAt{};
             GetLocalTime(&fetchedAt);
+            SYSTEMTIME recordedAt{};
+            GetSystemTime(&recordedAt);
+
+            std::string storageError;
+            const bool savedToDatabase =
+                PriceHistoryClient::savePrice("EUR/USD", price, recordedAt, storageError);
+
             const double numericPrice = std::strtod(price.c_str(), nullptr);
             playAlarm = addPrice(std::move(price), numericPrice, fetchedAt);
+            if (!savedToDatabase) {
+                setStatus("Price fetched, but database save failed: " + storageError);
+            }
         } else {
             setStatus(std::move(error));
         }

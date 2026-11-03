@@ -10,6 +10,7 @@ add_executable(gieda WIN32
     AudioSignal.cpp
     MainWindowDisplay.cpp
     TwelveDataClient.cpp
+    PriceHistoryClient.cpp
 )
 set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
 target_link_libraries(gieda PRIVATE
