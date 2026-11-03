@@ -3,12 +3,15 @@
 # Backend
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import mysql.connector
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 
 
 class PriceRecord(BaseModel):
@@ -80,7 +83,9 @@ class PriceHistoryRepository:
 
     def save(self, record: PriceRecord) -> int:
         """Zapisuje produkt i jego cenę; zwraca identyfikator nowego wpisu."""
-        recorded_at_utc = record.recorded_at.astimezone(timezone.utc).replace(tzinfo=None)
+        recorded_at_local = (
+            record.recorded_at.astimezone(WARSAW_TIME_ZONE).replace(tzinfo=None)
+        )
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
         try:
@@ -97,7 +102,7 @@ class PriceHistoryRepository:
                 INSERT INTO price_history (symbol, price, recorded_at)
                 VALUES (%s, %s, %s)
                 """,
-                (record.symbol, record.price, recorded_at_utc),
+                (record.symbol, record.price, recorded_at_local),
             )
             connection.commit()
             return int(cursor.lastrowid)

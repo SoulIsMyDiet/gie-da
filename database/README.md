@@ -25,7 +25,7 @@ Projekt używa MySQL uruchomionego w Dockerze. Aplikacja C++ wysyła pobrane cen
    ```
 
    Oczekiwany wynik to `status: ok`.
-6. Uruchom aplikację giełdy w CLion. Każde pobranie kursu EUR/USD będzie zapisywane z datą i czasem UTC. Przy braku połączenia z bazą aplikacja nadal pokaże pobrany kurs, a w statusie pojawi się informacja o błędzie zapisu.
+6. Uruchom aplikację giełdy w CLion. Każda nowa cena będzie zapisywana z datą i czasem lokalnym dla strefy `Europe/Warsaw`. Przy braku połączenia z bazą aplikacja nadal pokaże pobrany kurs, a w statusie pojawi się informacja o błędzie zapisu.
 
 ## Codzienna obsługa
 
@@ -39,6 +39,6 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Nie używaj `docke
 ## Struktura danych
 
 - `products`: unikalne symbole produktów (np. `EUR/USD`).
-- `price_history`: osobny wiersz dla każdego odczytu, z ceną w typie dziesiętnym i czasem UTC.
+- `price_history`: osobny wiersz dla każdego odczytu, z ceną w typie dziesiętnym i czasem lokalnym `Europe/Warsaw`.
 
-API i baza są dostępne wyłącznie w lokalnej konfiguracji projektu; port MySQL nie jest wystawiony na sieć hosta. Dalsze zmiany struktury będą wymagały migracji w `database/api/app.py` — samo `CREATE TABLE IF NOT EXISTS` nie zmienia już istniejących tabel.
+Wpisy zapisane przed tą zmianą pozostają w UTC i nie są modyfikowane; nowe wpisy będą w czasie `Europe/Warsaw`. Oznacza to, że w tej samej kolumnie starsze i nowe rekordy mają różną interpretację czasu. API i baza są dostępne wyłącznie w lokalnej konfiguracji projektu; port MySQL nie jest wystawiony na sieć hosta. Dalsze zmiany struktury będą wymagały migracji w `database/api/app.py` — samo `CREATE TABLE IF NOT EXISTS` nie zmienia już istniejących tabel.
