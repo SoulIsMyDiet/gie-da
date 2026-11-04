@@ -221,7 +221,6 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="gie-da price history API", lifespan=lifespan)
 
-
 @app.get("/health")
 def health() -> dict[str, str]:
     """Zwraca prostą odpowiedź kontrolną dla lokalnego API."""

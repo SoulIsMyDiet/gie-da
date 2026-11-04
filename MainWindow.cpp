@@ -2,11 +2,14 @@
 #include <windows.h>
 
 #include "AudioSignal.h"
+#include "DailySentenceClient.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
 #include "PriceHistoryClient.h"
 
 #include <algorithm>
+#include <system_error>
+#include <utility>
 
 namespace {
 
@@ -140,7 +143,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 }
 
 /**
- * Starts background price updates and the one-second clock timer.
+ * Uruchamia monitor cen, zegar oraz pobieranie sentencji dnia.
  */
 bool MainWindow::onCreate() {
     if (!createReportsButton()) {
@@ -161,7 +164,37 @@ bool MainWindow::onCreate() {
         forexMonitor_.stop();
         return false;
     }
+
+    try {
+        startDailySentenceRequest();
+    } catch (const std::system_error&) {
+        KillTimer(handle_, clockTimerId);
+        forexMonitor_.stop();
+        MessageBoxW(
+            handle_, L"Nie udało się uruchomić pobierania sentencji.",
+            L"Błąd", MB_ICONERROR);
+        return false;
+    }
     return true;
+}
+
+/**
+ * Pobiera sentencję w tle i odświeża okno po otrzymaniu wyniku.
+ */
+void MainWindow::startDailySentenceRequest() {
+    dailySentenceThread_ = std::thread([this]() {
+        std::string sentence;
+        std::string error;
+        const bool succeeded =
+            DailySentenceClient::fetchDailySentence(sentence, error);
+        {
+            const std::lock_guard<std::mutex> lock(dailySentenceMutex_);
+            dailySentence_ = succeeded
+                ? std::move(sentence)
+                : "Nie udało się pobrać sentencji: " + error;
+        }
+        InvalidateRect(handle_, nullptr, TRUE);
+    });
 }
 
 /**
@@ -266,7 +299,7 @@ void MainWindow::onClockTimer() {
 }
 
 /**
- * Draws the window contents with the latest status from the Forex monitor.
+ * Rysuje zawartość okna z bieżącymi danymi aplikacji.
  */
 void MainWindow::onPaint() {
     PAINTSTRUCT paint{};
@@ -280,16 +313,25 @@ void MainWindow::onPaint() {
         MainWindowDisplay::drawReportsPage(
             deviceContext, clientArea, reportEntries_, reportsStatus_);
     } else {
-        MainWindowDisplay::draw(deviceContext, clientArea, forexMonitor_.snapshot());
+        std::string dailySentence;
+        {
+            const std::lock_guard<std::mutex> lock(dailySentenceMutex_);
+            dailySentence = dailySentence_;
+        }
+        MainWindowDisplay::draw(
+            deviceContext, clientArea, forexMonitor_.snapshot(), dailySentence);
     }
     EndPaint(handle_, &paint);
 }
 
 /**
- * Stops the Forex worker, releases the clock timer, and exits the message loop.
+ * Zatrzymuje zadania w tle, zwalnia zegar i kończy pętlę komunikatów.
  */
 void MainWindow::onDestroy() {
     KillTimer(handle_, clockTimerId);
     forexMonitor_.stop();
+    if (dailySentenceThread_.joinable()) {
+        dailySentenceThread_.join();
+    }
     PostQuitMessage(0);
 }

@@ -3,9 +3,12 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "DailySentenceClient.h"
 #include "ForexPriceMonitor.h"
 #include "PriceHistoryClient.h"
 
@@ -34,7 +37,8 @@ private:
     LRESULT handleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     /**
-     * Starts the Forex monitor and clock timer during window creation.
+     * Uruchamia monitor cen, zegar oraz pobieranie sentencji w tle.
+     * @return true, jeśli wszystkie usługi wystartowały; w przeciwnym razie false.
      */
     bool onCreate();
 
@@ -55,17 +59,23 @@ private:
     void onReportsClicked();
 
     /**
-     * Refreshes the clock when the displayed minute changes.
+     * Odświeża zegar, gdy zmieni się wyświetlana minuta.
      */
     void onClockTimer();
 
     /**
-     * Paints the window using the current Forex monitor status.
+     * Pobiera sentencję w osobnym wątku, aby nie blokować okna aplikacji.
+     * @throws std::system_error, jeśli system nie może utworzyć nowego wątku.
+     */
+    void startDailySentenceRequest();
+
+    /**
+     * Rysuje stronę główną lub raporty na podstawie bieżącego stanu aplikacji.
      */
     void onPaint();
 
     /**
-     * Stops background work and exits the Windows message loop.
+     * Zatrzymuje zadania w tle i kończy pętlę komunikatów Windows.
      */
     void onDestroy();
 
@@ -79,5 +89,8 @@ private:
     HWND reportsButton_ = nullptr;
     std::vector<PriceReportEntry> reportEntries_;
     std::string reportsStatus_;
+    std::mutex dailySentenceMutex_;
+    std::string dailySentence_ = "Pobieranie sentencji dnia...";
+    std::thread dailySentenceThread_;
     ForexPriceMonitor forexMonitor_;
 };

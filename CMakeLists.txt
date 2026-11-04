@@ -8,6 +8,7 @@ add_executable(gieda WIN32
     MainWindow.cpp
     ForexPriceMonitor.cpp
     AudioSignal.cpp
+    DailySentenceClient.cpp
     MainWindowDisplay.cpp
     TwelveDataClient.cpp
     PriceHistoryClient.cpp

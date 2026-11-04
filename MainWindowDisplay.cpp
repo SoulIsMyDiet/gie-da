@@ -55,6 +55,19 @@ void drawCenteredText(
     DrawTextA(deviceContext, text.c_str(), -1, &bounds, format);
 }
 
+/**
+ * Wyświetla tekst Unicode w wyznaczonym obszarze okna.
+ * @param deviceContext Kontekst rysowania okna.
+ * @param text Tekst do wyświetlenia.
+ * @param bounds Obszar, w którym tekst ma zostać narysowany.
+ * @param format Flagi określające wyrównanie i zawijanie tekstu.
+ */
+void drawCenteredWideText(
+    HDC deviceContext, const std::wstring& text, RECT bounds, UINT format) {
+    DrawTextW(
+        deviceContext, text.c_str(), static_cast<int>(text.size()), &bounds, format);
+}
+
 std::string currentTimeText() {
     SYSTEMTIME localTime{};
     GetLocalTime(&localTime);
@@ -134,16 +147,30 @@ void drawProductRow(
 
 } // namespace
 
+// Front
 /**
- * Renders the clock, status, and color-coded Forex price history.
+ * Rysuje sentencję dnia nad zegarem oraz pozostałe informacje strony głównej.
  */
 void MainWindowDisplay::draw(
-    HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot) {
+    HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot,
+    const std::string& dailySentence) {
     const std::string clockText = currentTimeText();
     RECT headerBounds = clientArea;
     DrawTextA(deviceContext, clockText.c_str(), -1, &headerBounds,
               DT_CENTER | DT_SINGLELINE | DT_CALCRECT);
     const LONG headerHeight = headerBounds.bottom - headerBounds.top;
+
+    std::wstring wideDailySentence;
+    if (!convertUtf8ToWide(dailySentence, wideDailySentence)) {
+        wideDailySentence = L"Nie można wyświetlić sentencji.";
+    }
+    RECT sentenceBounds = clientArea;
+    DrawTextW(
+        deviceContext, wideDailySentence.c_str(),
+        static_cast<int>(wideDailySentence.size()), &sentenceBounds,
+        DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+    const LONG sentenceHeight = sentenceBounds.bottom - sentenceBounds.top;
+    const LONG sentenceSpacing = 8;
 
     TEXTMETRICA textMetrics{};
     GetTextMetricsA(deviceContext, &textMetrics);
@@ -158,11 +185,21 @@ void MainWindowDisplay::draw(
     }
 
     const LONG historyHeight = rowHeight * static_cast<LONG>(snapshot.prices.size());
-    const LONG totalHeight = headerHeight + statusHeight + historyHeight;
+    const LONG totalHeight =
+        sentenceHeight + sentenceSpacing + headerHeight + statusHeight + historyHeight;
     LONG top = clientArea.top + ((clientArea.bottom - clientArea.top) - totalHeight) / 2;
     if (top < clientArea.top) {
         top = clientArea.top;
     }
+
+    SetTextColor(deviceContext, RGB(0, 0, 0));
+    sentenceBounds = clientArea;
+    sentenceBounds.top = top;
+    sentenceBounds.bottom = top + sentenceHeight;
+    drawCenteredWideText(
+        deviceContext, wideDailySentence, sentenceBounds,
+        DT_CENTER | DT_WORDBREAK);
+    top += sentenceHeight + sentenceSpacing;
 
     SetTextColor(deviceContext, RGB(255, 0, 0));
     drawClock(deviceContext, clockText, clientArea, top, headerHeight);

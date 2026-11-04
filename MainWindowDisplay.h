@@ -14,13 +14,15 @@
 class MainWindowDisplay {
 public:
     /**
-     * Draws the clock, status, and color-coded Forex price history.
-     * @param deviceContext Windows drawing context for the target window.
-     * @param clientArea Window client rectangle to draw within.
-     * @param snapshot Current status and price history to display.
+     * Rysuje sentencję dnia, zegar, status i historię cen.
+     * @param deviceContext Kontekst rysowania głównego okna.
+     * @param clientArea Obszar dostępny dla strony głównej.
+     * @param snapshot Bieżący status monitora i zapisane ceny.
+     * @param dailySentence Sentencja lub informacja o błędzie jej pobierania.
      */
     static void draw(
-        HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot);
+        HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot,
+        const std::string& dailySentence);
 
     /**
      * Wyświetla tabelę wpisów pobranych przed kliknięciem przycisku „Raporty”.
