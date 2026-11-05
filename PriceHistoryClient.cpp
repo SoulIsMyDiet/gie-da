@@ -111,10 +111,12 @@ std::string escapeJsonString(const std::string& value) {
 std::string createRequestBody(
     const std::string& symbol,
     const std::string& price,
-    const SYSTEMTIME& recordedAt) {
+    const SYSTEMTIME& recordedAt,
+    const std::string& goldenAdvice) {
     return "{\"symbol\":\"" + escapeJsonString(symbol) + "\",\"price\":\"" +
            escapeJsonString(price) +
-           "\",\"recorded_at\":\"" + formatUtcTimestamp(recordedAt) + "\"}";
+           "\",\"recorded_at\":\"" + formatUtcTimestamp(recordedAt) +
+           "\",\"golden_advice\":\"" + escapeJsonString(goldenAdvice) + "\"}";
 }
 
 /**
@@ -137,7 +139,7 @@ bool splitReportRow(std::string_view row, PriceReportEntry& entry) {
     }
     fields[4] = row.substr(fieldStart);
     for (const std::string_view field : fields) {
-        if (field.empty() || field.size() > 128) {
+        if (field.empty() || field.size() > 512) {
             return false;
         }
     }
@@ -187,12 +189,13 @@ bool readResponse(HINTERNET request, std::string& response, std::string& error) 
 } // namespace
 
 /**
- * Wysyła cenę do lokalnego API i sprawdza, czy baza potwierdziła jej zapis.
+ * Wysyła cenę i sentencję do lokalnego API, a następnie sprawdza potwierdzenie.
  */
 bool PriceHistoryClient::savePrice(
     const std::string& symbol,
     const std::string& price,
     const SYSTEMTIME& recordedAt,
+    const std::string& goldenAdvice,
     std::string& error) {
     InternetHandle session{WinHttpOpen(
         L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -217,7 +220,8 @@ bool PriceHistoryClient::savePrice(
         return false;
     }
 
-    std::string requestBody = createRequestBody(symbol, price, recordedAt);
+    std::string requestBody =
+        createRequestBody(symbol, price, recordedAt, goldenAdvice);
     constexpr wchar_t requestHeaders[] = L"Content-Type: application/json\r\n";
     if (!WinHttpSendRequest(
             request.value, requestHeaders, static_cast<DWORD>(-1L),

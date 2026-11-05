@@ -1,5 +1,6 @@
 #include "ForexPriceMonitor.h"
 
+#include "DailySentenceClient.h"
 #include "PriceHistoryClient.h"
 #include "TwelveDataClient.h"
 
@@ -105,13 +106,25 @@ void ForexPriceMonitor::run() {
             playAlarm = addPrice(price, numericPrice, fetchedAt);
 
             if (playAlarm) {
-                SYSTEMTIME recordedAt{};
-                GetSystemTime(&recordedAt);
+                std::string goldenAdvice;
+                std::string sentenceError;
+                if (!DailySentenceClient::fetchDailySentence(
+                        goldenAdvice, sentenceError)) {
+                    setStatus(
+                        "Nie udało się wygenerować sentencji AI: " +
+                        sentenceError);
+                } else {
+                    SYSTEMTIME recordedAt{};
+                    GetSystemTime(&recordedAt);
 
-                std::string storageError;
-                if (!PriceHistoryClient::savePrice(
-                        "EUR/USD", price, recordedAt, storageError)) {
-                    setStatus("Price fetched, but database save failed: " + storageError);
+                    std::string storageError;
+                    if (!PriceHistoryClient::savePrice(
+                            "EUR/USD", price, recordedAt,
+                            goldenAdvice, storageError)) {
+                        setStatus(
+                            "Nie udało się zapisać ceny w bazie: " +
+                            storageError);
+                    }
                 }
             }
         } else {

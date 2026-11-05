@@ -331,7 +331,7 @@ bool extractSentence(
         ++valuePosition;
     }
     return readJsonString(json, valuePosition, sentence) &&
-           !sentence.empty() && sentence.size() <= 1024;
+           !sentence.empty() && sentence.size() <= 512;
 }
 
 /**
@@ -456,6 +456,17 @@ bool DailySentenceClient::fetchDailySentence(
     }
     if (!extractSentence(response, sentence)) {
         error = "Groq nie zwrócił prawidłowego tekstu sentencji.";
+        return false;
+    }
+    sentence = trim(std::move(sentence));
+    for (char& character : sentence) {
+        if (character == '\r' || character == '\n' || character == '\t') {
+            character = ' ';
+        }
+    }
+    sentence = trim(std::move(sentence));
+    if (sentence.empty()) {
+        error = "Groq zwrócił pustą sentencję.";
         return false;
     }
     return true;

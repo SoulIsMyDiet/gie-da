@@ -24,6 +24,7 @@ public:
      * @param symbol Symbol produktu, np. EUR/USD.
      * @param price Cena w zapisie dziesiętnym.
      * @param recordedAt Czas pobrania ceny w UTC.
+     * @param goldenAdvice Sentencja wygenerowana przez model Groq.
      * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
      * @return true, jeśli API potwierdzi zapis; w przeciwnym razie false.
      */
@@ -31,6 +32,7 @@ public:
         const std::string& symbol,
         const std::string& price,
         const SYSTEMTIME& recordedAt,
+        const std::string& goldenAdvice,
         std::string& error);
 
     /**

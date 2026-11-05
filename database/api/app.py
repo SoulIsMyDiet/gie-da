@@ -38,13 +38,14 @@ RANDOM_NOUNS = (
 
 
 class PriceRecord(BaseModel):
-    """Opis ceny produktu przesyłanej przez aplikację desktopową."""
+    """Opis ceny i sentencji przesyłanych przez aplikację desktopową."""
 
     model_config = ConfigDict(extra="forbid")
 
     symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z0-9./_-]+$")
     price: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
     recorded_at: datetime
+    golden_advice: str = Field(min_length=1, max_length=512)
 
     @field_validator("recorded_at")
     @classmethod
@@ -53,6 +54,14 @@ class PriceRecord(BaseModel):
         if recorded_at.tzinfo is None or recorded_at.utcoffset() is None:
             raise ValueError("recorded_at musi zawierać strefę czasową.")
         return recorded_at
+
+    @field_validator("golden_advice")
+    @classmethod
+    def require_nonempty_advice(cls, golden_advice: str) -> str:
+        """Odrzuca sentencje składające się wyłącznie z białych znaków."""
+        if not golden_advice.strip():
+            raise ValueError("golden_advice nie może być puste.")
+        return golden_advice.strip()
 
     # :)
 
@@ -91,7 +100,7 @@ class PriceHistoryRepository:
                         symbol VARCHAR(32) NOT NULL,
                         price DECIMAL(20, 10) NOT NULL,
                         recorded_at DATETIME(6) NOT NULL,
-                        zlote_rady VARCHAR(64) NULL,
+                        zlote_rady VARCHAR(512) NULL,
                         created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                         INDEX idx_price_history_symbol_recorded_at (symbol, recorded_at),
                         CONSTRAINT fk_price_history_product
@@ -99,24 +108,26 @@ class PriceHistoryRepository:
                     ) ENGINE=InnoDB
                     """
                 )
-                self._fill_random_nouns(cursor)
+                self._migrate_golden_advice(cursor)
                 connection.commit()
             finally:
                 cursor.close()
         finally:
             connection.close()
 
-    def _fill_random_nouns(self, cursor: mysql.connector.cursor.MySQLCursor) -> None:
-        """Dodaje kolumnę i losowe rzeczowniki do wierszy, które jeszcze ich nie mają."""
+    def _migrate_golden_advice(self, cursor: mysql.connector.cursor.MySQLCursor) -> None:
+        """Poszerza kolumnę i uzupełnia brakujące sentencje w starszych wpisach."""
         cursor.execute("SHOW COLUMNS FROM price_history LIKE %s", ("zlote_rady",))
         column = cursor.fetchone()
+        needs_column_update = (
+            column is None
+            or column[1].lower() != "varchar(512)"
+            or column[2] == "YES"
+        )
         if column is None:
             cursor.execute(
-                "ALTER TABLE price_history ADD COLUMN zlote_rady VARCHAR(64) NULL"
+                "ALTER TABLE price_history ADD COLUMN zlote_rady VARCHAR(512) NULL"
             )
-            column_is_nullable = True
-        else:
-            column_is_nullable = column[2] == "YES"
 
         cursor.execute("SELECT id FROM price_history WHERE zlote_rady IS NULL")
         for (record_id,) in cursor.fetchall():
@@ -129,17 +140,16 @@ class PriceHistoryRepository:
                 (secrets.choice(RANDOM_NOUNS), record_id),
             )
 
-        if column_is_nullable:
+        if needs_column_update:
             cursor.execute(
-                "ALTER TABLE price_history MODIFY COLUMN zlote_rady VARCHAR(64) NOT NULL"
+                "ALTER TABLE price_history MODIFY COLUMN zlote_rady VARCHAR(512) NOT NULL"
             )
 
     def save(self, record: PriceRecord) -> int:
-        """Zapisuje produkt, cenę i losowy rzeczownik; zwraca identyfikator wpisu."""
+        """Zapisuje produkt, cenę i sentencję; zwraca identyfikator wpisu."""
         recorded_at_local = (
             record.recorded_at.astimezone(WARSAW_TIME_ZONE).replace(tzinfo=None)
         )
-        golden_advice = secrets.choice(RANDOM_NOUNS)
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
         try:
@@ -156,7 +166,12 @@ class PriceHistoryRepository:
                 INSERT INTO price_history (symbol, price, recorded_at, zlote_rady)
                 VALUES (%s, %s, %s, %s)
                 """,
-                (record.symbol, record.price, recorded_at_local, golden_advice),
+                (
+                    record.symbol,
+                    record.price,
+                    recorded_at_local,
+                    record.golden_advice,
+                ),
             )
             connection.commit()
             return int(cursor.lastrowid)
