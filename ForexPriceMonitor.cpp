@@ -12,6 +12,8 @@ namespace {
 
 constexpr UINT forexUpdateMessage = WM_APP + 1;
 constexpr DWORD forexRefreshIntervalMs = 30000;
+constexpr ULONGLONG oneMinuteCandleRefreshIntervalMs = 60000;
+constexpr ULONGLONG fiveMinuteCandleRefreshIntervalMs = 300000;
 
 } // namespace
 
@@ -71,11 +73,13 @@ void ForexPriceMonitor::stop() {
 }
 
 /**
- * Copies the current status and price history under a shared lock.
+ * Kopiuje status, historię cen i ostatnie świece przy użyciu blokady współdzielonej.
  */
 ForexPriceSnapshot ForexPriceMonitor::snapshot() const {
     AcquireSRWLockShared(&statusLock_);
-    ForexPriceSnapshot currentSnapshot{status_, {}};
+    ForexPriceSnapshot currentSnapshot{
+        status_, {}, oneMinuteCandle_, fiveMinuteCandle_,
+        oneMinuteCandleStatus_, fiveMinuteCandleStatus_};
     currentSnapshot.prices.assign(priceHistory_.begin(), priceHistory_.end());
     ReleaseSRWLockShared(&statusLock_);
     return currentSnapshot;
@@ -91,10 +95,26 @@ DWORD WINAPI ForexPriceMonitor::threadEntryPoint(LPVOID parameter) {
 }
 
 /**
- * Fetches EUR/USD immediately, then repeats after each refresh interval.
+ * Pobiera cenę co 30 sekund, świecę minutową co minutę,
+ * a świecę pięciominutową co pięć minut.
  */
 void ForexPriceMonitor::run() {
+    ULONGLONG nextOneMinuteCandleFetch = 0;
+    ULONGLONG nextFiveMinuteCandleFetch = 0;
     while (true) {
+        ULONGLONG currentTick = GetTickCount64();
+        if (currentTick >= nextOneMinuteCandleFetch) {
+            updateCandle(ForexCandleInterval::oneMinute);
+            nextOneMinuteCandleFetch =
+                GetTickCount64() + oneMinuteCandleRefreshIntervalMs;
+        }
+        currentTick = GetTickCount64();
+        if (currentTick >= nextFiveMinuteCandleFetch) {
+            updateCandle(ForexCandleInterval::fiveMinutes);
+            nextFiveMinuteCandleFetch =
+                GetTickCount64() + fiveMinuteCandleRefreshIntervalMs;
+        }
+
         std::string price;
         std::string error;
         const bool succeeded = TwelveDataClient::fetchEurUsdPrice(price, error);
@@ -139,6 +159,34 @@ void ForexPriceMonitor::run() {
             break;
         }
     }
+}
+
+/**
+ * Pobiera świecę poza blokadą i zapisuje wynik atomowo dla wątku interfejsu.
+ */
+void ForexPriceMonitor::updateCandle(ForexCandleInterval interval) {
+    ForexCandle candle;
+    std::string error;
+    const bool succeeded =
+        TwelveDataClient::fetchEurUsdCandle(interval, candle, error);
+
+    AcquireSRWLockExclusive(&statusLock_);
+    if (interval == ForexCandleInterval::oneMinute) {
+        if (succeeded) {
+            oneMinuteCandle_ = std::move(candle);
+            oneMinuteCandleStatus_.clear();
+        } else {
+            oneMinuteCandleStatus_ = "Błąd świecy 1-minutowej: " + error;
+        }
+    } else {
+        if (succeeded) {
+            fiveMinuteCandle_ = std::move(candle);
+            fiveMinuteCandleStatus_.clear();
+        } else {
+            fiveMinuteCandleStatus_ = "Błąd świecy 5-minutowej: " + error;
+        }
+    }
+    ReleaseSRWLockExclusive(&statusLock_);
 }
 
 /**

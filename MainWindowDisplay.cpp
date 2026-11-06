@@ -96,6 +96,24 @@ void drawStatus(
     drawCenteredText(deviceContext, status, bounds, DT_CENTER | DT_WORDBREAK);
 }
 
+/**
+ * Składa wartości OHLC świecy w jeden czytelny wiersz.
+ */
+std::string createCandleText(
+    const char* interval, const ForexCandle& candle, const std::string& status) {
+    if (candle.datetime.empty()) {
+        return std::string(interval) + ": " + status;
+    }
+
+    std::string text = std::string(interval) + " (" + candle.datetime +
+        ")  Open: " + candle.open + "  High: " + candle.high +
+        "  Low: " + candle.low + "  Close: " + candle.close;
+    if (!status.empty()) {
+        text += "\n" + status;
+    }
+    return text;
+}
+
 COLORREF rowColor(ForexRowColor color) {
     switch (color) {
         case ForexRowColor::red:
@@ -149,7 +167,7 @@ void drawProductRow(
 
 // Front
 /**
- * Rysuje sentencję dnia nad zegarem oraz pozostałe informacje strony głównej.
+ * Rysuje sentencję, zegar, najnowsze świece i historię cen.
  */
 void MainWindowDisplay::draw(
     HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot,
@@ -184,9 +202,33 @@ void MainWindowDisplay::draw(
         statusHeight = statusBounds.bottom - statusBounds.top;
     }
 
+    const std::string oneMinuteText = createCandleText(
+        "Swieca 1 min", snapshot.oneMinuteCandle,
+        snapshot.oneMinuteCandleStatus);
+    const std::string fiveMinuteText = createCandleText(
+        "Swieca 5 min", snapshot.fiveMinuteCandle,
+        snapshot.fiveMinuteCandleStatus);
+    std::wstring wideOneMinuteText;
+    if (!convertUtf8ToWide(oneMinuteText, wideOneMinuteText)) {
+        wideOneMinuteText = L"Nie mozna wyswietlic swiecy 1-minutowej.";
+    }
+    std::wstring wideFiveMinuteText;
+    if (!convertUtf8ToWide(fiveMinuteText, wideFiveMinuteText)) {
+        wideFiveMinuteText = L"Nie mozna wyswietlic swiecy 5-minutowej.";
+    }
+    RECT oneMinuteBounds = clientArea;
+    DrawTextW(deviceContext, wideOneMinuteText.c_str(), -1, &oneMinuteBounds,
+              DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+    RECT fiveMinuteBounds = clientArea;
+    DrawTextW(deviceContext, wideFiveMinuteText.c_str(), -1, &fiveMinuteBounds,
+              DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+    const LONG oneMinuteHeight = oneMinuteBounds.bottom - oneMinuteBounds.top;
+    const LONG fiveMinuteHeight = fiveMinuteBounds.bottom - fiveMinuteBounds.top;
+
     const LONG historyHeight = rowHeight * static_cast<LONG>(snapshot.prices.size());
     const LONG totalHeight =
-        sentenceHeight + sentenceSpacing + headerHeight + statusHeight + historyHeight;
+        sentenceHeight + sentenceSpacing + headerHeight + statusHeight +
+        oneMinuteHeight + fiveMinuteHeight + historyHeight;
     LONG top = clientArea.top + ((clientArea.bottom - clientArea.top) - totalHeight) / 2;
     if (top < clientArea.top) {
         top = clientArea.top;
@@ -209,6 +251,21 @@ void MainWindowDisplay::draw(
         drawStatus(deviceContext, snapshot.status, clientArea, top, statusHeight);
         top += statusHeight;
     }
+
+    RECT oneMinuteDisplayBounds = clientArea;
+    oneMinuteDisplayBounds.top = top;
+    oneMinuteDisplayBounds.bottom = top + oneMinuteHeight;
+    drawCenteredWideText(
+        deviceContext, wideOneMinuteText, oneMinuteDisplayBounds,
+        DT_CENTER | DT_WORDBREAK);
+    top += oneMinuteHeight;
+    RECT fiveMinuteDisplayBounds = clientArea;
+    fiveMinuteDisplayBounds.top = top;
+    fiveMinuteDisplayBounds.bottom = top + fiveMinuteHeight;
+    drawCenteredWideText(
+        deviceContext, wideFiveMinuteText, fiveMinuteDisplayBounds,
+        DT_CENTER | DT_WORDBREAK);
+    top += fiveMinuteHeight;
 
     for (std::size_t index = 0; index < snapshot.prices.size(); ++index) {
         drawProductRow(deviceContext, clientArea, top, rowHeight,

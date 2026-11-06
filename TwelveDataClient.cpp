@@ -8,12 +8,18 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace {
 
 // Endpoint configuration and a defensive cap on the downloaded response size.
 constexpr wchar_t apiHost[] = L"api.twelvedata.com";
 constexpr wchar_t apiPath[] = L"/price?symbol=EUR%2FUSD&apikey=";
+constexpr wchar_t oneMinuteCandleApiPath[] =
+    L"/time_series?symbol=EUR%2FUSD&interval=1min&outputsize=1&apikey=";
+constexpr wchar_t fiveMinuteCandleApiPath[] =
+    L"/time_series?symbol=EUR%2FUSD&interval=5min&outputsize=1&apikey=";
 constexpr DWORD maxResponseSize = 64 * 1024;
 
 /**
@@ -106,6 +112,93 @@ bool extractPrice(const std::string& response, std::string& price) {
 }
 
 /**
+ * Odczytuje tekstowe pole JSON z ograniczonego fragmentu odpowiedzi.
+ */
+bool extractJsonString(
+    std::string_view object, const char* fieldName, std::string& value) {
+    const std::string key = "\"" + std::string(fieldName) + "\"";
+    const std::size_t keyPosition = object.find(key);
+    if (keyPosition == std::string_view::npos) {
+        return false;
+    }
+
+    const std::size_t colonPosition = object.find(':', keyPosition + key.size());
+    if (colonPosition == std::string_view::npos) {
+        return false;
+    }
+    const std::size_t valueStart =
+        object.find_first_not_of(" \t\r\n", colonPosition + 1);
+    if (valueStart == std::string_view::npos || object[valueStart] != '"') {
+        return false;
+    }
+
+    const std::size_t valueEnd = object.find('"', valueStart + 1);
+    if (valueEnd == std::string_view::npos) {
+        return false;
+    }
+    value.assign(object.substr(valueStart + 1, valueEnd - valueStart - 1));
+    return !value.empty();
+}
+
+/**
+ * Odczytuje ostatni obiekt z tablicy values i sprawdza poprawność świecy OHLC.
+ */
+bool extractCandle(const std::string& response, ForexCandle& candle) {
+    const std::string_view json(response);
+    const std::size_t valuesPosition = json.find("\"values\"");
+    const std::size_t arrayStart = valuesPosition == std::string_view::npos
+        ? std::string_view::npos
+        : json.find('[', valuesPosition);
+    const std::size_t objectStart = arrayStart == std::string_view::npos
+        ? std::string_view::npos
+        : json.find('{', arrayStart);
+    const std::size_t objectEnd = objectStart == std::string_view::npos
+        ? std::string_view::npos
+        : json.find('}', objectStart);
+    if (objectStart == std::string_view::npos ||
+        objectEnd == std::string_view::npos) {
+        return false;
+    }
+
+    const std::string_view candleObject =
+        json.substr(objectStart, objectEnd - objectStart + 1);
+    ForexCandle parsedCandle;
+    if (!extractJsonString(candleObject, "datetime", parsedCandle.datetime) ||
+        !extractJsonString(candleObject, "open", parsedCandle.open) ||
+        !extractJsonString(candleObject, "high", parsedCandle.high) ||
+        !extractJsonString(candleObject, "low", parsedCandle.low) ||
+        !extractJsonString(candleObject, "close", parsedCandle.close)) {
+        return false;
+    }
+
+    char* parsedEnd = nullptr;
+    const double open = std::strtod(parsedCandle.open.c_str(), &parsedEnd);
+    if (parsedEnd == parsedCandle.open.c_str() || *parsedEnd != '\0' ||
+        !std::isfinite(open) || open <= 0.0) {
+        return false;
+    }
+    const double high = std::strtod(parsedCandle.high.c_str(), &parsedEnd);
+    if (parsedEnd == parsedCandle.high.c_str() || *parsedEnd != '\0' ||
+        !std::isfinite(high) || high <= 0.0) {
+        return false;
+    }
+    const double low = std::strtod(parsedCandle.low.c_str(), &parsedEnd);
+    if (parsedEnd == parsedCandle.low.c_str() || *parsedEnd != '\0' ||
+        !std::isfinite(low) || low <= 0.0) {
+        return false;
+    }
+    const double close = std::strtod(parsedCandle.close.c_str(), &parsedEnd);
+    if (parsedEnd == parsedCandle.close.c_str() || *parsedEnd != '\0' ||
+        !std::isfinite(close) || close <= 0.0 ||
+        high < open || high < close || low > open || low > close || low > high) {
+        return false;
+    }
+
+    candle = std::move(parsedCandle);
+    return true;
+}
+
+/**
  * Converts common HTTP failure codes into user-readable diagnostics.
  */
 std::string describeHttpError(DWORD statusCode) {
@@ -127,15 +220,14 @@ std::string describeHttpError(DWORD statusCode) {
     return error;
 }
 
-} // namespace
-
 /**
- * Fetches EUR/USD over HTTPS and returns either the validated price or an error.
+ * Wysyła żądanie do wybranego endpointu i pobiera odpowiedź z limitem rozmiaru.
  */
-bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) {
+bool fetchApiResponse(
+    const wchar_t* endpoint, std::string& response, std::string& error) {
     std::wstring apiKey;
     if (!readApiKey(apiKey)) {
-        error = "Set the TWELVE_DATA_API_KEY environment variable.";
+        error = "Ustaw zmienną środowiskową TWELVE_DATA_API_KEY.";
         return false;
     }
 
@@ -143,7 +235,7 @@ bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) 
         L"gie-da/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
     if (session.value == nullptr) {
-        error = "Could not start the HTTPS session.";
+        error = "Nie udało się rozpocząć połączenia HTTPS z Twelve Data.";
         return false;
     }
     WinHttpSetTimeouts(session.value, 5000, 5000, 5000, 5000);
@@ -151,11 +243,11 @@ bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) 
     InternetHandle connection{WinHttpConnect(
         session.value, apiHost, INTERNET_DEFAULT_HTTPS_PORT, 0)};
     if (connection.value == nullptr) {
-        error = "Could not connect to Twelve Data.";
+        error = "Nie można połączyć się z Twelve Data.";
         return false;
     }
 
-    std::wstring requestPath = apiPath;
+    std::wstring requestPath = endpoint;
     requestPath += apiKey;
     InternetHandle request{WinHttpOpenRequest(
         connection.value, L"GET", requestPath.c_str(), nullptr,
@@ -164,16 +256,17 @@ bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) 
         !WinHttpSendRequest(request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
         !WinHttpReceiveResponse(request.value, nullptr)) {
-        error = "The request to Twelve Data failed.";
+        error = "Nie udało się wysłać żądania do Twelve Data.";
         return false;
     }
 
     DWORD statusCode = 0;
     DWORD statusCodeSize = sizeof(statusCode);
-    if (!WinHttpQueryHeaders(request.value, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                             WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
-                             WINHTTP_NO_HEADER_INDEX)) {
-        error = "Could not read the HTTP status from Twelve Data.";
+    if (!WinHttpQueryHeaders(
+            request.value, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        error = "Nie udało się odczytać statusu odpowiedzi Twelve Data.";
         return false;
     }
     if (statusCode != 200) {
@@ -181,37 +274,79 @@ bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) 
         return false;
     }
 
-    std::string response;
     while (true) {
         DWORD bytesAvailable = 0;
         if (!WinHttpQueryDataAvailable(request.value, &bytesAvailable)) {
-            error = "Could not read the Twelve Data response.";
+            error = "Nie udało się odczytać odpowiedzi Twelve Data.";
             return false;
         }
         if (bytesAvailable == 0) {
-            break;
+            return true;
         }
         if (response.size() + bytesAvailable > maxResponseSize) {
-            error = "The response from Twelve Data was too large.";
+            error = "Odpowiedź Twelve Data jest zbyt duża.";
             return false;
         }
 
         const std::size_t oldSize = response.size();
         response.resize(oldSize + bytesAvailable);
         DWORD bytesRead = 0;
-        if (!WinHttpReadData(request.value, response.data() + oldSize, bytesAvailable, &bytesRead)) {
-            error = "Could not read the Twelve Data response.";
+        if (!WinHttpReadData(
+                request.value, response.data() + oldSize, bytesAvailable, &bytesRead)) {
+            error = "Nie udało się odczytać odpowiedzi Twelve Data.";
             return false;
         }
         if (bytesRead == 0) {
-            error = "The Twelve Data response ended unexpectedly.";
+            error = "Odpowiedź Twelve Data zakończyła się nieoczekiwanie.";
             return false;
         }
         response.resize(oldSize + bytesRead);
     }
+}
+
+} // namespace
+
+/**
+ * Pobiera cenę EUR/USD i zwraca prawidłową wartość albo opis błędu.
+ */
+bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) {
+    std::string response;
+    if (!fetchApiResponse(apiPath, response, error)) {
+        return false;
+    }
 
     if (!extractPrice(response, price)) {
         error = "No EUR/USD price was found in the Twelve Data response.";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Pobiera jedną ostatnią świecę EUR/USD z interwału 1- albo 5-minutowego.
+ */
+bool TwelveDataClient::fetchEurUsdCandle(
+    ForexCandleInterval interval, ForexCandle& candle, std::string& error) {
+    const wchar_t* endpoint = nullptr;
+    switch (interval) {
+        case ForexCandleInterval::oneMinute:
+            endpoint = oneMinuteCandleApiPath;
+            break;
+        case ForexCandleInterval::fiveMinutes:
+            endpoint = fiveMinuteCandleApiPath;
+            break;
+        default:
+            error = "Wybrano nieobsługiwany interwał świecy.";
+            return false;
+    }
+
+    std::string response;
+    if (!fetchApiResponse(endpoint, response, error)) {
+        return false;
+    }
+
+    if (!extractCandle(response, candle)) {
+        error = "Twelve Data nie zwróciło prawidłowej świecy EUR/USD.";
         return false;
     }
     return true;
