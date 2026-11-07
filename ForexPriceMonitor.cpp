@@ -1,36 +1,30 @@
 #include "ForexPriceMonitor.h"
 
-#include "DailySentenceClient.h"
-#include "PriceHistoryClient.h"
 #include "TwelveDataClient.h"
 
-#include <cstdio>
-#include <cstdlib>
 #include <utility>
 
 namespace {
 
-constexpr UINT forexUpdateMessage = WM_APP + 1;
-constexpr DWORD forexRefreshIntervalMs = 30000;
-constexpr ULONGLONG oneMinuteCandleRefreshIntervalMs = 60000;
-constexpr ULONGLONG fiveMinuteCandleRefreshIntervalMs = 300000;
+constexpr UINT candleUpdateMessage = WM_APP + 1;
+constexpr DWORD candleRefreshIntervalMs = 60000;
 
 } // namespace
 
 /**
- * Initializes the monitor with a status message shown before the first response.
+ * Przygotowuje monitor do pobierania świec 1-minutowych.
  */
 ForexPriceMonitor::ForexPriceMonitor() = default;
 
 /**
- * Ensures the worker is stopped before the monitor is destroyed.
+ * Zatrzymuje wątek pobierania przed zniszczeniem monitora.
  */
 ForexPriceMonitor::~ForexPriceMonitor() {
     stop();
 }
 
 /**
- * Creates the stop event and starts the worker thread for the given window.
+ * Tworzy zdarzenie zatrzymania i uruchamia wątek dla wskazanego okna.
  */
 bool ForexPriceMonitor::start(HWND notificationWindow) {
     if (notificationWindow == nullptr || workerThread_ != nullptr) {
@@ -54,7 +48,7 @@ bool ForexPriceMonitor::start(HWND notificationWindow) {
 }
 
 /**
- * Signals the worker to stop, waits for completion, and releases its handles.
+ * Zatrzymuje wątek, czeka na jego zakończenie i zwalnia uchwyty.
  */
 void ForexPriceMonitor::stop() {
     if (stopEvent_ != nullptr) {
@@ -73,20 +67,17 @@ void ForexPriceMonitor::stop() {
 }
 
 /**
- * Kopiuje status, historię cen i ostatnie świece przy użyciu blokady współdzielonej.
+ * Zwraca świecę i status skopiowane pod blokadą współdzieloną.
  */
 ForexPriceSnapshot ForexPriceMonitor::snapshot() const {
     AcquireSRWLockShared(&statusLock_);
-    ForexPriceSnapshot currentSnapshot{
-        status_, {}, oneMinuteCandle_, fiveMinuteCandle_,
-        oneMinuteCandleStatus_, fiveMinuteCandleStatus_};
-    currentSnapshot.prices.assign(priceHistory_.begin(), priceHistory_.end());
+    ForexPriceSnapshot currentSnapshot{oneMinuteCandle_, status_};
     ReleaseSRWLockShared(&statusLock_);
     return currentSnapshot;
 }
 
 /**
- * Starts the worker loop for the ForexPriceMonitor instance passed by Windows.
+ * Uruchamia pętlę pobierania dla monitora przekazanego przez Windows.
  */
 DWORD WINAPI ForexPriceMonitor::threadEntryPoint(LPVOID parameter) {
     auto* monitor = static_cast<ForexPriceMonitor*>(parameter);
@@ -95,146 +86,35 @@ DWORD WINAPI ForexPriceMonitor::threadEntryPoint(LPVOID parameter) {
 }
 
 /**
- * Pobiera cenę co 30 sekund, świecę minutową co minutę,
- * a świecę pięciominutową co pięć minut.
+ * Pobiera świecę 1-minutową, a następnie czeka minutę przed kolejnym żądaniem.
  */
 void ForexPriceMonitor::run() {
-    ULONGLONG nextOneMinuteCandleFetch = 0;
-    ULONGLONG nextFiveMinuteCandleFetch = 0;
     while (true) {
-        ULONGLONG currentTick = GetTickCount64();
-        if (currentTick >= nextOneMinuteCandleFetch) {
-            updateCandle(ForexCandleInterval::oneMinute);
-            nextOneMinuteCandleFetch =
-                GetTickCount64() + oneMinuteCandleRefreshIntervalMs;
-        }
-        currentTick = GetTickCount64();
-        if (currentTick >= nextFiveMinuteCandleFetch) {
-            updateCandle(ForexCandleInterval::fiveMinutes);
-            nextFiveMinuteCandleFetch =
-                GetTickCount64() + fiveMinuteCandleRefreshIntervalMs;
-        }
-
-        std::string price;
-        std::string error;
-        const bool succeeded = TwelveDataClient::fetchEurUsdPrice(price, error);
-        bool playAlarm = false;
-        if (succeeded) {
-            SYSTEMTIME fetchedAt{};
-            GetLocalTime(&fetchedAt);
-            const double numericPrice = std::strtod(price.c_str(), nullptr);
-            playAlarm = addPrice(price, numericPrice, fetchedAt);
-
-            if (playAlarm) {
-                std::string goldenAdvice;
-                std::string sentenceError;
-                if (!DailySentenceClient::fetchDailySentence(
-                        goldenAdvice, sentenceError)) {
-                    setStatus(
-                        "Nie udało się wygenerować sentencji AI: " +
-                        sentenceError);
-                } else {
-                    SYSTEMTIME recordedAt{};
-                    GetSystemTime(&recordedAt);
-
-                    std::string storageError;
-                    if (!PriceHistoryClient::savePrice(
-                            "EUR/USD", price, recordedAt,
-                            goldenAdvice, storageError)) {
-                        setStatus(
-                            "Nie udało się zapisać ceny w bazie: " +
-                            storageError);
-                    }
-                }
-            }
-        } else {
-            setStatus(std::move(error));
-        }
-
-        if (!PostMessageA(notificationWindow_, forexUpdateMessage,
-                          playAlarm ? 1 : 0, 0)) {
+        updateCandle();
+        if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
             break;
         }
-        if (WaitForSingleObject(stopEvent_, forexRefreshIntervalMs) != WAIT_TIMEOUT) {
+        if (WaitForSingleObject(stopEvent_, candleRefreshIntervalMs) != WAIT_TIMEOUT) {
             break;
         }
     }
 }
 
 /**
- * Pobiera świecę poza blokadą i zapisuje wynik atomowo dla wątku interfejsu.
+ * Pobiera świecę poza blokadą i atomowo aktualizuje stan monitora.
  */
-void ForexPriceMonitor::updateCandle(ForexCandleInterval interval) {
+void ForexPriceMonitor::updateCandle() {
     ForexCandle candle;
     std::string error;
     const bool succeeded =
-        TwelveDataClient::fetchEurUsdCandle(interval, candle, error);
+        TwelveDataClient::fetchEurUsdOneMinuteCandle(candle, error);
 
     AcquireSRWLockExclusive(&statusLock_);
-    if (interval == ForexCandleInterval::oneMinute) {
-        if (succeeded) {
-            oneMinuteCandle_ = std::move(candle);
-            oneMinuteCandleStatus_.clear();
-        } else {
-            oneMinuteCandleStatus_ = "Błąd świecy 1-minutowej: " + error;
-        }
+    if (succeeded) {
+        oneMinuteCandle_ = std::move(candle);
+        status_.clear();
     } else {
-        if (succeeded) {
-            fiveMinuteCandle_ = std::move(candle);
-            fiveMinuteCandleStatus_.clear();
-        } else {
-            fiveMinuteCandleStatus_ = "Błąd świecy 5-minutowej: " + error;
-        }
+        status_ = "Błąd świecy 1-minutowej: " + error;
     }
     ReleaseSRWLockExclusive(&statusLock_);
-}
-
-/**
- * Replaces the shared status string while holding an exclusive lock.
- */
-void ForexPriceMonitor::setStatus(std::string status) {
-    AcquireSRWLockExclusive(&statusLock_);
-    status_ = std::move(status);
-    ReleaseSRWLockExclusive(&statusLock_);
-}
-
-/**
- * Stores a timestamped price as the newest entry and retains only eight.
- */
-bool ForexPriceMonitor::addPrice(
-    std::string price, double numericPrice, const SYSTEMTIME& fetchedAt) {
-    char timestamp[9]{};
-    std::snprintf(timestamp, sizeof(timestamp),
-                  "%02u:%02u:%02u",
-                  static_cast<unsigned>(fetchedAt.wHour),
-                  static_cast<unsigned>(fetchedAt.wMinute),
-                  static_cast<unsigned>(fetchedAt.wSecond));
-
-    AcquireSRWLockExclusive(&statusLock_);
-    status_.clear();
-    ForexRowColor color = ForexRowColor::gray;
-    if (!priceHistory_.empty()) {
-        const ForexPriceEntry& previous = priceHistory_.front();
-        if (numericPrice > previous.numericPrice) {
-            color = ForexRowColor::green;
-        } else if (numericPrice < previous.numericPrice) {
-            color = ForexRowColor::red;
-        } else {
-            color = previous.color;
-        }
-    }
-
-    if (!priceHistory_.empty() && priceHistory_.front().color == color) {
-        ++latestColorStreak_;
-    } else {
-        latestColorStreak_ = 1;
-    }
-
-    priceHistory_.push_front(ForexPriceEntry{
-        timestamp, std::move(price), numericPrice, color});
-    if (priceHistory_.size() > 8) {
-        priceHistory_.pop_back();
-    }
-    ReleaseSRWLockExclusive(&statusLock_);
-    return color != ForexRowColor::gray && latestColorStreak_ == 3;
 }

@@ -37,7 +37,7 @@ private:
     LRESULT handleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     /**
-     * Uruchamia monitor cen, zegar oraz pobieranie sentencji w tle.
+     * Uruchamia monitor świecy, zegar oraz pobieranie sentencji w tle.
      * @return true, jeśli wszystkie usługi wystartowały; w przeciwnym razie false.
      */
     bool onCreate();
@@ -92,5 +92,5 @@ private:
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;
-    ForexPriceMonitor forexMonitor_;
+    ForexPriceMonitor candleMonitor_;
 };

@@ -15,11 +15,8 @@ namespace {
 
 // Endpoint configuration and a defensive cap on the downloaded response size.
 constexpr wchar_t apiHost[] = L"api.twelvedata.com";
-constexpr wchar_t apiPath[] = L"/price?symbol=EUR%2FUSD&apikey=";
 constexpr wchar_t oneMinuteCandleApiPath[] =
     L"/time_series?symbol=EUR%2FUSD&interval=1min&outputsize=1&apikey=";
-constexpr wchar_t fiveMinuteCandleApiPath[] =
-    L"/time_series?symbol=EUR%2FUSD&interval=5min&outputsize=1&apikey=";
 constexpr DWORD maxResponseSize = 64 * 1024;
 
 /**
@@ -73,41 +70,6 @@ bool readApiKey(std::wstring& apiKey) {
             return false;
         }
     }
-    return true;
-}
-
-/**
- * Extracts and validates the numeric "price" field from the JSON response.
- */
-bool extractPrice(const std::string& response, std::string& price) {
-    const std::string key = "\"price\"";
-    const std::size_t keyPosition = response.find(key);
-    if (keyPosition == std::string::npos) {
-        return false;
-    }
-
-    const std::size_t colonPosition = response.find(':', keyPosition + key.size());
-    if (colonPosition == std::string::npos) {
-        return false;
-    }
-    const std::size_t valueStart = response.find_first_not_of(" \t\r\n\"", colonPosition + 1);
-    if (valueStart == std::string::npos) {
-        return false;
-    }
-    const std::size_t valueEnd = response.find_first_of("\" \t\r\n,}", valueStart);
-    if (valueEnd == std::string::npos || valueEnd == valueStart) {
-        return false;
-    }
-
-    const std::string value = response.substr(valueStart, valueEnd - valueStart);
-    char* parsedEnd = nullptr;
-    const double parsedValue = std::strtod(value.c_str(), &parsedEnd);
-    if (parsedEnd == value.c_str() || *parsedEnd != '\0' || !std::isfinite(parsedValue) ||
-        parsedValue <= 0.0) {
-        return false;
-    }
-
-    price = value;
     return true;
 }
 
@@ -307,41 +269,12 @@ bool fetchApiResponse(
 } // namespace
 
 /**
- * Pobiera cenę EUR/USD i zwraca prawidłową wartość albo opis błędu.
+ * Pobiera ostatnią świecę EUR/USD z interwału jednej minuty.
  */
-bool TwelveDataClient::fetchEurUsdPrice(std::string& price, std::string& error) {
+bool TwelveDataClient::fetchEurUsdOneMinuteCandle(
+    ForexCandle& candle, std::string& error) {
     std::string response;
-    if (!fetchApiResponse(apiPath, response, error)) {
-        return false;
-    }
-
-    if (!extractPrice(response, price)) {
-        error = "No EUR/USD price was found in the Twelve Data response.";
-        return false;
-    }
-    return true;
-}
-
-/**
- * Pobiera jedną ostatnią świecę EUR/USD z interwału 1- albo 5-minutowego.
- */
-bool TwelveDataClient::fetchEurUsdCandle(
-    ForexCandleInterval interval, ForexCandle& candle, std::string& error) {
-    const wchar_t* endpoint = nullptr;
-    switch (interval) {
-        case ForexCandleInterval::oneMinute:
-            endpoint = oneMinuteCandleApiPath;
-            break;
-        case ForexCandleInterval::fiveMinutes:
-            endpoint = fiveMinuteCandleApiPath;
-            break;
-        default:
-            error = "Wybrano nieobsługiwany interwał świecy.";
-            return false;
-    }
-
-    std::string response;
-    if (!fetchApiResponse(endpoint, response, error)) {
+    if (!fetchApiResponse(oneMinuteCandleApiPath, response, error)) {
         return false;
     }
 

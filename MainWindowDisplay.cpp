@@ -6,11 +6,6 @@
 
 namespace {
 
-constexpr COLORREF firstPriceColor = RGB(128, 128, 128);
-constexpr COLORREF lowerPriceColor = RGB(255, 0, 0);
-constexpr COLORREF higherPriceColor = RGB(0, 160, 0);
-constexpr char productName[] = "  EUR/USD: ";
-
 /**
  * Konwertuje tekst UTF-8 z API do formatu Unicode używanego przez Windows.
  */
@@ -41,13 +36,6 @@ void drawTableCell(
     HDC deviceContext, const std::wstring& text, RECT bounds, UINT format) {
     DrawTextW(deviceContext, text.c_str(), static_cast<int>(text.size()),
               &bounds, format);
-}
-
-LONG measureText(HDC deviceContext, const std::string& text) {
-    SIZE textSize{};
-    GetTextExtentPoint32A(
-        deviceContext, text.c_str(), static_cast<int>(text.size()), &textSize);
-    return textSize.cx;
 }
 
 void drawCenteredText(
@@ -87,25 +75,16 @@ void drawClock(
     drawCenteredText(deviceContext, clockText, bounds, DT_CENTER | DT_SINGLELINE);
 }
 
-void drawStatus(
-    HDC deviceContext, const std::string& status, RECT clientArea,
-    LONG top, LONG height) {
-    RECT bounds = clientArea;
-    bounds.top = top;
-    bounds.bottom = top + height;
-    drawCenteredText(deviceContext, status, bounds, DT_CENTER | DT_WORDBREAK);
-}
-
 /**
  * Składa wartości OHLC świecy w jeden czytelny wiersz.
  */
 std::string createCandleText(
-    const char* interval, const ForexCandle& candle, const std::string& status) {
+    const ForexCandle& candle, const std::string& status) {
     if (candle.datetime.empty()) {
-        return std::string(interval) + ": " + status;
+        return "Swieca 1 min: " + status;
     }
 
-    std::string text = std::string(interval) + " (" + candle.datetime +
+    std::string text = "Swieca 1 min (" + candle.datetime +
         ")  Open: " + candle.open + "  High: " + candle.high +
         "  Low: " + candle.low + "  Close: " + candle.close;
     if (!status.empty()) {
@@ -114,60 +93,11 @@ std::string createCandleText(
     return text;
 }
 
-COLORREF rowColor(ForexRowColor color) {
-    switch (color) {
-        case ForexRowColor::red:
-            return lowerPriceColor;
-        case ForexRowColor::green:
-            return higherPriceColor;
-        case ForexRowColor::gray:
-            return firstPriceColor;
-    }
-    return firstPriceColor;
-}
-
-LONG drawProductTimestamp(
-    HDC deviceContext, const std::string& timestamp, LONG x, LONG y) {
-    TextOutA(deviceContext, x, y, timestamp.c_str(),
-             static_cast<int>(timestamp.size()));
-    return measureText(deviceContext, timestamp);
-}
-
-LONG drawProductName(HDC deviceContext, LONG x, LONG y) {
-    TextOutA(deviceContext, x, y, productName,
-             static_cast<int>(sizeof(productName) - 1));
-    return measureText(deviceContext, productName);
-}
-
-LONG drawProductValue(
-    HDC deviceContext, const std::string& value, LONG x, LONG y) {
-    TextOutA(deviceContext, x, y, value.c_str(), static_cast<int>(value.size()));
-    return measureText(deviceContext, value);
-}
-
-void drawProductRow(
-    HDC deviceContext, RECT clientArea, LONG top, LONG rowHeight,
-    const ForexPriceEntry& entry, COLORREF color) {
-    const LONG timestampWidth = measureText(deviceContext, entry.timestamp);
-    const LONG nameWidth = measureText(deviceContext, productName);
-    const LONG valueWidth = measureText(deviceContext, entry.price);
-    const LONG totalWidth = timestampWidth + nameWidth + valueWidth;
-    LONG x = clientArea.left + ((clientArea.right - clientArea.left) - totalWidth) / 2;
-
-    TEXTMETRICA textMetrics{};
-    GetTextMetricsA(deviceContext, &textMetrics);
-    const LONG y = top + (rowHeight - textMetrics.tmHeight) / 2;
-    SetTextColor(deviceContext, color);
-    x += drawProductTimestamp(deviceContext, entry.timestamp, x, y);
-    x += drawProductName(deviceContext, x, y);
-    drawProductValue(deviceContext, entry.price, x, y);
-}
-
 } // namespace
 
 // Front
 /**
- * Rysuje sentencję, zegar, najnowsze świece i historię cen.
+ * Rysuje sentencję dnia, zegar, status pobierania i świecę 1-minutową.
  */
 void MainWindowDisplay::draw(
     HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot,
@@ -190,45 +120,18 @@ void MainWindowDisplay::draw(
     const LONG sentenceHeight = sentenceBounds.bottom - sentenceBounds.top;
     const LONG sentenceSpacing = 8;
 
-    TEXTMETRICA textMetrics{};
-    GetTextMetricsA(deviceContext, &textMetrics);
-    const LONG rowHeight = textMetrics.tmHeight + textMetrics.tmExternalLeading;
-
-    LONG statusHeight = 0;
-    if (!snapshot.status.empty()) {
-        RECT statusBounds = clientArea;
-        DrawTextA(deviceContext, snapshot.status.c_str(), -1, &statusBounds,
-                  DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
-        statusHeight = statusBounds.bottom - statusBounds.top;
+    const std::string candleText =
+        createCandleText(snapshot.oneMinuteCandle, snapshot.status);
+    std::wstring wideCandleText;
+    if (!convertUtf8ToWide(candleText, wideCandleText)) {
+        wideCandleText = L"Nie można wyświetlić świecy 1-minutowej.";
     }
-
-    const std::string oneMinuteText = createCandleText(
-        "Swieca 1 min", snapshot.oneMinuteCandle,
-        snapshot.oneMinuteCandleStatus);
-    const std::string fiveMinuteText = createCandleText(
-        "Swieca 5 min", snapshot.fiveMinuteCandle,
-        snapshot.fiveMinuteCandleStatus);
-    std::wstring wideOneMinuteText;
-    if (!convertUtf8ToWide(oneMinuteText, wideOneMinuteText)) {
-        wideOneMinuteText = L"Nie mozna wyswietlic swiecy 1-minutowej.";
-    }
-    std::wstring wideFiveMinuteText;
-    if (!convertUtf8ToWide(fiveMinuteText, wideFiveMinuteText)) {
-        wideFiveMinuteText = L"Nie mozna wyswietlic swiecy 5-minutowej.";
-    }
-    RECT oneMinuteBounds = clientArea;
-    DrawTextW(deviceContext, wideOneMinuteText.c_str(), -1, &oneMinuteBounds,
+    RECT candleBounds = clientArea;
+    DrawTextW(deviceContext, wideCandleText.c_str(), -1, &candleBounds,
               DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
-    RECT fiveMinuteBounds = clientArea;
-    DrawTextW(deviceContext, wideFiveMinuteText.c_str(), -1, &fiveMinuteBounds,
-              DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
-    const LONG oneMinuteHeight = oneMinuteBounds.bottom - oneMinuteBounds.top;
-    const LONG fiveMinuteHeight = fiveMinuteBounds.bottom - fiveMinuteBounds.top;
-
-    const LONG historyHeight = rowHeight * static_cast<LONG>(snapshot.prices.size());
+    const LONG candleHeight = candleBounds.bottom - candleBounds.top;
     const LONG totalHeight =
-        sentenceHeight + sentenceSpacing + headerHeight + statusHeight +
-        oneMinuteHeight + fiveMinuteHeight + historyHeight;
+        sentenceHeight + sentenceSpacing + headerHeight + candleHeight;
     LONG top = clientArea.top + ((clientArea.bottom - clientArea.top) - totalHeight) / 2;
     if (top < clientArea.top) {
         top = clientArea.top;
@@ -247,31 +150,12 @@ void MainWindowDisplay::draw(
     drawClock(deviceContext, clockText, clientArea, top, headerHeight);
     top += headerHeight;
 
-    if (!snapshot.status.empty()) {
-        drawStatus(deviceContext, snapshot.status, clientArea, top, statusHeight);
-        top += statusHeight;
-    }
-
-    RECT oneMinuteDisplayBounds = clientArea;
-    oneMinuteDisplayBounds.top = top;
-    oneMinuteDisplayBounds.bottom = top + oneMinuteHeight;
+    RECT candleDisplayBounds = clientArea;
+    candleDisplayBounds.top = top;
+    candleDisplayBounds.bottom = top + candleHeight;
     drawCenteredWideText(
-        deviceContext, wideOneMinuteText, oneMinuteDisplayBounds,
+        deviceContext, wideCandleText, candleDisplayBounds,
         DT_CENTER | DT_WORDBREAK);
-    top += oneMinuteHeight;
-    RECT fiveMinuteDisplayBounds = clientArea;
-    fiveMinuteDisplayBounds.top = top;
-    fiveMinuteDisplayBounds.bottom = top + fiveMinuteHeight;
-    drawCenteredWideText(
-        deviceContext, wideFiveMinuteText, fiveMinuteDisplayBounds,
-        DT_CENTER | DT_WORDBREAK);
-    top += fiveMinuteHeight;
-
-    for (std::size_t index = 0; index < snapshot.prices.size(); ++index) {
-        drawProductRow(deviceContext, clientArea, top, rowHeight,
-                       snapshot.prices[index], rowColor(snapshot.prices[index].color));
-        top += rowHeight;
-    }
 }
 
 /**

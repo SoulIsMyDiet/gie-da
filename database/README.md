@@ -1,6 +1,6 @@
 # Historia cen produktów w MySQL
 
-Projekt używa MySQL uruchomionego w Dockerze. Aplikacja C++ wysyła pobrane ceny do lokalnego API, a API zapisuje je w tabeli `price_history`. Tabela `products` pozwala później dodawać kolejne symbole bez zmiany struktury historii.
+Projekt używa MySQL uruchomionego w Dockerze. Lokalna historia przechowuje wcześniej zebrane ceny w tabeli `price_history`; aplikacja nadal może odczytywać istniejące wpisy na stronie raportów.
 
 ## Pierwsze uruchomienie
 
@@ -25,7 +25,7 @@ Projekt używa MySQL uruchomionego w Dockerze. Aplikacja C++ wysyła pobrane cen
    ```
 
    Oczekiwany wynik to `status: ok`.
-6. Uruchom aplikację giełdy w CLion. Każda nowa cena będzie zapisywana z datą i czasem lokalnym dla strefy `Europe/Warsaw`. Przy braku połączenia z bazą aplikacja nadal pokaże pobrany kurs, a w statusie pojawi się informacja o błędzie zapisu.
+6. Uruchom aplikację giełdy w CLion. Aplikacja pobiera obecnie wyłącznie świece 1-minutowe z Twelve Data; nie zapisuje nowych cen EUR/USD do tej bazy. Przycisk „Raporty” nadal wyświetla istniejące wpisy.
 
 ## Codzienna obsługa
 

@@ -1,7 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "AudioSignal.h"
 #include "DailySentenceClient.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
@@ -15,7 +14,7 @@ namespace {
 
 constexpr char windowClassName[] = "HelloWorldWindow";
 constexpr UINT_PTR clockTimerId = 1;
-constexpr UINT forexUpdateMessage = WM_APP + 1;
+constexpr UINT candleUpdateMessage = WM_APP + 1;
 constexpr int reportsButtonId = 1001;
 constexpr int reportsButtonWidth = 128;
 constexpr int reportsButtonHeight = 36;
@@ -102,7 +101,7 @@ LRESULT CALLBACK MainWindow::windowProcedure(
 }
 
 /**
- * Routes window, timer, paint, and Forex update messages to their handlers.
+ * Przekazuje komunikaty okna, zegara, rysowania i aktualizacji świecy do obsługi.
  */
 LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
@@ -123,12 +122,8 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             break;
-        case forexUpdateMessage:
+        case candleUpdateMessage:
             InvalidateRect(handle_, nullptr, TRUE);
-            if (wParam != 0 && !AudioSignal::play()) {
-                MessageBoxA(handle_, "Windows could not play the audio signal.",
-                            "Audio error", MB_ICONERROR);
-            }
             return 0;
         case WM_PAINT:
             onPaint();
@@ -143,7 +138,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 }
 
 /**
- * Uruchamia monitor cen, zegar oraz pobieranie sentencji dnia.
+ * Uruchamia monitor świecy, zegar oraz pobieranie sentencji dnia.
  */
 bool MainWindow::onCreate() {
     if (!createReportsButton()) {
@@ -152,16 +147,16 @@ bool MainWindow::onCreate() {
         return false;
     }
 
-    if (!forexMonitor_.start(handle_)) {
-        MessageBoxA(handle_, "Could not start the Forex update service.",
-                    "Error", MB_ICONERROR);
+    if (!candleMonitor_.start(handle_)) {
+        MessageBoxW(handle_, L"Nie udało się uruchomić pobierania świecy.",
+                    L"Błąd", MB_ICONERROR);
         return false;
     }
 
     if (SetTimer(handle_, clockTimerId, 1000, nullptr) == 0) {
         MessageBoxA(handle_, "Could not start the clock timer.",
                     "Error", MB_ICONERROR);
-        forexMonitor_.stop();
+        candleMonitor_.stop();
         return false;
     }
 
@@ -169,7 +164,7 @@ bool MainWindow::onCreate() {
         startDailySentenceRequest();
     } catch (const std::system_error&) {
         KillTimer(handle_, clockTimerId);
-        forexMonitor_.stop();
+        candleMonitor_.stop();
         MessageBoxW(
             handle_, L"Nie udało się uruchomić pobierania sentencji.",
             L"Błąd", MB_ICONERROR);
@@ -319,7 +314,7 @@ void MainWindow::onPaint() {
             dailySentence = dailySentence_;
         }
         MainWindowDisplay::draw(
-            deviceContext, clientArea, forexMonitor_.snapshot(), dailySentence);
+            deviceContext, clientArea, candleMonitor_.snapshot(), dailySentence);
     }
     EndPaint(handle_, &paint);
 }
@@ -329,7 +324,7 @@ void MainWindow::onPaint() {
  */
 void MainWindow::onDestroy() {
     KillTimer(handle_, clockTimerId);
-    forexMonitor_.stop();
+    candleMonitor_.stop();
     if (dailySentenceThread_.joinable()) {
         dailySentenceThread_.join();
     }

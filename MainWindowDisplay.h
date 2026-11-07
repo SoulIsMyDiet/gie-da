@@ -14,10 +14,10 @@
 class MainWindowDisplay {
 public:
     /**
-     * Rysuje sentencję dnia, zegar, status i historię cen.
+     * Rysuje sentencję dnia, zegar, status i świecę 1-minutową.
      * @param deviceContext Kontekst rysowania głównego okna.
      * @param clientArea Obszar dostępny dla strony głównej.
-     * @param snapshot Bieżący status monitora i zapisane ceny.
+     * @param snapshot Bieżąca świeca 1-minutowa i status jej pobierania.
      * @param dailySentence Sentencja lub informacja o błędzie jej pobierania.
      */
     static void draw(

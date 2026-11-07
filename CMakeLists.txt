@@ -7,7 +7,6 @@ add_executable(gieda WIN32
     main.cpp
     MainWindow.cpp
     ForexPriceMonitor.cpp
-    AudioSignal.cpp
     DailySentenceClient.cpp
     MainWindowDisplay.cpp
     TwelveDataClient.cpp
@@ -15,7 +14,6 @@ add_executable(gieda WIN32
 )
 set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
 target_link_libraries(gieda PRIVATE
-    winmm
     winhttp
 )
 target_link_options(gieda PRIVATE -static-libgcc -static-libstdc++)
