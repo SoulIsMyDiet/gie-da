@@ -9,6 +9,8 @@ namespace {
 
 constexpr UINT candleUpdateMessage = WM_APP + 1;
 constexpr DWORD candleCloseBufferMs = 2000;
+constexpr DWORD candleRetryIntervalMs = 5000;
+constexpr ULONGLONG candleRetryWindowMs = 30000;
 constexpr ULONGLONG fileTimeTicksPerSecond = 10000000ULL;
 constexpr ULONGLONG fileTimeTicksPerMinute = 60ULL * fileTimeTicksPerSecond;
 
@@ -98,6 +100,37 @@ std::string describeCandleFreshness(const CandleData& candle) {
             static_cast<unsigned long long>(differenceSeconds));
     }
     return freshnessStatus;
+}
+
+/**
+ * Sprawdza, czy znacznik świecy odpowiada ostatniej zamkniętej minucie UTC.
+ */
+bool isLatestClosedMinute(const CandleData& candle) {
+    SYSTEMTIME candleTime{};
+    SYSTEMTIME currentTime{};
+    if (!parseCandleUtcTime(candle.datetime, candleTime)) {
+        return false;
+    }
+
+    GetSystemTime(&currentTime);
+    currentTime.wSecond = 0;
+    currentTime.wMilliseconds = 0;
+    FILETIME expectedFileTime{};
+    FILETIME candleFileTime{};
+    if (!SystemTimeToFileTime(&currentTime, &expectedFileTime) ||
+        !SystemTimeToFileTime(&candleTime, &candleFileTime)) {
+        return false;
+    }
+
+    ULARGE_INTEGER expectedTicks{};
+    expectedTicks.LowPart = expectedFileTime.dwLowDateTime;
+    expectedTicks.HighPart = expectedFileTime.dwHighDateTime;
+    ULARGE_INTEGER candleTicks{};
+    candleTicks.LowPart = candleFileTime.dwLowDateTime;
+    candleTicks.HighPart = candleFileTime.dwHighDateTime;
+    return expectedTicks.QuadPart >= fileTimeTicksPerMinute &&
+        candleTicks.QuadPart ==
+            expectedTicks.QuadPart - fileTimeTicksPerMinute;
 }
 
 /**
@@ -191,24 +224,45 @@ DWORD WINAPI StockPriceMonitor::threadEntryPoint(LPVOID parameter) {
 }
 
 /**
- * Pobiera świecę 1-minutową dwie sekundy po jej planowanym zamknięciu.
+ * Pobiera jedną świecę po zamknięciu minuty, aby oszczędzać limit API.
  */
 void StockPriceMonitor::run() {
     while (true) {
         if (!waitForNextCandleClose(stopEvent_)) {
             break;
         }
+
+        // Po zwiększeniu limitu API zastąp pojedyncze pobranie pętlą poniżej.
         updateCandle();
         if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
             break;
         }
+
+        /*
+        // Odkomentuj po zwiększeniu limitu zapytań Twelve Data.
+        const ULONGLONG retryStartedAt = GetTickCount64();
+        while (true) {
+            const bool latestCandleAvailable = updateCandle();
+            if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
+                return;
+            }
+            if (latestCandleAvailable ||
+                GetTickCount64() - retryStartedAt >= candleRetryWindowMs) {
+                break;
+            }
+            if (WaitForSingleObject(stopEvent_, candleRetryIntervalMs) != WAIT_TIMEOUT) {
+                return;
+            }
+        }
+        */
     }
 }
 
 /**
- * Pobiera świecę poza blokadą i atomowo aktualizuje stan monitora.
+ * Pobiera świecę i atomowo aktualizuje stan monitora.
+ * @return true, jeśli pobrano świecę dla ostatniej zamkniętej minuty UTC.
  */
-void StockPriceMonitor::updateCandle() {
+bool StockPriceMonitor::updateCandle() {
     CandleData candle;
     std::string error;
     constexpr char monitoredSymbol[] = "EUR/USD";
@@ -227,6 +281,7 @@ void StockPriceMonitor::updateCandle() {
     } else {
         updateStatus = describeCandleFreshness(candle);
     }
+    const bool latestCandleAvailable = fetched && isLatestClosedMinute(candle);
 
     AcquireSRWLockExclusive(&statusLock_);
     if (fetched) {
@@ -234,4 +289,5 @@ void StockPriceMonitor::updateCandle() {
     }
     status_ = updateStatus;
     ReleaseSRWLockExclusive(&statusLock_);
+    return latestCandleAvailable;
 }

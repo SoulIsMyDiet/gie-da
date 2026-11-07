@@ -57,9 +57,9 @@ private:
 
     /**
      * Pobiera świecę i aktualizuje wspólny stan monitora.
-     * Przy błędzie zachowuje ostatnią poprawną świecę i zapisuje opis błędu.
+     * @return true, jeśli pobrano świecę dla ostatniej zamkniętej minuty UTC.
      */
-    void updateCandle();
+    bool updateCandle();
 
     HWND notificationWindow_ = nullptr;
     HANDLE stopEvent_ = nullptr;

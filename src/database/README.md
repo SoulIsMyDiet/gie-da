@@ -25,7 +25,7 @@ Projekt używa MySQL uruchomionego w Dockerze. Lokalna historia przechowuje wcze
    ```
 
    Oczekiwany wynik to `status: ok`.
-6. Uruchom aplikację giełdy w CLion. Aplikacja pobiera świece 1-minutowe EUR/USD z Twelve Data i zapisuje je w tabeli `candles`. Nie zapisuje nowych odczytów cen do `price_history`; przycisk „Raporty” nadal wyświetla wcześniejsze wpisy.
+6. Uruchom aplikację giełdy w CLion. Aplikacja pobiera jedną świecę 1-minutową EUR/USD z Twelve Data po zamknięciu minuty i zapisuje ją w tabeli `candles`. Ponawianie pobrania jest na razie wyłączone, aby oszczędzać limit API. Nie zapisuje nowych odczytów cen do `price_history`; przycisk „Raporty” nadal wyświetla wcześniejsze wpisy.
 
 ## Codzienna obsługa
 
