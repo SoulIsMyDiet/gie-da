@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "DailySentenceClient.h"
-#include "ForexPriceMonitor.h"
+#include "StockPriceMonitor.h"
 #include "PriceHistoryClient.h"
 
 class MainWindow {
@@ -92,5 +92,5 @@ private:
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;
-    ForexPriceMonitor candleMonitor_;
+    StockPriceMonitor candleMonitor_;
 };

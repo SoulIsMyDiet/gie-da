@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "ForexPriceMonitor.h"
+#include "StockPriceMonitor.h"
 #include "PriceHistoryClient.h"
 
 class MainWindowDisplay {
@@ -21,7 +21,7 @@ public:
      * @param dailySentence Sentencja lub informacja o błędzie jej pobierania.
      */
     static void draw(
-        HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot,
+        HDC deviceContext, RECT& clientArea, const StockPriceSnapshot& snapshot,
         const std::string& dailySentence);
 
     /**

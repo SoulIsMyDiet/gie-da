@@ -100,7 +100,7 @@ std::string createCandleText(
  * Rysuje sentencję dnia, zegar, status pobierania i świecę 1-minutową.
  */
 void MainWindowDisplay::draw(
-    HDC deviceContext, RECT& clientArea, const ForexPriceSnapshot& snapshot,
+    HDC deviceContext, RECT& clientArea, const StockPriceSnapshot& snapshot,
     const std::string& dailySentence) {
     const std::string clockText = currentTimeText();
     RECT headerBounds = clientArea;

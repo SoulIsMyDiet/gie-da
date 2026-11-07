@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(gieda WIN32
     src/main.cpp
     src/pages/MainWindow/MainWindow.cpp
-    src/stockmarket/ForexPriceMonitor.cpp
+    src/stockmarket/StockPriceMonitor.cpp
     src/pages/MainWindow/MainWindowDisplay.cpp
     src/stockmarket/StockMarketClient/TwelveDataClient.cpp
     src/stockmarket/StockMarketClient/CandlesDataClient.cpp

@@ -7,25 +7,25 @@
 
 #include "CandlesDataClient.h"
 
-struct ForexPriceSnapshot {
+struct StockPriceSnapshot {
     CandleData oneMinuteCandle;
     std::string status;
 };
 
-class ForexPriceMonitor {
+class StockPriceMonitor {
 public:
     /**
      * Przygotowuje monitor do pobierania świec 1-minutowych.
      */
-    ForexPriceMonitor();
+    StockPriceMonitor();
 
     /**
      * Zatrzymuje pobieranie w tle i zwalnia uchwyty Windows.
      */
-    ~ForexPriceMonitor();
+    ~StockPriceMonitor();
 
-    ForexPriceMonitor(const ForexPriceMonitor&) = delete;
-    ForexPriceMonitor& operator=(const ForexPriceMonitor&) = delete;
+    StockPriceMonitor(const StockPriceMonitor&) = delete;
+    StockPriceMonitor& operator=(const StockPriceMonitor&) = delete;
 
     /**
      * Uruchamia wątek pobierający świece i powiadamiający okno o aktualizacji.
@@ -42,7 +42,7 @@ public:
     /**
      * Zwraca kopię ostatniej świecy i statusu, bezpieczną do odczytu w innym wątku.
      */
-    ForexPriceSnapshot snapshot() const;
+    StockPriceSnapshot snapshot() const;
 
 private:
     /**

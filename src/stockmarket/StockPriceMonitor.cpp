@@ -1,4 +1,4 @@
-#include "ForexPriceMonitor.h"
+#include "StockPriceMonitor.h"
 
 #include <utility>
 
@@ -12,19 +12,19 @@ constexpr DWORD candleRefreshIntervalMs = 60000;
 /**
  * Przygotowuje monitor do pobierania świec 1-minutowych.
  */
-ForexPriceMonitor::ForexPriceMonitor() = default;
+StockPriceMonitor::StockPriceMonitor() = default;
 
 /**
  * Zatrzymuje wątek pobierania przed zniszczeniem monitora.
  */
-ForexPriceMonitor::~ForexPriceMonitor() {
+StockPriceMonitor::~StockPriceMonitor() {
     stop();
 }
 
 /**
  * Tworzy zdarzenie zatrzymania i uruchamia wątek dla wskazanego okna.
  */
-bool ForexPriceMonitor::start(HWND notificationWindow) {
+bool StockPriceMonitor::start(HWND notificationWindow) {
     if (notificationWindow == nullptr || workerThread_ != nullptr) {
         return false;
     }
@@ -48,7 +48,7 @@ bool ForexPriceMonitor::start(HWND notificationWindow) {
 /**
  * Zatrzymuje wątek, czeka na jego zakończenie i zwalnia uchwyty.
  */
-void ForexPriceMonitor::stop() {
+void StockPriceMonitor::stop() {
     if (stopEvent_ != nullptr) {
         SetEvent(stopEvent_);
     }
@@ -67,9 +67,9 @@ void ForexPriceMonitor::stop() {
 /**
  * Zwraca świecę i status skopiowane pod blokadą współdzieloną.
  */
-ForexPriceSnapshot ForexPriceMonitor::snapshot() const {
+StockPriceSnapshot StockPriceMonitor::snapshot() const {
     AcquireSRWLockShared(&statusLock_);
-    ForexPriceSnapshot currentSnapshot{oneMinuteCandle_, status_};
+    StockPriceSnapshot currentSnapshot{oneMinuteCandle_, status_};
     ReleaseSRWLockShared(&statusLock_);
     return currentSnapshot;
 }
@@ -77,8 +77,8 @@ ForexPriceSnapshot ForexPriceMonitor::snapshot() const {
 /**
  * Uruchamia pętlę pobierania dla monitora przekazanego przez Windows.
  */
-DWORD WINAPI ForexPriceMonitor::threadEntryPoint(LPVOID parameter) {
-    auto* monitor = static_cast<ForexPriceMonitor*>(parameter);
+DWORD WINAPI StockPriceMonitor::threadEntryPoint(LPVOID parameter) {
+    auto* monitor = static_cast<StockPriceMonitor*>(parameter);
     monitor->run();
     return 0;
 }
@@ -86,7 +86,7 @@ DWORD WINAPI ForexPriceMonitor::threadEntryPoint(LPVOID parameter) {
 /**
  * Pobiera świecę 1-minutową, a następnie czeka minutę przed kolejnym żądaniem.
  */
-void ForexPriceMonitor::run() {
+void StockPriceMonitor::run() {
     while (true) {
         updateCandle();
         if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
@@ -101,7 +101,7 @@ void ForexPriceMonitor::run() {
 /**
  * Pobiera świecę poza blokadą i atomowo aktualizuje stan monitora.
  */
-void ForexPriceMonitor::updateCandle() {
+void StockPriceMonitor::updateCandle() {
     CandleData candle;
     std::string error;
     const bool succeeded =
