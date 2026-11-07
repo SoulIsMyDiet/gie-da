@@ -5,9 +5,9 @@ set(CMAKE_CXX_STANDARD 20)
 
 add_executable(gieda WIN32
     src/main.cpp
-    src/stockmarket/MainWindow/MainWindow.cpp
+    src/pages/MainWindow/MainWindow.cpp
     src/stockmarket/ForexPriceMonitor.cpp
-    src/stockmarket/MainWindow/MainWindowDisplay.cpp
+    src/pages/MainWindow/MainWindowDisplay.cpp
     src/stockmarket/StockMarketClient/TwelveDataClient.cpp
     src/stockmarket/StockMarketClient/PriceHistoryClient.cpp
     src/ai/AiClient/DailySentenceClient.cpp
@@ -17,7 +17,7 @@ set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
 target_include_directories(gieda PRIVATE
     src/ai/AiClient
     src/stockmarket
-    src/stockmarket/MainWindow
+    src/pages/MainWindow
     src/stockmarket/StockMarketClient
     src/utility
 )
