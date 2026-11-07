@@ -18,7 +18,7 @@ services:
 
   price-history-api:
     build:
-      context: ./database/api
+      context: ./src/database/api
     restart: unless-stopped
     depends_on:
       mysql:
