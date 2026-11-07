@@ -1,4 +1,4 @@
-"""Lokalne API, które zapisuje historię cen produktów w MySQL."""
+"""Lokalne API, które zapisuje historię cen i świec rynkowych w MySQL."""
 
 # Backend
 import os
@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import mysql.connector
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 RANDOM_NOUNS = (
@@ -66,8 +66,45 @@ class PriceRecord(BaseModel):
     # :)
 
 
-class PriceHistoryRepository:
-    """Zarządza tabelami produktów i zapisami ich historycznych cen."""
+class CandleRecord(BaseModel):
+    """Opis jednej świecy rynkowej przesyłanej przez aplikację desktopową."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z0-9./_-]+$")
+    datetime: datetime
+    open: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
+    high: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
+    low: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
+    close: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
+    volume: Decimal | None = Field(
+        default=None, ge=Decimal("0"), max_digits=30, decimal_places=10
+    )
+
+    @field_validator("datetime")
+    @classmethod
+    def require_timezone(cls, candle_datetime: datetime) -> datetime:
+        """Wymaga strefy czasowej, aby zapisywać czas świecy jednoznacznie w UTC."""
+        if candle_datetime.tzinfo is None or candle_datetime.utcoffset() is None:
+            raise ValueError("datetime musi zawierać strefę czasową.")
+        return candle_datetime
+
+    @model_validator(mode="after")
+    def validate_ohlc_range(self) -> "CandleRecord":
+        """Sprawdza, czy zakres świecy zawiera ceny otwarcia i zamknięcia."""
+        if (
+            self.high < self.open
+            or self.high < self.close
+            or self.low > self.open
+            or self.low > self.close
+            or self.low > self.high
+        ):
+            raise ValueError("Wartości OHLC nie tworzą prawidłowego zakresu świecy.")
+        return self
+
+
+class MarketDataRepository:
+    """Zarządza produktami, historią cen oraz pobranymi świecami."""
 
     def __init__(self) -> None:
         """Pobiera ustawienia połączenia z bazy ze zmiennych środowiskowych."""
@@ -104,6 +141,22 @@ class PriceHistoryRepository:
                         created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                         INDEX idx_price_history_symbol_recorded_at (symbol, recorded_at),
                         CONSTRAINT fk_price_history_product
+                            FOREIGN KEY (symbol) REFERENCES products(symbol)
+                    ) ENGINE=InnoDB
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS candles (
+                        symbol VARCHAR(32) NOT NULL,
+                        datetime DATETIME(6) NOT NULL,
+                        open DECIMAL(20, 10) NOT NULL,
+                        high DECIMAL(20, 10) NOT NULL,
+                        low DECIMAL(20, 10) NOT NULL,
+                        close DECIMAL(20, 10) NOT NULL,
+                        volume DECIMAL(30, 10) NULL,
+                        PRIMARY KEY (symbol, datetime),
+                        CONSTRAINT fk_candles_product
                             FOREIGN KEY (symbol) REFERENCES products(symbol)
                     ) ENGINE=InnoDB
                     """
@@ -221,10 +274,57 @@ class PriceHistoryRepository:
         finally:
             connection.close()
 
+    def save_candle(self, candle: CandleRecord) -> None:
+        """Zapisuje świecę lub aktualizuje jej wartości dla tego samego symbolu i czasu."""
+        candle_datetime_utc = (
+            candle.datetime.astimezone(timezone.utc).replace(tzinfo=None)
+        )
+        connection = mysql.connector.connect(**self.database_settings)
+        cursor = None
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO products (symbol) VALUES (%s)
+                ON DUPLICATE KEY UPDATE symbol = %s
+                """,
+                (candle.symbol, candle.symbol),
+            )
+            cursor.execute(
+                """
+                INSERT INTO candles
+                    (symbol, datetime, open, high, low, close, volume)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    open = VALUES(open),
+                    high = VALUES(high),
+                    low = VALUES(low),
+                    close = VALUES(close),
+                    volume = VALUES(volume)
+                """,
+                (
+                    candle.symbol,
+                    candle_datetime_utc,
+                    candle.open,
+                    candle.high,
+                    candle.low,
+                    candle.close,
+                    candle.volume,
+                ),
+            )
+            connection.commit()
+        except mysql.connector.Error:
+            connection.rollback()
+            raise
+        finally:
+            if cursor is not None:
+                cursor.close()
+            connection.close()
+
     # :)
 
 
-repository = PriceHistoryRepository()
+repository = MarketDataRepository()
 
 
 @asynccontextmanager
@@ -234,12 +334,24 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="gie-da price history API", lifespan=lifespan)
+app = FastAPI(title="gie-da market data API", lifespan=lifespan)
 
 @app.get("/health")
 def health() -> dict[str, str]:
     """Zwraca prostą odpowiedź kontrolną dla lokalnego API."""
     return {"status": "ok"}
+
+
+@app.post("/api/candles", status_code=204)
+def save_candle(candle: CandleRecord, request: Request) -> None:
+    """Waliduje i zapisuje świecę rynkową; ten sam symbol i czas aktualizują wpis."""
+    try:
+        request.app.state.repository.save_candle(candle)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zapisać świecy w bazie MySQL.",
+        ) from error
 
 
 @app.post("/api/prices", status_code=201)

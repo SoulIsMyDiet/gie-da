@@ -10,6 +10,7 @@ add_executable(gieda WIN32
     src/pages/MainWindow/MainWindowDisplay.cpp
     src/stockmarket/StockMarketClient/TwelveDataClient.cpp
     src/stockmarket/StockMarketClient/CandlesDataClient.cpp
+    src/stockmarket/StockMarketClient/CandleHistoryClient.cpp
     src/stockmarket/StockMarketClient/PriceHistoryClient.cpp
     src/ai/AiClient/DailySentenceClient.cpp
     src/utility/AudioSignal.cpp

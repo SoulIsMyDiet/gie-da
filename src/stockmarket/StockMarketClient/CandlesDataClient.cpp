@@ -71,6 +71,45 @@ bool extractJsonString(
 }
 
 /**
+ * Odczytuje opcjonalny wolumen zapisany jako tekst, liczba albo null.
+ */
+bool extractOptionalVolume(std::string_view object, std::string& volume) {
+    const std::string key = "\"volume\"";
+    const std::size_t keyPosition = object.find(key);
+    if (keyPosition == std::string_view::npos) {
+        return true;
+    }
+
+    const std::size_t colonPosition = object.find(':', keyPosition + key.size());
+    if (colonPosition == std::string_view::npos) {
+        return false;
+    }
+    const std::size_t valueStart =
+        object.find_first_not_of(" \t\r\n", colonPosition + 1);
+    if (valueStart == std::string_view::npos) {
+        return false;
+    }
+    if (object.substr(valueStart, 4) == "null") {
+        return true;
+    }
+    if (object[valueStart] == '"') {
+        const std::size_t valueEnd = object.find('"', valueStart + 1);
+        if (valueEnd == std::string_view::npos) {
+            return false;
+        }
+        volume.assign(object.substr(valueStart + 1, valueEnd - valueStart - 1));
+        return true;
+    }
+
+    const std::size_t valueEnd = object.find_first_of(",} \t\r\n", valueStart);
+    if (valueEnd == std::string_view::npos || valueEnd == valueStart) {
+        return false;
+    }
+    volume.assign(object.substr(valueStart, valueEnd - valueStart));
+    return true;
+}
+
+/**
  * Odczytuje pierwszą świecę z odpowiedzi i sprawdza poprawność jej wartości OHLC.
  */
 bool extractCandle(const std::string& response, CandleData& candle) {
@@ -100,6 +139,9 @@ bool extractCandle(const std::string& response, CandleData& candle) {
         !extractJsonString(candleObject, "close", parsedCandle.close)) {
         return false;
     }
+    if (!extractOptionalVolume(candleObject, parsedCandle.volume)) {
+        return false;
+    }
 
     char* parsedEnd = nullptr;
     const double open = std::strtod(parsedCandle.open.c_str(), &parsedEnd);
@@ -123,6 +165,13 @@ bool extractCandle(const std::string& response, CandleData& candle) {
         high < open || high < close || low > open || low > close || low > high) {
         return false;
     }
+    if (!parsedCandle.volume.empty()) {
+        const double volume = std::strtod(parsedCandle.volume.c_str(), &parsedEnd);
+        if (parsedEnd == parsedCandle.volume.c_str() || *parsedEnd != '\0' ||
+            !std::isfinite(volume) || volume < 0.0) {
+            return false;
+        }
+    }
 
     candle = std::move(parsedCandle);
     return true;
@@ -132,6 +181,7 @@ bool extractCandle(const std::string& response, CandleData& candle) {
 
 /**
  * Pobiera świecę 1-minutową dla dowolnego symbolu obsługiwanego przez Twelve Data.
+ * Żądany czas jest UTC, aby identycznie zapisywać znaczniki czasu w bazie.
  */
 bool CandlesDataClient::fetchLatestOneMinuteCandle(
     const std::string& symbol, CandleData& candle, std::string& error) {
@@ -143,7 +193,7 @@ bool CandlesDataClient::fetchLatestOneMinuteCandle(
 
     const std::wstring requestPath =
         L"/time_series?symbol=" + encodedSymbol +
-        L"&interval=1min&outputsize=1&apikey=";
+        L"&interval=1min&outputsize=1&timezone=UTC&apikey=";
     std::string response;
     if (!TwelveDataClient::fetchApiResponse(requestPath, response, error)) {
         return false;

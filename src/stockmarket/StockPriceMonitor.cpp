@@ -1,5 +1,7 @@
 #include "StockPriceMonitor.h"
 
+#include "CandleHistoryClient.h"
+
 #include <utility>
 
 namespace {
@@ -104,13 +106,21 @@ void StockPriceMonitor::run() {
 void StockPriceMonitor::updateCandle() {
     CandleData candle;
     std::string error;
-    const bool succeeded =
-        CandlesDataClient::fetchLatestOneMinuteCandle("EUR/USD", candle, error);
+    constexpr char monitoredSymbol[] = "EUR/USD";
+    const bool fetched =
+        CandlesDataClient::fetchLatestOneMinuteCandle(
+            monitoredSymbol, candle, error);
+    bool saved = false;
+    if (fetched) {
+        saved = CandleHistoryClient::saveCandle(monitoredSymbol, candle, error);
+    }
 
     AcquireSRWLockExclusive(&statusLock_);
-    if (succeeded) {
+    if (fetched) {
         oneMinuteCandle_ = std::move(candle);
-        status_.clear();
+        status_ = saved
+            ? ""
+            : "Nie udało się zapisać świecy w bazie: " + error;
     } else {
         status_ = "Błąd świecy 1-minutowej: " + error;
     }

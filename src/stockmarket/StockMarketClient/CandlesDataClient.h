@@ -11,6 +11,7 @@ struct CandleData {
     std::string high;
     std::string low;
     std::string close;
+    std::string volume;
 };
 
 class CandlesDataClient {
