@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(gieda WIN32
     src/main.cpp
     src/pages/MainWindow/MainWindow.cpp
+    src/pages/reports/ReportsPage.cpp
     src/stockmarket/StockPriceMonitor.cpp
     src/pages/MainWindow/MainWindowDisplay.cpp
     src/stockmarket/StockMarketClient/TwelveDataClient.cpp
@@ -20,6 +21,7 @@ target_include_directories(gieda PRIVATE
     src/ai/AiClient
     src/stockmarket
     src/pages/MainWindow
+    src/pages/reports
     src/stockmarket/StockMarketClient
     src/utility
 )

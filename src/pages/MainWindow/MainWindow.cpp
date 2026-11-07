@@ -4,7 +4,6 @@
 #include "DailySentenceClient.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
-#include "PriceHistoryClient.h"
 
 #include <algorithm>
 #include <system_error>
@@ -114,8 +113,13 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         case WM_SIZE:
             positionReportsButton();
+            reportsPage_.positionControls();
             return 0;
         case WM_COMMAND:
+            if (reportsPage_.handleCommand(
+                    LOWORD(wParam), HIWORD(wParam))) {
+                return 0;
+            }
             if (LOWORD(wParam) == reportsButtonId &&
                 HIWORD(wParam) == BN_CLICKED) {
                 onReportsClicked();
@@ -144,6 +148,11 @@ bool MainWindow::onCreate() {
     if (!createReportsButton()) {
         MessageBoxA(handle_, "Could not create the Reports button.",
                     "Error", MB_ICONERROR);
+        return false;
+    }
+    if (!reportsPage_.create(instance_, handle_)) {
+        MessageBoxW(handle_, L"Nie udało się utworzyć przycisków raportu.",
+                    L"Błąd", MB_ICONERROR);
         return false;
     }
 
@@ -237,36 +246,15 @@ void MainWindow::positionReportsButton() {
 }
 
 /**
- * Otwiera stronę raportów i odświeża zawartość głównego okna.
+ * Przełącza stronę raportów i stronę główną.
  */
 void MainWindow::onReportsClicked() {
-    reportsPageVisible_ = true;
-    FILETIME clickTime{};
-    GetSystemTimeAsFileTime(&clickTime);
-    ULARGE_INTEGER fileTimeValue{};
-    fileTimeValue.LowPart = clickTime.dwLowDateTime;
-    fileTimeValue.HighPart = clickTime.dwHighDateTime;
-    constexpr unsigned long long windowsToUnixEpochMicroseconds =
-        11644473600000000ULL;
-
-    if (fileTimeValue.QuadPart / 10 < windowsToUnixEpochMicroseconds) {
-        reportsStatus_ = "Nie można ustalić czasu kliknięcia.";
-        reportEntries_.clear();
-        InvalidateRect(handle_, nullptr, TRUE);
-        return;
-    }
-
-    const unsigned long long clickTimeMicroseconds =
-        fileTimeValue.QuadPart / 10 - windowsToUnixEpochMicroseconds;
-    std::vector<PriceReportEntry> receivedEntries;
-    std::string error;
-    if (!PriceHistoryClient::fetchRecentPrices(
-            clickTimeMicroseconds, receivedEntries, error)) {
-        reportsStatus_ = std::move(error);
-        reportEntries_.clear();
+    if (reportsPage_.isVisible()) {
+        reportsPage_.close();
+        SetWindowTextA(reportsButton_, "Raporty");
     } else {
-        reportEntries_ = std::move(receivedEntries);
-        reportsStatus_.clear();
+        reportsPage_.open();
+        SetWindowTextA(reportsButton_, "Strona główna");
     }
     InvalidateRect(handle_, nullptr, TRUE);
 }
@@ -304,9 +292,8 @@ void MainWindow::onPaint() {
     clientArea.bottom = std::max(
         clientArea.top,
         clientArea.bottom - reportsButtonHeight - reportsButtonBottomMargin * 2);
-    if (reportsPageVisible_) {
-        MainWindowDisplay::drawReportsPage(
-            deviceContext, clientArea, reportEntries_, reportsStatus_);
+    if (reportsPage_.isVisible()) {
+        reportsPage_.draw(deviceContext, clientArea);
     } else {
         std::string dailySentence;
         {

@@ -1,6 +1,6 @@
 # Historia cen produktów w MySQL
 
-Projekt używa MySQL uruchomionego w Dockerze. Lokalna historia przechowuje wcześniej zebrane ceny w tabeli `price_history`; aplikacja nadal może odczytywać istniejące wpisy na stronie raportów.
+Projekt używa MySQL uruchomionego w Dockerze. Starsze odczyty cen pozostają w tabeli `price_history`, a pobrane świece są przechowywane osobno w tabeli `candles`.
 
 ## Pierwsze uruchomienie
 
@@ -25,7 +25,7 @@ Projekt używa MySQL uruchomionego w Dockerze. Lokalna historia przechowuje wcze
    ```
 
    Oczekiwany wynik to `status: ok`.
-6. Uruchom aplikację giełdy w CLion. Aplikacja pobiera jedną świecę 1-minutową EUR/USD z Twelve Data po zamknięciu minuty i zapisuje ją w tabeli `candles`. Ponawianie pobrania jest na razie wyłączone, aby oszczędzać limit API. Nie zapisuje nowych odczytów cen do `price_history`; przycisk „Raporty” nadal wyświetla wcześniejsze wpisy.
+6. Uruchom aplikację giełdy w CLion. Aplikacja pobiera jedną świecę 1-minutową EUR/USD z Twelve Data po zamknięciu minuty i zapisuje ją w tabeli `candles`. Ponawianie pobrania jest na razie wyłączone, aby oszczędzać limit API. Nie zapisuje nowych odczytów cen do `price_history`.
 
 ## Codzienna obsługa
 
@@ -46,6 +46,6 @@ Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego AP
 
 Przy uruchomieniu API istniejąca tabela zostanie uzupełniona o `zlote_rady`, a każdy wiersz bez wartości otrzyma losowy rzeczownik. Nowe wpisy również otrzymują rzeczownik automatycznie.
 
-Przycisk „Raporty” pobiera maksymalnie 20 najnowszych wpisów, których `recorded_at` jest wcześniejsze niż chwila kliknięcia. Każde ponowne kliknięcie wykonuje nowe zapytanie do bazy. Świece są wysyłane do lokalnego API pod adresem `/api/candles`.
+Przycisk „Raporty” otwiera tabelę 20 najnowszych świec. Przyciski „Poprzednia” i „Następna” pozwalają przechodzić pomiędzy stronami, a „Strona główna” wraca do głównego widoku. Lista jest pobierana z lokalnego API pod adresem `/api/candles/report`; nowe świece są zapisywane przez `/api/candles`.
 
 Wpisy zapisane przed tą zmianą pozostają w UTC i nie są modyfikowane; nowe wpisy będą w czasie `Europe/Warsaw`. Oznacza to, że w tej samej kolumnie starsze i nowe rekordy mają różną interpretację czasu. API i baza są dostępne wyłącznie w lokalnej konfiguracji projektu; port MySQL nie jest wystawiony na sieć hosta. Dalsze zmiany struktury będą wymagały migracji w `src/database/api/app.py` — samo `CREATE TABLE IF NOT EXISTS` nie zmienia już istniejących tabel.

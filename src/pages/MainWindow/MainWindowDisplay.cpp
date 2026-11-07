@@ -30,15 +30,6 @@ bool convertUtf8ToWide(const std::string& text, std::wstring& convertedText) {
                requiredCharacters) == requiredCharacters;
 }
 
-/**
- * Rysuje pojedynczą komórkę tabeli z przycięciem zbyt długiej zawartości.
- */
-void drawTableCell(
-    HDC deviceContext, const std::wstring& text, RECT bounds, UINT format) {
-    DrawTextW(deviceContext, text.c_str(), static_cast<int>(text.size()),
-              &bounds, format);
-}
-
 void drawCenteredText(
     HDC deviceContext, const std::string& text, RECT bounds, UINT format) {
     DrawTextA(deviceContext, text.c_str(), -1, &bounds, format);
@@ -220,96 +211,4 @@ void MainWindowDisplay::draw(
     drawCenteredWideText(
         deviceContext, wideCandleText, candleDisplayBounds,
         DT_CENTER | DT_WORDBREAK);
-}
-
-/**
- * Rysuje wyśrodkowany tekst na stronie otwieranej przyciskiem „Raporty”.
- */
-void MainWindowDisplay::drawReportsPage(
-    HDC deviceContext, RECT& clientArea,
-    const std::vector<PriceReportEntry>& entries, const std::string& status) {
-    if (!status.empty() || entries.empty()) {
-        const std::string message = status.empty() ? "Brak wpisow do wyswietlenia." : status;
-        std::wstring wideMessage;
-        if (!convertUtf8ToWide(message, wideMessage)) {
-            wideMessage = L"Nie można wyświetlić raportu.";
-        }
-        RECT messageBounds = clientArea;
-        DrawTextW(
-            deviceContext, wideMessage.c_str(), static_cast<int>(wideMessage.size()),
-            &messageBounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        return;
-    }
-
-    HFONT tableFont = CreateFontW(
-        -12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    if (tableFont == nullptr) {
-        DrawTextW(
-            deviceContext, L"Nie można utworzyć tabeli.", -1,
-            &clientArea, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        return;
-    }
-
-    const HGDIOBJ previousFont = SelectObject(deviceContext, tableFont);
-    const LONG rowHeight = std::max<LONG>(
-        1, (clientArea.bottom - clientArea.top) /
-               static_cast<LONG>(entries.size() + 1));
-    const int columnWidths[] = {
-        10, 25, 16, 20, 29
-    };
-    const wchar_t* columnNames[] = {
-        L"ID", L"Czas", L"Symbol", L"Cena", L"Złote rady"
-    };
-    const UINT textFormat = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
-
-    SetTextColor(deviceContext, RGB(0, 0, 0));
-    SetBkMode(deviceContext, TRANSPARENT);
-    LONG rowTop = clientArea.top;
-    LONG columnLeft = clientArea.left;
-    const LONG totalWidth = clientArea.right - clientArea.left;
-    for (std::size_t column = 0; column < 5; ++column) {
-        const LONG columnWidth = totalWidth * columnWidths[column] / 100;
-        RECT cell{columnLeft + 4, rowTop, columnLeft + columnWidth - 4,
-                  rowTop + rowHeight};
-        drawTableCell(deviceContext, columnNames[column], cell, textFormat);
-        columnLeft += columnWidth;
-    }
-    rowTop += rowHeight;
-
-    for (const PriceReportEntry& entry : entries) {
-        std::wstring values[5];
-        const std::string* sourceValues[] = {
-            &entry.id, &entry.recordedAt, &entry.symbol,
-            &entry.price, &entry.goldenAdvice
-        };
-        bool validRow = true;
-        for (std::size_t column = 0; column < 5; ++column) {
-            if (!convertUtf8ToWide(*sourceValues[column], values[column])) {
-                validRow = false;
-                break;
-            }
-        }
-        if (!validRow) {
-            values[0] = L"";
-            values[1] = L"";
-            values[2] = L"";
-            values[3] = L"";
-            values[4] = L"Nieprawidłowy tekst";
-        }
-
-        columnLeft = clientArea.left;
-        for (std::size_t column = 0; column < 5; ++column) {
-            const LONG columnWidth = totalWidth * columnWidths[column] / 100;
-            RECT cell{columnLeft + 4, rowTop, columnLeft + columnWidth - 4,
-                      rowTop + rowHeight};
-            drawTableCell(deviceContext, values[column], cell, textFormat);
-            columnLeft += columnWidth;
-        }
-        rowTop += rowHeight;
-    }
-
-    SelectObject(deviceContext, previousFont);
-    DeleteObject(tableFont);
 }

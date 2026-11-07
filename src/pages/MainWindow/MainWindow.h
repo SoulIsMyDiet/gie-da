@@ -6,11 +6,10 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include "DailySentenceClient.h"
+#include "ReportsPage.h"
 #include "StockPriceMonitor.h"
-#include "PriceHistoryClient.h"
 
 class MainWindow {
 public:
@@ -83,14 +82,12 @@ private:
     HWND handle_ = nullptr;
     int showCommand_ = SW_SHOW;
     bool hasPreviousTime_ = false;
-    bool reportsPageVisible_ = false;
     WORD previousHour_ = 0;
     WORD previousMinute_ = 0;
     HWND reportsButton_ = nullptr;
-    std::vector<PriceReportEntry> reportEntries_;
-    std::string reportsStatus_;
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;
     StockPriceMonitor candleMonitor_;
+    ReportsPage reportsPage_;
 };

@@ -373,6 +373,60 @@ class MarketDataRepository:
                 cursor.close()
             connection.close()
 
+    def fetch_candle_page(
+        self, page: int
+    ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
+        """Pobiera 20 świec od najnowszych i sygnalizuje, czy istnieje kolejna strona."""
+        page_size = 20
+        offset = page * page_size
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        symbol,
+                        datetime,
+                        CAST(open AS CHAR),
+                        CAST(high AS CHAR),
+                        CAST(low AS CHAR),
+                        CAST(close AS CHAR),
+                        CAST(volume AS CHAR)
+                    FROM candles
+                    ORDER BY datetime DESC, symbol ASC, utc_offset_minutes DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (page_size + 1, offset),
+                )
+                rows = cursor.fetchall()
+                has_next_page = len(rows) > page_size
+                page_rows = rows[:page_size]
+                return [
+                    (
+                        symbol,
+                        candle_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        volume if volume is not None else "",
+                    )
+                    for (
+                        symbol,
+                        candle_datetime,
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        volume,
+                    ) in page_rows
+                ], has_next_page
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     # :)
 
 
@@ -404,6 +458,28 @@ def save_candle(candle: CandleRecord, request: Request) -> None:
             status_code=503,
             detail="Nie udało się zapisać świecy w bazie MySQL.",
         ) from error
+
+
+@app.get("/api/candles/report", response_class=Response)
+def candle_report(
+    request: Request,
+    page: int = Query(ge=0, le=1000000),
+) -> Response:
+    """Zwraca stronę 20 najnowszych świec jako TSV z flagą kolejnej strony."""
+    try:
+        rows, has_next_page = request.app.state.repository.fetch_candle_page(page)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać świec z bazy MySQL.",
+        ) from error
+
+    report_lines = ["1" if has_next_page else "0"]
+    report_lines.extend("\t".join(row) for row in rows)
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
 
 
 @app.post("/api/prices", status_code=201)
