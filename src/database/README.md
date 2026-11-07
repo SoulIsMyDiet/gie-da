@@ -40,9 +40,9 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Nie używaj `docke
 
 - `products`: unikalne symbole produktów (np. `EUR/USD`).
 - `price_history`: osobny wiersz dla każdego odczytu, z ceną w typie dziesiętnym, czasem lokalnym `Europe/Warsaw` oraz kolumną `zlote_rady` z losowym rzeczownikiem.
-- `candles`: kolumny `symbol`, `datetime`, `open`, `high`, `low`, `close` i `volume`; czas otwarcia jest zapisany w UTC. Klucz główny `(symbol, datetime)` zapobiega duplikatom, a ponowne pobranie świecy aktualizuje wpis. `volume` jest `NULL`, jeśli dostawca go nie podał.
+- `candles`: kolumny `symbol`, `datetime`, `open`, `high`, `low`, `close`, `volume` oraz `utc_offset_minutes`. `datetime` jest zapisywany w czasie lokalnym `Europe/Warsaw`; offset rozróżnia powtarzającą się godzinę przy zmianie czasu. Klucz główny `(symbol, datetime, utc_offset_minutes)` zapobiega duplikatom, a ponowne pobranie świecy aktualizuje wpis. `volume` jest `NULL`, jeśli dostawca go nie podał.
 
-Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego API. Po zmianach kodu API lub konfiguracji bazy przebuduj i uruchom usługę poleceniem `docker compose up -d --build`.
+Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego API. Istniejące wpisy, które wcześniej zapisano w UTC, zostaną jednorazowo przeliczone na `Europe/Warsaw`. Po zmianach kodu API lub konfiguracji bazy przebuduj i uruchom usługę poleceniem `docker compose up -d --build`.
 
 Przy uruchomieniu API istniejąca tabela zostanie uzupełniona o `zlote_rady`, a każdy wiersz bez wartości otrzyma losowy rzeczownik. Nowe wpisy również otrzymują rzeczownik automatycznie.
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cwchar>
 #include <string>
 
 namespace {
@@ -76,6 +77,68 @@ void drawClock(
 }
 
 /**
+ * Zamienia czas świecy UTC na czas Europe/Warsaw, uwzględniając zmianę czasu.
+ */
+std::string formatWarsawCandleTime(const std::string& utcText) {
+    unsigned int year = 0;
+    unsigned int month = 0;
+    unsigned int day = 0;
+    unsigned int hour = 0;
+    unsigned int minute = 0;
+    unsigned int second = 0;
+    int consumedCharacters = 0;
+    if (std::sscanf(
+            utcText.c_str(), "%4u-%2u-%2u %2u:%2u:%2u%n",
+            &year, &month, &day, &hour, &minute, &second,
+            &consumedCharacters) != 6 ||
+        consumedCharacters != 19 || year > 65535 || month > 65535 ||
+        day > 65535 || hour > 65535 || minute > 65535 || second > 65535) {
+        return utcText + " UTC";
+    }
+
+    SYSTEMTIME utcTime{};
+    utcTime.wYear = static_cast<WORD>(year);
+    utcTime.wMonth = static_cast<WORD>(month);
+    utcTime.wDay = static_cast<WORD>(day);
+    utcTime.wHour = static_cast<WORD>(hour);
+    utcTime.wMinute = static_cast<WORD>(minute);
+    utcTime.wSecond = static_cast<WORD>(second);
+    FILETIME validatedTime{};
+    if (!SystemTimeToFileTime(&utcTime, &validatedTime)) {
+        return utcText + " UTC";
+    }
+
+    DYNAMIC_TIME_ZONE_INFORMATION currentZone{};
+    if (GetDynamicTimeZoneInformation(&currentZone) == TIME_ZONE_ID_INVALID ||
+        std::wcscmp(
+            currentZone.TimeZoneKeyName,
+            L"Central European Standard Time") != 0) {
+        return utcText + " UTC";
+    }
+    TIME_ZONE_INFORMATION warsawTimeZone{};
+    if (GetTimeZoneInformation(&warsawTimeZone) == TIME_ZONE_ID_INVALID) {
+        return utcText + " UTC";
+    }
+    SYSTEMTIME warsawTime{};
+    if (!SystemTimeToTzSpecificLocalTime(
+            &warsawTimeZone, &utcTime, &warsawTime)) {
+        return utcText + " UTC";
+    }
+
+    char formattedTime[64]{};
+    std::snprintf(
+        formattedTime, sizeof(formattedTime),
+        "%04u-%02u-%02u %02u:%02u:%02u Europe/Warsaw",
+        static_cast<unsigned>(warsawTime.wYear),
+        static_cast<unsigned>(warsawTime.wMonth),
+        static_cast<unsigned>(warsawTime.wDay),
+        static_cast<unsigned>(warsawTime.wHour),
+        static_cast<unsigned>(warsawTime.wMinute),
+        static_cast<unsigned>(warsawTime.wSecond));
+    return formattedTime;
+}
+
+/**
  * Składa wartości OHLC świecy w jeden czytelny wiersz.
  */
 std::string createCandleText(
@@ -84,7 +147,8 @@ std::string createCandleText(
         return "Swieca 1 min: " + status;
     }
 
-    std::string text = "Swieca 1 min (" + candle.datetime +
+    std::string text = "Swieca 1 min (" +
+        formatWarsawCandleTime(candle.datetime) +
         ")  Open: " + candle.open + "  High: " + candle.high +
         "  Low: " + candle.low + "  Close: " + candle.close;
     if (!status.empty()) {

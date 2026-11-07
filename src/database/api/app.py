@@ -155,18 +155,68 @@ class MarketDataRepository:
                         low DECIMAL(20, 10) NOT NULL,
                         close DECIMAL(20, 10) NOT NULL,
                         volume DECIMAL(30, 10) NULL,
-                        PRIMARY KEY (symbol, datetime),
+                        utc_offset_minutes SMALLINT NOT NULL DEFAULT 32767,
+                        PRIMARY KEY (symbol, datetime, utc_offset_minutes),
                         CONSTRAINT fk_candles_product
                             FOREIGN KEY (symbol) REFERENCES products(symbol)
                     ) ENGINE=InnoDB
                     """
                 )
+                self._migrate_candle_timestamps(cursor)
                 self._migrate_golden_advice(cursor)
                 connection.commit()
             finally:
                 cursor.close()
         finally:
             connection.close()
+
+    def _migrate_candle_timestamps(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Przekształca wcześniej zapisane znaczniki UTC na czas Europe/Warsaw."""
+        cursor.execute("SHOW COLUMNS FROM candles LIKE %s", ("utc_offset_minutes",))
+        offset_column = cursor.fetchone()
+        if offset_column is None:
+            cursor.execute(
+                """
+                ALTER TABLE candles
+                ADD COLUMN utc_offset_minutes SMALLINT NOT NULL DEFAULT 32767
+                """
+            )
+
+        cursor.execute("SHOW KEYS FROM candles WHERE Key_name = 'PRIMARY'")
+        primary_key_columns = [key[4] for key in cursor.fetchall()]
+        expected_primary_key = ["symbol", "datetime", "utc_offset_minutes"]
+        if primary_key_columns != expected_primary_key:
+            cursor.execute(
+                """
+                ALTER TABLE candles
+                DROP PRIMARY KEY,
+                ADD PRIMARY KEY (symbol, datetime, utc_offset_minutes)
+                """
+            )
+
+        cursor.execute(
+            """
+            SELECT symbol, datetime
+            FROM candles
+            WHERE utc_offset_minutes = 32767
+            """
+        )
+        for symbol, previous_utc_datetime in cursor.fetchall():
+            utc_datetime = previous_utc_datetime.replace(tzinfo=timezone.utc)
+            warsaw_datetime = utc_datetime.astimezone(WARSAW_TIME_ZONE)
+            local_datetime = warsaw_datetime.replace(tzinfo=None)
+            offset_minutes = int(warsaw_datetime.utcoffset().total_seconds() // 60)
+            cursor.execute(
+                """
+                UPDATE candles
+                SET datetime = %s, utc_offset_minutes = %s
+                WHERE symbol = %s AND datetime = %s
+                    AND utc_offset_minutes = 32767
+                """,
+                (local_datetime, offset_minutes, symbol, previous_utc_datetime),
+            )
 
     def _migrate_golden_advice(self, cursor: mysql.connector.cursor.MySQLCursor) -> None:
         """Poszerza kolumnę i uzupełnia brakujące sentencje w starszych wpisach."""
@@ -276,9 +326,9 @@ class MarketDataRepository:
 
     def save_candle(self, candle: CandleRecord) -> None:
         """Zapisuje świecę lub aktualizuje jej wartości dla tego samego symbolu i czasu."""
-        candle_datetime_utc = (
-            candle.datetime.astimezone(timezone.utc).replace(tzinfo=None)
-        )
+        candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
+        local_datetime = candle_datetime_local.replace(tzinfo=None)
+        offset_minutes = int(candle_datetime_local.utcoffset().total_seconds() // 60)
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
         try:
@@ -293,8 +343,9 @@ class MarketDataRepository:
             cursor.execute(
                 """
                 INSERT INTO candles
-                    (symbol, datetime, open, high, low, close, volume)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (symbol, datetime, open, high, low, close, volume,
+                     utc_offset_minutes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     open = VALUES(open),
                     high = VALUES(high),
@@ -304,12 +355,13 @@ class MarketDataRepository:
                 """,
                 (
                     candle.symbol,
-                    candle_datetime_utc,
+                    local_datetime,
                     candle.open,
                     candle.high,
                     candle.low,
                     candle.close,
                     candle.volume,
+                    offset_minutes,
                 ),
             )
             connection.commit()
