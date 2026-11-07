@@ -1,7 +1,5 @@
 #include "ForexPriceMonitor.h"
 
-#include "TwelveDataClient.h"
-
 #include <utility>
 
 namespace {
@@ -104,10 +102,10 @@ void ForexPriceMonitor::run() {
  * Pobiera świecę poza blokadą i atomowo aktualizuje stan monitora.
  */
 void ForexPriceMonitor::updateCandle() {
-    ForexCandle candle;
+    CandleData candle;
     std::string error;
     const bool succeeded =
-        TwelveDataClient::fetchEurUsdOneMinuteCandle(candle, error);
+        CandlesDataClient::fetchLatestOneMinuteCandle("EUR/USD", candle, error);
 
     AcquireSRWLockExclusive(&statusLock_);
     if (succeeded) {

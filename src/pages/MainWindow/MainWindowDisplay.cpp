@@ -79,7 +79,7 @@ void drawClock(
  * Składa wartości OHLC świecy w jeden czytelny wiersz.
  */
 std::string createCandleText(
-    const ForexCandle& candle, const std::string& status) {
+    const CandleData& candle, const std::string& status) {
     if (candle.datetime.empty()) {
         return "Swieca 1 min: " + status;
     }

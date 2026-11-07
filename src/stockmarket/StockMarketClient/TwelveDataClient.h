@@ -2,25 +2,17 @@
 
 #include <string>
 
-/**
- * Przechowuje czas otwarcia oraz ceny open, high, low i close pojedynczej świecy.
- */
-struct ForexCandle {
-    std::string datetime;
-    std::string open;
-    std::string high;
-    std::string low;
-    std::string close;
-};
-
 class TwelveDataClient {
 public:
     /**
-     * Pobiera ostatnią świecę EUR/USD z interwału jednej minuty.
-     * @param candle Otrzymuje czas otwarcia oraz wartości OHLC świecy.
+     * Wysyła żądanie HTTPS do Twelve Data i zwraca treść odpowiedzi.
+     * @param requestPath Ścieżka endpointu zakończona pustym parametrem apikey=.
+     * @param response Otrzymuje treść odpowiedzi serwera po udanym żądaniu.
      * @param error Otrzymuje opis przyczyny niepowodzenia.
-     * @return true, jeśli odpowiedź zawiera kompletną i spójną świecę.
+     * @return true, jeśli serwer zwrócił odpowiedź HTTP 200; w przeciwnym razie false.
      */
-    static bool fetchEurUsdOneMinuteCandle(
-        ForexCandle& candle, std::string& error);
+    static bool fetchApiResponse(
+        const std::wstring& requestPath,
+        std::string& response,
+        std::string& error);
 };

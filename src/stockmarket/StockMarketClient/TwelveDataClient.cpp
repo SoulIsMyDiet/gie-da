@@ -4,34 +4,27 @@
 
 #include "TwelveDataClient.h"
 
-#include <cmath>
-#include <cstdlib>
-#include <memory>
 #include <string>
-#include <string_view>
-#include <utility>
 
 namespace {
 
-// Endpoint configuration and a defensive cap on the downloaded response size.
+// Host API i maksymalny rozmiar odpowiedzi pobieranej przez klienta.
 constexpr wchar_t apiHost[] = L"api.twelvedata.com";
-constexpr wchar_t oneMinuteCandleApiPath[] =
-    L"/time_series?symbol=EUR%2FUSD&interval=1min&outputsize=1&apikey=";
 constexpr DWORD maxResponseSize = 64 * 1024;
 
 /**
- * Owns a WinHTTP handle and closes it automatically when it leaves scope.
+ * Automatycznie zamyka uchwyt WinHTTP po zakończeniu bieżącego zakresu.
  */
 struct InternetHandle {
     HINTERNET value;
 
     /**
-     * Takes ownership of a WinHTTP handle returned by a WinHTTP API call.
+     * Przejmuje własność uchwytu zwróconego przez funkcję WinHTTP.
      */
     explicit InternetHandle(HINTERNET handle) : value(handle) {}
 
     /**
-     * Closes the owned handle if it is valid.
+     * Zamyka przejęty uchwyt, jeśli jest prawidłowy.
      */
     ~InternetHandle() {
         if (value != nullptr) {
@@ -44,7 +37,7 @@ struct InternetHandle {
 };
 
 /**
- * Reads and validates the API key from the process environment.
+ * Odczytuje i sprawdza klucz API ze zmiennych środowiskowych.
  */
 bool readApiKey(std::wstring& apiKey) {
     const DWORD requiredSize = GetEnvironmentVariableW(L"TWELVE_DATA_API_KEY", nullptr, 0);
@@ -74,94 +67,7 @@ bool readApiKey(std::wstring& apiKey) {
 }
 
 /**
- * Odczytuje tekstowe pole JSON z ograniczonego fragmentu odpowiedzi.
- */
-bool extractJsonString(
-    std::string_view object, const char* fieldName, std::string& value) {
-    const std::string key = "\"" + std::string(fieldName) + "\"";
-    const std::size_t keyPosition = object.find(key);
-    if (keyPosition == std::string_view::npos) {
-        return false;
-    }
-
-    const std::size_t colonPosition = object.find(':', keyPosition + key.size());
-    if (colonPosition == std::string_view::npos) {
-        return false;
-    }
-    const std::size_t valueStart =
-        object.find_first_not_of(" \t\r\n", colonPosition + 1);
-    if (valueStart == std::string_view::npos || object[valueStart] != '"') {
-        return false;
-    }
-
-    const std::size_t valueEnd = object.find('"', valueStart + 1);
-    if (valueEnd == std::string_view::npos) {
-        return false;
-    }
-    value.assign(object.substr(valueStart + 1, valueEnd - valueStart - 1));
-    return !value.empty();
-}
-
-/**
- * Odczytuje ostatni obiekt z tablicy values i sprawdza poprawność świecy OHLC.
- */
-bool extractCandle(const std::string& response, ForexCandle& candle) {
-    const std::string_view json(response);
-    const std::size_t valuesPosition = json.find("\"values\"");
-    const std::size_t arrayStart = valuesPosition == std::string_view::npos
-        ? std::string_view::npos
-        : json.find('[', valuesPosition);
-    const std::size_t objectStart = arrayStart == std::string_view::npos
-        ? std::string_view::npos
-        : json.find('{', arrayStart);
-    const std::size_t objectEnd = objectStart == std::string_view::npos
-        ? std::string_view::npos
-        : json.find('}', objectStart);
-    if (objectStart == std::string_view::npos ||
-        objectEnd == std::string_view::npos) {
-        return false;
-    }
-
-    const std::string_view candleObject =
-        json.substr(objectStart, objectEnd - objectStart + 1);
-    ForexCandle parsedCandle;
-    if (!extractJsonString(candleObject, "datetime", parsedCandle.datetime) ||
-        !extractJsonString(candleObject, "open", parsedCandle.open) ||
-        !extractJsonString(candleObject, "high", parsedCandle.high) ||
-        !extractJsonString(candleObject, "low", parsedCandle.low) ||
-        !extractJsonString(candleObject, "close", parsedCandle.close)) {
-        return false;
-    }
-
-    char* parsedEnd = nullptr;
-    const double open = std::strtod(parsedCandle.open.c_str(), &parsedEnd);
-    if (parsedEnd == parsedCandle.open.c_str() || *parsedEnd != '\0' ||
-        !std::isfinite(open) || open <= 0.0) {
-        return false;
-    }
-    const double high = std::strtod(parsedCandle.high.c_str(), &parsedEnd);
-    if (parsedEnd == parsedCandle.high.c_str() || *parsedEnd != '\0' ||
-        !std::isfinite(high) || high <= 0.0) {
-        return false;
-    }
-    const double low = std::strtod(parsedCandle.low.c_str(), &parsedEnd);
-    if (parsedEnd == parsedCandle.low.c_str() || *parsedEnd != '\0' ||
-        !std::isfinite(low) || low <= 0.0) {
-        return false;
-    }
-    const double close = std::strtod(parsedCandle.close.c_str(), &parsedEnd);
-    if (parsedEnd == parsedCandle.close.c_str() || *parsedEnd != '\0' ||
-        !std::isfinite(close) || close <= 0.0 ||
-        high < open || high < close || low > open || low > close || low > high) {
-        return false;
-    }
-
-    candle = std::move(parsedCandle);
-    return true;
-}
-
-/**
- * Converts common HTTP failure codes into user-readable diagnostics.
+ * Zamienia typowe kody HTTP na komunikaty zrozumiałe dla użytkownika.
  */
 std::string describeHttpError(DWORD statusCode) {
     std::string error = "Twelve Data HTTP " + std::to_string(statusCode);
@@ -185,7 +91,7 @@ std::string describeHttpError(DWORD statusCode) {
 /**
  * Wysyła żądanie do wybranego endpointu i pobiera odpowiedź z limitem rozmiaru.
  */
-bool fetchApiResponse(
+bool sendApiRequest(
     const wchar_t* endpoint, std::string& response, std::string& error) {
     std::wstring apiKey;
     if (!readApiKey(apiKey)) {
@@ -269,18 +175,16 @@ bool fetchApiResponse(
 } // namespace
 
 /**
- * Pobiera ostatnią świecę EUR/USD z interwału jednej minuty.
+ * Udostępnia warstwę połączenia HTTP innym klientom Twelve Data.
  */
-bool TwelveDataClient::fetchEurUsdOneMinuteCandle(
-    ForexCandle& candle, std::string& error) {
-    std::string response;
-    if (!fetchApiResponse(oneMinuteCandleApiPath, response, error)) {
+bool TwelveDataClient::fetchApiResponse(
+    const std::wstring& requestPath, std::string& response, std::string& error) {
+    if (requestPath.empty() || requestPath.front() != L'/' ||
+        requestPath.find(L'#') != std::wstring::npos ||
+        requestPath.size() < 7 ||
+        requestPath.compare(requestPath.size() - 7, 7, L"apikey=") != 0) {
+        error = "Ścieżka żądania do Twelve Data jest nieprawidłowa.";
         return false;
     }
-
-    if (!extractCandle(response, candle)) {
-        error = "Twelve Data nie zwróciło prawidłowej świecy EUR/USD.";
-        return false;
-    }
-    return true;
+    return sendApiRequest(requestPath.c_str(), response, error);
 }

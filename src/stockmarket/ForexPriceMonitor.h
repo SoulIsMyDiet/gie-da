@@ -5,10 +5,10 @@
 
 #include <string>
 
-#include "TwelveDataClient.h"
+#include "CandlesDataClient.h"
 
 struct ForexPriceSnapshot {
-    ForexCandle oneMinuteCandle;
+    CandleData oneMinuteCandle;
     std::string status;
 };
 
@@ -65,6 +65,6 @@ private:
     HANDLE stopEvent_ = nullptr;
     HANDLE workerThread_ = nullptr;
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
-    ForexCandle oneMinuteCandle_;
+    CandleData oneMinuteCandle_;
     std::string status_ = "Oczekiwanie na świecę 1-minutową...";
 };
