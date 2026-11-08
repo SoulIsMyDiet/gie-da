@@ -40,8 +40,11 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu 
 
 - `products`: unikalne symbole produktów (np. `EUR/USD`).
 - `candles`: kolumny `symbol`, `datetime`, `open`, `high`, `low`, `close`, `volume` oraz `utc_offset_minutes`. `datetime` jest zapisywany w czasie lokalnym `Europe/Warsaw`; offset rozróżnia powtarzającą się godzinę przy zmianie czasu. Klucz główny `(symbol, datetime, utc_offset_minutes)` zapobiega duplikatom, a ponowne pobranie świecy aktualizuje wpis. `volume` jest `NULL`, jeśli dostawca go nie podał.
-
+- `signals`: `id`, `datetime`, `product`, `price`, `signal`, `algorithm_name`, `ai_decision`, `transaction_id`, `candles_count` oraz `signal_parameters`. `datetime` ma typ `DATETIME(6)` i ma być zapisywany jako lokalny czas `Europe/Warsaw`; `signal` dopuszcza `long` lub `short`; `ai_decision` jest nullable JSON, więc może później przechowywać wartość logiczną albo obiekt JSON; `transaction_id` jest nullable i na razie nie ma klucza obcego, bo tabela transakcji jeszcze nie istnieje; `signal_parameters` przechowuje wymagany dokument JSON. Kolumna `product` wskazuje na istniejący symbol w `products`.
+  describe signals;
 Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego API. Istniejące wpisy, które wcześniej zapisano w UTC, zostaną jednorazowo przeliczone na `Europe/Warsaw`. Po zmianach kodu API lub konfiguracji bazy przebuduj i uruchom usługę poleceniem `docker compose up -d --build`.
+
+Tabela `signals` również jest tworzona automatycznie przy starcie API. Sama tabela nie uruchamia jeszcze algorytmu ani nie zapisuje sygnałów; ten etap zostanie dodany później.
 
 Uzupełnianie luk działa od najnowszych wpisów wstecz, pomija weekendowe zamknięcie rynku Forex i obejmuje maksymalnie 1000 świec przy jednym starcie aplikacji. Jeśli baza nie ma jeszcze świec, aplikacja pobiera do 1000 najnowszych świec. Na stronie głównej wyświetlana jest liczba zapisanych świec oraz łączny czas sprawdzenia, pobrania i zapisu. Każde żądanie `/time_series` kosztuje kredyty zgodnie z planem Twelve Data; odległe luki mogą wymagać osobnych żądań.
 

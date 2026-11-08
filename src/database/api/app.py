@@ -104,6 +104,26 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS signals (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        `datetime` DATETIME(6) NOT NULL,
+                        product VARCHAR(32) NOT NULL,
+                        price DECIMAL(20, 10) NOT NULL,
+                        `signal` ENUM('short', 'long') NOT NULL,
+                        algorithm_name VARCHAR(255) NOT NULL,
+                        ai_decision JSON NULL,
+                        transaction_id BIGINT UNSIGNED NULL,
+                        candles_count INT UNSIGNED NOT NULL,
+                        signal_parameters JSON NOT NULL,
+                        INDEX idx_signals_product_datetime (product, `datetime`),
+                        INDEX idx_signals_algorithm_datetime (algorithm_name, `datetime`),
+                        CONSTRAINT fk_signals_product
+                            FOREIGN KEY (product) REFERENCES products(symbol)
+                    ) ENGINE=InnoDB
+                    """
+                )
                 self._migrate_candle_timestamps(cursor)
                 connection.commit()
             finally:
