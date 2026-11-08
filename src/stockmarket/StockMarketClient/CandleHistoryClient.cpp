@@ -13,7 +13,7 @@ namespace {
 
 constexpr wchar_t apiHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT apiPort = 8000;
-constexpr wchar_t apiPath[] = L"/api/candles";
+constexpr wchar_t batchApiPath[] = L"/api/candles/batch";
 constexpr DWORD maxResponseSize = 64 * 1024;
 constexpr std::size_t pageSize = 20;
 
@@ -118,6 +118,63 @@ std::string createRequestBody(
 }
 
 /**
+ * Składa żądanie JSON z maksymalnie 1000 świec.
+ */
+bool createBatchRequestBody(
+    const std::string& symbol,
+    const std::vector<CandleData>& candles,
+    std::string& requestBody,
+    std::string& error) {
+    if (candles.empty() || candles.size() > 1000) {
+        error = "Paczka musi zawierać od 1 do 1000 świec.";
+        return false;
+    }
+
+    requestBody = "{\"candles\":[";
+    for (std::size_t index = 0; index < candles.size(); ++index) {
+        std::string utcDatetime;
+        if (!formatUtcDatetime(candles[index].datetime, utcDatetime)) {
+            error = "Twelve Data zwróciło czas świecy w nieobsługiwanym formacie.";
+            return false;
+        }
+        if (index > 0) {
+            requestBody += ',';
+        }
+        requestBody += createRequestBody(symbol, candles[index], utcDatetime);
+    }
+    requestBody += "]}";
+    return true;
+}
+
+/**
+ * Koduje symbol dla parametru lokalnego API.
+ */
+bool encodeSymbolForUrl(
+    const std::string& symbol, std::wstring& encodedSymbol) {
+    constexpr char hexadecimalDigits[] = "0123456789ABCDEF";
+    if (symbol.empty() || symbol.size() > 32) {
+        return false;
+    }
+    encodedSymbol.clear();
+    for (const unsigned char character : symbol) {
+        if ((character >= 'A' && character <= 'Z') ||
+            (character >= '0' && character <= '9') ||
+            character == '-' || character == '_' || character == '.') {
+            encodedSymbol.push_back(static_cast<wchar_t>(character));
+        } else if (character == '/') {
+            encodedSymbol += L"%2F";
+        } else {
+            encodedSymbol.push_back(L'%');
+            encodedSymbol.push_back(
+                static_cast<wchar_t>(hexadecimalDigits[character >> 4]));
+            encodedSymbol.push_back(
+                static_cast<wchar_t>(hexadecimalDigits[character & 0x0F]));
+        }
+    }
+    return true;
+}
+
+/**
  * Odczytuje odpowiedź do bufora o ograniczonym rozmiarze.
  */
 bool readResponse(HINTERNET request, std::string& response, std::string& error) {
@@ -194,9 +251,18 @@ bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
  */
 bool CandleHistoryClient::saveCandle(
     const std::string& symbol, const CandleData& candle, std::string& error) {
-    std::string utcDatetime;
-    if (!formatUtcDatetime(candle.datetime, utcDatetime)) {
-        error = "Twelve Data zwróciło czas świecy w nieobsługiwanym formacie.";
+    return saveCandles(symbol, std::vector<CandleData>{candle}, error);
+}
+
+/**
+ * Zapisuje do 1000 świec w jednym żądaniu do lokalnego API.
+ */
+bool CandleHistoryClient::saveCandles(
+    const std::string& symbol,
+    const std::vector<CandleData>& candles,
+    std::string& error) {
+    std::string requestBody;
+    if (!createBatchRequestBody(symbol, candles, requestBody, error)) {
         return false;
     }
 
@@ -216,21 +282,20 @@ bool CandleHistoryClient::saveCandle(
     }
 
     InternetHandle request{WinHttpOpenRequest(
-        connection.value, L"POST", apiPath, nullptr,
+        connection.value, L"POST", batchApiPath, nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
     if (request.value == nullptr) {
-        error = "Nie udało się utworzyć żądania zapisu świecy.";
+        error = "Nie udało się utworzyć żądania zapisu świec.";
         return false;
     }
 
-    std::string requestBody = createRequestBody(symbol, candle, utcDatetime);
     constexpr wchar_t requestHeaders[] = L"Content-Type: application/json\r\n";
     if (!WinHttpSendRequest(
             request.value, requestHeaders, static_cast<DWORD>(-1L),
             requestBody.data(), static_cast<DWORD>(requestBody.size()),
             static_cast<DWORD>(requestBody.size()), 0) ||
         !WinHttpReceiveResponse(request.value, nullptr)) {
-        error = "Lokalne API nie odpowiedziało na żądanie zapisu świecy.";
+        error = "Lokalne API nie odpowiedziało na żądanie zapisu świec.";
         return false;
     }
 
@@ -246,9 +311,109 @@ bool CandleHistoryClient::saveCandle(
     }
     if (statusCode != 204) {
         error = "Lokalne API zwróciło HTTP " +
-                std::to_string(statusCode) + " podczas zapisu świecy.";
+                std::to_string(statusCode) + " podczas zapisu świec.";
         return false;
     }
+    return true;
+}
+
+/**
+ * Pobiera status bazy i do 1000 najnowszych brakujących znaczników UTC.
+ */
+bool CandleHistoryClient::fetchMissingCandleTimes(
+    const std::string& symbol,
+    bool& hasExistingCandles,
+    std::vector<std::string>& missingTimes,
+    std::string& error) {
+    std::wstring encodedSymbol;
+    if (!encodeSymbolForUrl(symbol, encodedSymbol)) {
+        error = "Symbol instrumentu do sprawdzenia luk jest nieprawidłowy.";
+        return false;
+    }
+
+    InternetHandle session{WinHttpOpen(
+        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (session.value == nullptr) {
+        error = "Nie udało się rozpocząć sprawdzania brakujących świec.";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
+
+    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
+    if (connection.value == nullptr) {
+        error = "Nie można połączyć się z lokalnym API bazy danych.";
+        return false;
+    }
+
+    const std::wstring requestPath =
+        L"/api/candles/missing?symbol=" + encodedSymbol;
+    InternetHandle request{WinHttpOpenRequest(
+        connection.value, L"GET", requestPath.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
+    if (request.value == nullptr ||
+        !WinHttpSendRequest(
+            request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "Lokalne API nie odpowiedziało podczas sprawdzania luk.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(
+            request.value,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX) ||
+        statusCode != 200) {
+        error = "Lokalne API nie zwróciło planu uzupełniania świec.";
+        return false;
+    }
+
+    std::string response;
+    if (!readResponse(request.value, response, error)) {
+        return false;
+    }
+    const std::size_t firstLineEnd = response.find('\n');
+    std::string_view hasDataText = firstLineEnd == std::string::npos
+        ? std::string_view(response)
+        : std::string_view(response).substr(0, firstLineEnd);
+    if (!hasDataText.empty() && hasDataText.back() == '\r') {
+        hasDataText.remove_suffix(1);
+    }
+    if (hasDataText != "0" && hasDataText != "1") {
+        error = "Lokalne API zwróciło nieprawidłowy plan uzupełniania.";
+        return false;
+    }
+
+    std::vector<std::string> receivedTimes;
+    std::size_t lineStart = firstLineEnd == std::string::npos
+        ? response.size()
+        : firstLineEnd + 1;
+    while (lineStart < response.size()) {
+        const std::size_t lineEnd = response.find('\n', lineStart);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? response.size() : lineEnd;
+        std::string_view timestamp =
+            std::string_view(response).substr(lineStart, effectiveEnd - lineStart);
+        if (!timestamp.empty() && timestamp.back() == '\r') {
+            timestamp.remove_suffix(1);
+        }
+        if (timestamp.size() != 19 || receivedTimes.size() == 1000) {
+            error = "Lokalne API zwróciło nieprawidłową listę brakujących świec.";
+            return false;
+        }
+        receivedTimes.emplace_back(timestamp);
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    hasExistingCandles = hasDataText == "1";
+    missingTimes = std::move(receivedTimes);
     return true;
 }
 

@@ -10,6 +10,7 @@
 struct StockPriceSnapshot {
     CandleData oneMinuteCandle;
     std::string status;
+    std::string backfillStatus;
 };
 
 class StockPriceMonitor {
@@ -67,4 +68,5 @@ private:
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
     CandleData oneMinuteCandle_;
     std::string status_ = "Oczekiwanie na świecę 1-minutową...";
+    std::string backfillStatus_ = "Sprawdzanie brakujących świec...";
 };

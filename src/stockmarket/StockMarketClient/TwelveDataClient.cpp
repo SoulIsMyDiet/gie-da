@@ -10,7 +10,7 @@ namespace {
 
 // Host API i maksymalny rozmiar odpowiedzi pobieranej przez klienta.
 constexpr wchar_t apiHost[] = L"api.twelvedata.com";
-constexpr DWORD maxResponseSize = 64 * 1024;
+constexpr DWORD maxResponseSize = 4 * 1024 * 1024;
 
 /**
  * Automatycznie zamyka uchwyt WinHTTP po zakończeniu bieżącego zakresu.

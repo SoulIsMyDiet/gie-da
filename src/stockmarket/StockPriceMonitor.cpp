@@ -1,5 +1,6 @@
 #include "StockPriceMonitor.h"
 
+#include "CandleBackfillClient.h"
 #include "CandleHistoryClient.h"
 
 #include <cstdio>
@@ -13,6 +14,28 @@ constexpr DWORD candleRetryIntervalMs = 5000;
 constexpr ULONGLONG candleRetryWindowMs = 30000;
 constexpr ULONGLONG fileTimeTicksPerSecond = 10000000ULL;
 constexpr ULONGLONG fileTimeTicksPerMinute = 60ULL * fileTimeTicksPerSecond;
+
+/**
+ * Buduje czytelny komunikat z liczbą zapisanych świec i czasem operacji.
+ */
+std::string createBackfillStatus(
+    const CandleBackfillResult& result, const std::string& error) {
+    char status[256]{};
+    const std::size_t count = result.savedCandleCount;
+    const bool fewCandles = count % 10 >= 2 && count % 10 <= 4 &&
+        (count % 100 < 12 || count % 100 > 14);
+    const char* noun = count == 1
+        ? "brakującą świecę"
+        : (fewCandles ? "brakujące świece" : "brakujących świec");
+    std::snprintf(
+        status, sizeof(status),
+        "Zaciągnięto %zu %s. Operacja zajęła %.1f sekund.",
+        count, noun, result.elapsedSeconds);
+    if (!error.empty()) {
+        return std::string(status) + " Błąd: " + error;
+    }
+    return status;
+}
 
 /**
  * Parsuje znacznik czasu świecy zapisany przez Twelve Data jako czas UTC.
@@ -209,7 +232,8 @@ void StockPriceMonitor::stop() {
  */
 StockPriceSnapshot StockPriceMonitor::snapshot() const {
     AcquireSRWLockShared(&statusLock_);
-    StockPriceSnapshot currentSnapshot{oneMinuteCandle_, status_};
+    StockPriceSnapshot currentSnapshot{
+        oneMinuteCandle_, status_, backfillStatus_};
     ReleaseSRWLockShared(&statusLock_);
     return currentSnapshot;
 }
@@ -224,9 +248,24 @@ DWORD WINAPI StockPriceMonitor::threadEntryPoint(LPVOID parameter) {
 }
 
 /**
- * Pobiera jedną świecę po zamknięciu minuty, aby oszczędzać limit API.
+ * Uzupełnia braki po starcie, a następnie pobiera nową świecę co minutę.
  */
 void StockPriceMonitor::run() {
+    CandleBackfillResult backfillResult;
+    std::string backfillError;
+    const bool backfillSucceeded =
+        CandleBackfillClient::synchronize(backfillResult, backfillError);
+    AcquireSRWLockExclusive(&statusLock_);
+    if (!backfillResult.latestCandle.datetime.empty()) {
+        oneMinuteCandle_ = std::move(backfillResult.latestCandle);
+    }
+    backfillStatus_ = createBackfillStatus(
+        backfillResult, backfillSucceeded ? std::string{} : backfillError);
+    ReleaseSRWLockExclusive(&statusLock_);
+    if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
+        return;
+    }
+
     while (true) {
         if (!waitForNextCandleClose(stopEvent_)) {
             break;

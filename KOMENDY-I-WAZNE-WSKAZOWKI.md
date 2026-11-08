@@ -119,3 +119,7 @@ Build w CLion.
 Kod API i konfiguracja bazy znajdują się w `src/database`. Tabela jest przygotowywana
 przy uruchomieniu API, a jej zmiany należy wprowadzać ostrożnie — nie usuwaj wolumenu
 MySQL przy zmianie kodu.
+
+Przy uruchomieniu aplikacja giełdy sprawdza luki w świecach EUR/USD i uzupełnia do
+1000 najnowszych. Wynik i czas operacji są widoczne na ekranie głównym. Zmiany w API
+wymagają `docker compose up -d --build`, a zmiany aplikacji — ponownej kompilacji.

@@ -132,18 +132,28 @@ std::string formatWarsawCandleTime(const std::string& utcText) {
 /**
  * Składa wartości OHLC świecy w jeden czytelny wiersz.
  */
+/**
+ * Łączy bieżącą świecę, status monitora i wynik uzupełniania historii.
+ */
 std::string createCandleText(
-    const CandleData& candle, const std::string& status) {
+    const CandleData& candle,
+    const std::string& status,
+    const std::string& backfillStatus) {
+    std::string text;
     if (candle.datetime.empty()) {
-        return "Swieca 1 min: " + status;
+        text = "Swieca 1 min: " + status;
+    } else {
+        text = "Swieca 1 min (" +
+            formatWarsawCandleTime(candle.datetime) +
+            ")  Open: " + candle.open + "  High: " + candle.high +
+            "  Low: " + candle.low + "  Close: " + candle.close;
     }
 
-    std::string text = "Swieca 1 min (" +
-        formatWarsawCandleTime(candle.datetime) +
-        ")  Open: " + candle.open + "  High: " + candle.high +
-        "  Low: " + candle.low + "  Close: " + candle.close;
     if (!status.empty()) {
         text += "\n" + status;
+    }
+    if (!backfillStatus.empty()) {
+        text += "\n" + backfillStatus;
     }
     return text;
 }
@@ -176,7 +186,8 @@ void MainWindowDisplay::draw(
     const LONG sentenceSpacing = 8;
 
     const std::string candleText =
-        createCandleText(snapshot.oneMinuteCandle, snapshot.status);
+        createCandleText(
+            snapshot.oneMinuteCandle, snapshot.status, snapshot.backfillStatus);
     std::wstring wideCandleText;
     if (!convertUtf8ToWide(candleText, wideCandleText)) {
         wideCandleText = L"Nie można wyświetlić świecy 1-minutowej.";

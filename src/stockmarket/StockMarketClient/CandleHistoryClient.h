@@ -31,6 +31,32 @@ public:
         const std::string& symbol, const CandleData& candle, std::string& error);
 
     /**
+     * Pobiera z bazy do 1000 brakujących minut dla wskazanego symbolu.
+     * @param symbol Symbol instrumentu, którego dotyczy historia.
+     * @param hasExistingCandles Otrzymuje informację, czy baza zawiera już świece.
+     * @param missingTimes Otrzymuje brakujące znaczniki czasu UTC.
+     * @param error Otrzymuje opis błędu, jeśli odczyt się nie powiedzie.
+     * @return true, jeśli lokalne API zwróciło poprawny plan uzupełnienia.
+     */
+    static bool fetchMissingCandleTimes(
+        const std::string& symbol,
+        bool& hasExistingCandles,
+        std::vector<std::string>& missingTimes,
+        std::string& error);
+
+    /**
+     * Zapisuje paczkę świec w jednym żądaniu do lokalnego API.
+     * @param symbol Symbol instrumentu, którego dotyczą świece.
+     * @param candles Świece zapisane w formacie czasu UTC.
+     * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
+     * @return true, jeśli API potwierdzi zapis paczki.
+     */
+    static bool saveCandles(
+        const std::string& symbol,
+        const std::vector<CandleData>& candles,
+        std::string& error);
+
+    /**
      * Pobiera stronę zawierającą do 20 świec, od najnowszych.
      * @param page Numer strony liczony od zera.
      * @param candles Otrzymuje dane świec.

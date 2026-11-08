@@ -3,7 +3,7 @@
 # Backend
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
+NEW_YORK_TIME_ZONE = ZoneInfo("America/New_York")
+MAX_BACKFILL_CANDLES = 1000
 
 
 class CandleRecord(BaseModel):
@@ -49,6 +51,12 @@ class CandleRecord(BaseModel):
         ):
             raise ValueError("Wartości OHLC nie tworzą prawidłowego zakresu świecy.")
         return self
+
+
+class CandleBatch(BaseModel):
+    """Opis paczki świec zapisywanych podczas uzupełniania historii."""
+
+    candles: list[CandleRecord] = Field(min_length=1, max_length=MAX_BACKFILL_CANDLES)
 
 
 class MarketDataRepository:
@@ -153,21 +161,42 @@ class MarketDataRepository:
 
     def save_candle(self, candle: CandleRecord) -> None:
         """Zapisuje świecę lub aktualizuje jej wartości dla tego samego symbolu i czasu."""
-        candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
-        local_datetime = candle_datetime_local.replace(tzinfo=None)
-        offset_minutes = int(candle_datetime_local.utcoffset().total_seconds() // 60)
+        self.save_candles([candle])
+
+    def save_candles(self, candles: list[CandleRecord]) -> None:
+        """Zapisuje paczkę świec w jednej transakcji bazy danych."""
+        candle_values = []
+        product_symbols = set()
+        for candle in candles:
+            candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
+            local_datetime = candle_datetime_local.replace(tzinfo=None)
+            offset_minutes = int(candle_datetime_local.utcoffset().total_seconds() // 60)
+            product_symbols.add(candle.symbol)
+            candle_values.append(
+                (
+                    candle.symbol,
+                    local_datetime,
+                    candle.open,
+                    candle.high,
+                    candle.low,
+                    candle.close,
+                    candle.volume,
+                    offset_minutes,
+                )
+            )
+
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
         try:
             cursor = connection.cursor()
-            cursor.execute(
+            cursor.executemany(
                 """
                 INSERT INTO products (symbol) VALUES (%s)
-                ON DUPLICATE KEY UPDATE symbol = %s
+                ON DUPLICATE KEY UPDATE symbol = VALUES(symbol)
                 """,
-                (candle.symbol, candle.symbol),
+                [(symbol,) for symbol in product_symbols],
             )
-            cursor.execute(
+            cursor.executemany(
                 """
                 INSERT INTO candles
                     (symbol, datetime, open, high, low, close, volume,
@@ -180,16 +209,7 @@ class MarketDataRepository:
                     close = VALUES(close),
                     volume = VALUES(volume)
                 """,
-                (
-                    candle.symbol,
-                    local_datetime,
-                    candle.open,
-                    candle.high,
-                    candle.low,
-                    candle.close,
-                    candle.volume,
-                    offset_minutes,
-                ),
+                candle_values,
             )
             connection.commit()
         except mysql.connector.Error:
@@ -199,6 +219,77 @@ class MarketDataRepository:
             if cursor is not None:
                 cursor.close()
             connection.close()
+
+    def fetch_missing_candle_times(
+        self, symbol: str, limit: int
+    ) -> tuple[bool, list[str]]:
+        """Zwraca do limitu brakujących minut rynku Forex, od najnowszej wstecz."""
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT datetime, utc_offset_minutes
+                    FROM candles
+                    WHERE symbol = %s
+                    ORDER BY datetime DESC, utc_offset_minutes DESC
+                    """,
+                    (symbol,),
+                )
+                stored_times = {
+                    candle_datetime.replace(
+                        tzinfo=timezone(timedelta(minutes=offset_minutes))
+                    ).astimezone(timezone.utc)
+                    for candle_datetime, offset_minutes in cursor.fetchall()
+                }
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+        if not stored_times:
+            return False, []
+
+        latest_closed_minute = (
+            datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            - timedelta(minutes=1)
+        )
+        upper_bound = latest_closed_minute
+        missing_times = []
+        for stored_time in sorted(stored_times, reverse=True):
+            if stored_time > latest_closed_minute:
+                continue
+            current_minute = upper_bound
+            while current_minute > stored_time and len(missing_times) < limit:
+                if (
+                    current_minute not in stored_times
+                    and self._is_forex_market_open(current_minute)
+                ):
+                    missing_times.append(
+                        current_minute.strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                current_minute -= timedelta(minutes=1)
+            if len(missing_times) == limit:
+                break
+            upper_bound = stored_time - timedelta(minutes=1)
+
+        missing_times.reverse()
+        return True, missing_times
+
+    @staticmethod
+    def _is_forex_market_open(utc_time: datetime) -> bool:
+        """Pomija weekendowe zamknięcie rynku Forex przy wyznaczaniu luk."""
+        new_york_time = utc_time.astimezone(NEW_YORK_TIME_ZONE)
+        weekday = new_york_time.weekday()
+        minute_of_day = new_york_time.hour * 60 + new_york_time.minute
+        friday_close = 17 * 60
+        sunday_open = 17 * 60
+        return (
+            weekday in (0, 1, 2, 3)
+            or (weekday == 4 and minute_of_day < friday_close)
+            or (weekday == 6 and minute_of_day >= sunday_open)
+        )
 
     def fetch_candle_page(
         self, page: int
@@ -285,6 +376,44 @@ def save_candle(candle: CandleRecord, request: Request) -> None:
             status_code=503,
             detail="Nie udało się zapisać świecy w bazie MySQL.",
         ) from error
+
+
+@app.post("/api/candles/batch", status_code=204)
+def save_candle_batch(batch: CandleBatch, request: Request) -> None:
+    """Waliduje i zapisuje maksymalnie 1000 świec w jednej transakcji."""
+    try:
+        request.app.state.repository.save_candles(batch.candles)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zapisać świec w bazie MySQL.",
+        ) from error
+
+
+@app.get("/api/candles/missing", response_class=Response)
+def missing_candles(
+    request: Request,
+    symbol: str = Query(min_length=1, max_length=32, pattern=r"^[A-Z0-9./_-]+$"),
+) -> Response:
+    """Zwraca status bazy i do 1000 najnowszych brakujących minut dla symbolu."""
+    try:
+        has_existing_candles, missing_times = (
+            request.app.state.repository.fetch_missing_candle_times(
+                symbol, MAX_BACKFILL_CANDLES
+            )
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się sprawdzić brakujących świec w bazie MySQL.",
+        ) from error
+
+    report_lines = ["1" if has_existing_candles else "0"]
+    report_lines.extend(missing_times)
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @app.get("/api/candles/report", response_class=Response)
