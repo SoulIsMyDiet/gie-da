@@ -20,6 +20,11 @@ Sprawdź, czy kontenery działają:
 docker compose ps
 ```
 
+### Przebudowanie kontenerów po zmianach w bazie danych
+```
+docker compose up -d --build
+```
+
 ### Otwarcie konsoli MySQL
 
 ```powershell
@@ -44,39 +49,13 @@ Struktura tabel:
 
 ```sql
 DESCRIBE products;
-DESCRIBE price_history;
+DESCRIBE candles;
 ```
 
 Wszystkie produkty:
 
 ```sql
 SELECT * FROM products;
-```
-
-Najnowsze wpisy historii cen:
-
-```sql
-SELECT id, symbol, price, recorded_at, zlote_rady
-FROM price_history
-ORDER BY recorded_at DESC, id DESC
-LIMIT 50;
-```
-
-Policz wpisy w historii:
-
-```sql
-SELECT COUNT(*) AS liczba_wpisow
-FROM price_history;
-```
-
-Pokaż wpisy dla wybranego symbolu:
-
-```sql
-SELECT id, symbol, price, recorded_at, zlote_rady
-FROM price_history
-WHERE symbol = 'EUR/USD'
-ORDER BY recorded_at DESC, id DESC
-LIMIT 50;
 ```
 
 Wyjdź z konsoli MySQL:
@@ -119,15 +98,12 @@ docker compose start
 
 ## Ważne informacje o danych
 
-- Historia cen jest przechowywana w wolumenie Dockera `mysql_data`, więc zwykłe
-  zatrzymanie kontenerów jej nie usuwa.
+- Przy uruchomieniu API tabela `price_history`, jeśli istnieje, jest usuwana wraz z zawartością.
+- Świece są przechowywane w wolumenie Dockera `mysql_data`, więc zwykłe
+  zatrzymanie kontenerów ich nie usuwa.
 - **Nie używaj `docker compose down -v`, jeśli chcesz zachować dane.** Opcja `-v`
   usuwa wolumen z bazą.
 - Plik `.env` zawiera hasła. Nie udostępniaj go i nie dodawaj do repozytorium.
-- Nowe wpisy `recorded_at` są zapisywane w czasie `Europe/Warsaw`. Wiersze zapisane
-  przed zmianą formatu czasu pozostają bez zmian, więc w bazie mogą być wpisy o
-  różnej interpretacji czasu.
-- Kolumna `zlote_rady` zawiera obecnie losowy rzeczownik.
 
 ## Projekt i kompilacja
 
