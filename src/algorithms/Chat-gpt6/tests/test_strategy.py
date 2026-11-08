@@ -22,12 +22,19 @@ from market_data import Candle, FiveMinuteCandleAggregator  # noqa: E402
 class IndicatorTests(unittest.TestCase):
     """Sprawdza inicjalizację wskaźników i wygładzanie Wildera."""
 
-    def test_ema_uses_sma_seed_then_exponential_smoothing(self) -> None:
+    def test_ema_uses_first_price_as_seed_then_exponential_smoothing(self) -> None:
         ema = ExponentialMovingAverage(period=3)
-        self.assertIsNone(ema.update(1.0))
-        self.assertIsNone(ema.update(2.0))
-        self.assertEqual(ema.update(3.0), 2.0)
-        self.assertAlmostEqual(ema.update(4.0), 3.0)
+        self.assertEqual(ema.update(1.0), 1.0)
+        self.assertAlmostEqual(ema.update(2.0), 1.5)
+        self.assertAlmostEqual(ema.update(3.0), 2.25)
+        self.assertAlmostEqual(ema.update(4.0), 3.125)
+
+    def test_ema_reset_uses_first_price_of_new_segment(self) -> None:
+        ema = ExponentialMovingAverage(period=3)
+        ema.update(1.0)
+        ema.update(2.0)
+        ema.reset()
+        self.assertEqual(ema.update(10.0), 10.0)
 
     def test_rsi_uses_wilder_average(self) -> None:
         rsi = WilderRelativeStrengthIndex(period=3)

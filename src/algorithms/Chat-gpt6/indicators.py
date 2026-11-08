@@ -9,22 +9,17 @@ from market_data import Candle
 
 @dataclass
 class ExponentialMovingAverage:
-    """Oblicza EMA z ziarnem będącym średnią arytmetyczną pierwszego okresu."""
+    """Oblicza EMA, inicjalizując ją ceną zamknięcia pierwszej świecy."""
 
     period: int
     value: float | None = None
-    _seed_total: float = 0.0
-    _seed_count: int = 0
 
     def update(self, price: float) -> float | None:
-        """Dodaje cenę i zwraca EMA, gdy dostępne są dane rozgrzewkowe."""
+        """Dodaje cenę i zwraca EMA, używając pierwszej ceny jako wartości startowej."""
         if self.period < 1:
             raise ValueError("Okres EMA musi być dodatni.")
         if self.value is None:
-            self._seed_total += price
-            self._seed_count += 1
-            if self._seed_count == self.period:
-                self.value = self._seed_total / self.period
+            self.value = price
             return self.value
 
         smoothing_factor = 2.0 / (self.period + 1)
@@ -34,8 +29,6 @@ class ExponentialMovingAverage:
     def reset(self) -> None:
         """Czyści stan wskaźnika przed rozpoczęciem nowego ciągłego segmentu."""
         self.value = None
-        self._seed_total = 0.0
-        self._seed_count = 0
 
 
 @dataclass
