@@ -44,7 +44,9 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu 
   describe signals;
 Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego API. Istniejące wpisy, które wcześniej zapisano w UTC, zostaną jednorazowo przeliczone na `Europe/Warsaw`. Po zmianach kodu API lub konfiguracji bazy przebuduj i uruchom usługę poleceniem `docker compose up -d --build`.
 
-Tabela `signals` również jest tworzona automatycznie przy starcie API. Sama tabela nie uruchamia jeszcze algorytmu ani nie zapisuje sygnałów; ten etap zostanie dodany później.
+Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każdej nowej zamkniętej świecy EUR/USD API uruchamia strategię `Chat-gpt6/EURUSDStrategyV1`; wygenerowany sygnał zapisuje do tej tabeli, a jego pakiet JSON trafia do `signal_parameters`. Integracja z agentem AI nie jest jeszcze podłączona.
+
+Strategia używa EMA z ziarnem będącym średnią pierwszego okresu oraz RSI/ATR wygładzanych metodą Wildera. Nie znaleziono w repozytorium istniejącego backtestu Python, z którym można porównać inicjalizację wskaźników. Do czasu podłączenia BID/ASK bieżący spread oraz jego limit są przyjęte na sztywno jako 3 pipsy, więc warunek spreadu obecnie nie odrzuca sygnału.
 
 Uzupełnianie luk działa od najnowszych wpisów wstecz, pomija weekendowe zamknięcie rynku Forex i obejmuje maksymalnie 1000 świec przy jednym starcie aplikacji. Jeśli baza nie ma jeszcze świec, aplikacja pobiera do 1000 najnowszych świec. Na stronie głównej wyświetlana jest liczba zapisanych świec oraz łączny czas sprawdzenia, pobrania i zapisu. Każde żądanie `/time_series` kosztuje kredyty zgodnie z planem Twelve Data; odległe luki mogą wymagać osobnych żądań.
 

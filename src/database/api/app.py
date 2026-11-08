@@ -1,15 +1,31 @@
 """Lokalne API zapisujące świece rynkowe w MySQL."""
 
 # Backend
+import copy
+import json
 import os
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from threading import Lock
 from zoneinfo import ZoneInfo
 
 import mysql.connector
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+algorithm_directory = Path(__file__).resolve().parent / "algorithm"
+if not algorithm_directory.is_dir():
+    algorithm_directory = (
+        Path(__file__).resolve().parents[2] / "algorithms" / "Chat-gpt6"
+    )
+sys.path.insert(0, str(algorithm_directory))
+
+from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
+from market_data import Candle  # noqa: E402
+from signal_serializer import Signal  # noqa: E402
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 NEW_YORK_TIME_ZONE = ZoneInfo("America/New_York")
@@ -37,6 +53,8 @@ class CandleRecord(BaseModel):
         """Wymaga strefy czasowej, aby zapisywać czas świecy jednoznacznie w UTC."""
         if candle_datetime.tzinfo is None or candle_datetime.utcoffset() is None:
             raise ValueError("datetime musi zawierać strefę czasową.")
+        if candle_datetime.second != 0 or candle_datetime.microsecond != 0:
+            raise ValueError("datetime świecy M1 musi zaczynać się równo w pełnej minucie.")
         return candle_datetime
 
     @model_validator(mode="after")
@@ -179,12 +197,16 @@ class MarketDataRepository:
                 (local_datetime, offset_minutes, symbol, previous_utc_datetime),
             )
 
-    def save_candle(self, candle: CandleRecord) -> None:
+    def save_candle(
+        self, candle: CandleRecord, signal: Signal | None = None
+    ) -> None:
         """Zapisuje świecę lub aktualizuje jej wartości dla tego samego symbolu i czasu."""
-        self.save_candles([candle])
+        self.save_candles([candle], signal)
 
-    def save_candles(self, candles: list[CandleRecord]) -> None:
-        """Zapisuje paczkę świec w jednej transakcji bazy danych."""
+    def save_candles(
+        self, candles: list[CandleRecord], signal: Signal | None = None
+    ) -> None:
+        """Zapisuje paczkę świec i opcjonalny sygnał w jednej transakcji."""
         candle_values = []
         product_symbols = set()
         for candle in candles:
@@ -231,6 +253,8 @@ class MarketDataRepository:
                 """,
                 candle_values,
             )
+            if signal is not None:
+                self._insert_signal(cursor, signal)
             connection.commit()
         except mysql.connector.Error:
             connection.rollback()
@@ -239,6 +263,74 @@ class MarketDataRepository:
             if cursor is not None:
                 cursor.close()
             connection.close()
+
+    def fetch_candle_history(self, symbol: str) -> list[Candle]:
+        """Pobiera świece symbolu w kolejności UTC do odtworzenia stanu strategii."""
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT datetime, utc_offset_minutes, open, high, low, close, volume
+                    FROM candles
+                    WHERE symbol = %s
+                    ORDER BY DATE_SUB(
+                        datetime, INTERVAL utc_offset_minutes MINUTE
+                    ) ASC
+                    """,
+                    (symbol,),
+                )
+                rows = cursor.fetchall()
+                return [
+                    Candle(
+                        timestamp=candle_datetime.replace(
+                            tzinfo=timezone(timedelta(minutes=offset_minutes))
+                        ).astimezone(timezone.utc),
+                        open=float(open_price),
+                        high=float(high_price),
+                        low=float(low_price),
+                        close=float(close_price),
+                        volume=float(volume) if volume is not None else None,
+                    )
+                    for (
+                        candle_datetime,
+                        offset_minutes,
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        volume,
+                    ) in rows
+                ]
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _insert_signal(cursor: mysql.connector.cursor.MySQLCursor, signal: Signal) -> None:
+        """Dodaje sygnał do bieżącej transakcji wraz z jego pakietem JSON."""
+        signal_payload = signal.to_payload()
+        cursor.execute(
+            """
+            INSERT INTO signals
+                (`datetime`, product, price, `signal`, algorithm_name,
+                 ai_decision, transaction_id, candles_count, signal_parameters)
+            VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s)
+            """,
+            (
+                datetime.now(WARSAW_TIME_ZONE).replace(tzinfo=None),
+                "EUR/USD",
+                Decimal(str(signal_payload["price"])),
+                signal.direction.lower(),
+                STRATEGY_NAME,
+                signal.candles_count,
+                json.dumps(
+                    signal_payload, allow_nan=False, separators=(",", ":")
+                ),
+            ),
+        )
 
     def fetch_missing_candle_times(
         self, symbol: str, limit: int
@@ -369,12 +461,17 @@ class MarketDataRepository:
 
 
 repository = MarketDataRepository()
+eurusd_strategy = EURUSDStrategyV1()
+strategy_lock = Lock()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Przygotowuje tabele przed obsługą żądań i kończy start przy błędzie bazy."""
     repository.initialize()
+    with strategy_lock:
+        eurusd_strategy.warm_up(repository.fetch_candle_history("EUR/USD"))
+        app.state.strategy_ready = True
     yield
 
 
@@ -390,11 +487,45 @@ def health() -> dict[str, str]:
 def save_candle(candle: CandleRecord, request: Request) -> None:
     """Waliduje i zapisuje świecę rynkową; ten sam symbol i czas aktualizują wpis."""
     try:
-        request.app.state.repository.save_candle(candle)
+        with strategy_lock:
+            if not request.app.state.strategy_ready:
+                recovered_strategy = copy.deepcopy(
+                    request.app.state.eurusd_strategy
+                )
+                recovered_strategy.warm_up(
+                    request.app.state.repository.fetch_candle_history("EUR/USD")
+                )
+                request.app.state.eurusd_strategy = recovered_strategy
+                request.app.state.strategy_ready = True
+            current_strategy = request.app.state.eurusd_strategy
+            updated_strategy = copy.deepcopy(current_strategy)
+            signal = None
+            if candle.symbol == "EUR/USD":
+                signal = updated_strategy.process_candle(
+                    Candle(
+                        timestamp=candle.datetime.astimezone(timezone.utc),
+                        open=float(candle.open),
+                        high=float(candle.high),
+                        low=float(candle.low),
+                        close=float(candle.close),
+                        volume=(
+                            float(candle.volume)
+                            if candle.volume is not None
+                            else None
+                        ),
+                    )
+                )
+            request.app.state.repository.save_candle(candle, signal)
+            request.app.state.eurusd_strategy = updated_strategy
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
             detail="Nie udało się zapisać świecy w bazie MySQL.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
         ) from error
 
 
@@ -402,7 +533,15 @@ def save_candle(candle: CandleRecord, request: Request) -> None:
 def save_candle_batch(batch: CandleBatch, request: Request) -> None:
     """Waliduje i zapisuje maksymalnie 1000 świec w jednej transakcji."""
     try:
-        request.app.state.repository.save_candles(batch.candles)
+        with strategy_lock:
+            request.app.state.strategy_ready = False
+            request.app.state.repository.save_candles(batch.candles)
+            updated_strategy = copy.deepcopy(request.app.state.eurusd_strategy)
+            updated_strategy.warm_up(
+                request.app.state.repository.fetch_candle_history("EUR/USD")
+            )
+            request.app.state.eurusd_strategy = updated_strategy
+            request.app.state.strategy_ready = True
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
@@ -459,3 +598,5 @@ def candle_report(
 
 
 app.state.repository = repository
+app.state.eurusd_strategy = eurusd_strategy
+app.state.strategy_ready = False
