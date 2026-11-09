@@ -97,17 +97,23 @@ bool CandleBackfillClient::synchronize(
             return false;
         }
         if (!latestCandles.empty()) {
+            std::size_t savedCandleCount = 0;
+            std::string latestSavedDatetime;
             if (!CandleHistoryClient::saveCandles(
-                    monitoredSymbol, latestCandles, error)) {
+                    monitoredSymbol, latestCandles, savedCandleCount,
+                    latestSavedDatetime, error)) {
                 updateElapsedTime(result, startedAt);
                 return false;
             }
-            result.savedCandleCount = latestCandles.size();
-            result.latestCandle = *std::max_element(
+            result.savedCandleCount = savedCandleCount;
+            const auto latestSavedCandle = std::find_if(
                 latestCandles.begin(), latestCandles.end(),
-                [](const CandleData& left, const CandleData& right) {
-                    return left.datetime < right.datetime;
+                [&latestSavedDatetime](const CandleData& candle) {
+                    return candle.datetime == latestSavedDatetime;
                 });
+            if (latestSavedCandle != latestCandles.end()) {
+                result.latestCandle = *latestSavedCandle;
+            }
         }
         updateElapsedTime(result, startedAt);
         return true;
@@ -163,20 +169,24 @@ bool CandleBackfillClient::synchronize(
             }
         }
         if (!missingCandles.empty()) {
+            std::size_t savedCandleCount = 0;
+            std::string latestSavedDatetime;
             if (!CandleHistoryClient::saveCandles(
-                    monitoredSymbol, missingCandles, error)) {
+                    monitoredSymbol, missingCandles, savedCandleCount,
+                    latestSavedDatetime, error)) {
                 updateElapsedTime(result, startedAt);
                 return false;
             }
-            result.savedCandleCount += missingCandles.size();
-            const auto latestCandle = std::max_element(
+            result.savedCandleCount += savedCandleCount;
+            const auto latestSavedCandle = std::find_if(
                 missingCandles.begin(), missingCandles.end(),
-                [](const CandleData& left, const CandleData& right) {
-                    return left.datetime < right.datetime;
+                [&latestSavedDatetime](const CandleData& candle) {
+                    return candle.datetime == latestSavedDatetime;
                 });
-            if (result.latestCandle.datetime.empty() ||
-                result.latestCandle.datetime < latestCandle->datetime) {
-                result.latestCandle = *latestCandle;
+            if (latestSavedCandle != missingCandles.end() &&
+                (result.latestCandle.datetime.empty() ||
+                 result.latestCandle.datetime < latestSavedCandle->datetime)) {
+                result.latestCandle = *latestSavedCandle;
             }
         }
         firstIndex = nextIndex;

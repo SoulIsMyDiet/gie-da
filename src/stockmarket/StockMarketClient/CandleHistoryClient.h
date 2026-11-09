@@ -65,12 +65,16 @@ public:
      * Zapisuje paczkę świec w jednym żądaniu do lokalnego API.
      * @param symbol Symbol instrumentu, którego dotyczą świece.
      * @param candles Świece zapisane w formacie czasu UTC.
+     * @param savedCandleCount Otrzymuje liczbę świec przyjętych przez API.
+     * @param latestSavedDatetime Otrzymuje czas UTC najnowszej zapisanej świecy.
      * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
      * @return true, jeśli API potwierdzi zapis paczki.
      */
     static bool saveCandles(
         const std::string& symbol,
         const std::vector<CandleData>& candles,
+        std::size_t& savedCandleCount,
+        std::string& latestSavedDatetime,
         std::string& error);
 
     /**

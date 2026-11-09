@@ -395,14 +395,61 @@ bool CandleHistoryClient::saveCandle(
 bool CandleHistoryClient::saveCandles(
     const std::string& symbol,
     const std::vector<CandleData>& candles,
+    std::size_t& savedCandleCount,
+    std::string& latestSavedDatetime,
     std::string& error) {
+    savedCandleCount = 0;
+    latestSavedDatetime.clear();
     std::string requestBody;
     if (!createBatchRequestBody(symbol, candles, requestBody, error)) {
         return false;
     }
     std::string responseBody;
-    return sendApiRequest(
-        batchApiPath, requestBody, 204, responseBody, error);
+    if (!sendApiRequest(
+            batchApiPath, requestBody, 200, responseBody, error)) {
+        return false;
+    }
+
+    const std::size_t countLineEnd = responseBody.find('\n');
+    const std::string_view countText = countLineEnd == std::string::npos
+        ? std::string_view(responseBody)
+        : std::string_view(responseBody).substr(0, countLineEnd);
+    if (countText.empty()) {
+        error = "Lokalne API nie zwróciło liczby zapisanych świec.";
+        return false;
+    }
+    for (const unsigned char character : countText) {
+        if (character < '0' || character > '9') {
+            error = "Lokalne API zwróciło nieprawidłową liczbę zapisanych świec.";
+            return false;
+        }
+    }
+    try {
+        savedCandleCount =
+            static_cast<std::size_t>(std::stoull(std::string(countText)));
+    } catch (const std::out_of_range&) {
+        error = "Lokalne API zwróciło zbyt dużą liczbę zapisanych świec.";
+        return false;
+    } catch (const std::invalid_argument&) {
+        error = "Lokalne API zwróciło nieprawidłową liczbę zapisanych świec.";
+        return false;
+    }
+
+    if (countLineEnd != std::string::npos) {
+        const std::string_view timestamp =
+            std::string_view(responseBody).substr(countLineEnd + 1);
+        if (!timestamp.empty() &&
+            (timestamp.size() != 19 || timestamp[10] != ' ')) {
+            error = "Lokalne API zwróciło nieprawidłowy czas ostatniej świecy.";
+            return false;
+        }
+        latestSavedDatetime.assign(timestamp);
+    }
+    if (savedCandleCount > 0 && latestSavedDatetime.empty()) {
+        error = "Lokalne API nie podało czasu zapisanej świecy.";
+        return false;
+    }
+    return true;
 }
 
 /**

@@ -215,7 +215,7 @@ class MarketDataRepository:
 
     def save_candle(
         self, candle: CandleRecord, signal: Signal | None = None
-    ) -> int:
+    ) -> tuple[int, int, str]:
         """Zapisuje świecę i zwraca liczbę nowo wykrytych luk."""
         return self.save_candles([candle], signal, detect_gaps=True)
 
@@ -224,12 +224,22 @@ class MarketDataRepository:
         candles: list[CandleRecord],
         signal: Signal | None = None,
         detect_gaps: bool = False,
-    ) -> int:
-        """Zapisuje świece, uzupełnia status luk i opcjonalnie wykrywa nowe luki."""
+    ) -> tuple[int, int, str]:
+        """Zapisuje tylko świece z godzin otwarcia rynku i zwraca ich najnowszy czas."""
         candle_values = []
         product_symbols = set()
         newly_detected_gap_count = 0
-        for candle in candles:
+        open_market_candles = [
+            candle
+            for candle in candles
+            if self._is_forex_market_open(
+                candle.datetime.astimezone(timezone.utc)
+            )
+        ]
+        if not open_market_candles:
+            return 0, 0, ""
+
+        for candle in open_market_candles:
             candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
             local_datetime = candle_datetime_local.replace(tzinfo=None)
             offset_minutes = int(candle_datetime_local.utcoffset().total_seconds() // 60)
@@ -259,7 +269,7 @@ class MarketDataRepository:
                 [(symbol,) for symbol in product_symbols],
             )
             if detect_gaps:
-                for candle in candles:
+                for candle in open_market_candles:
                     newly_detected_gap_count += self._detect_gaps_before_candle(
                         cursor, candle
                     )
@@ -292,7 +302,7 @@ class MarketDataRepository:
                         candle.symbol,
                         candle.datetime.astimezone(timezone.utc).replace(tzinfo=None),
                     )
-                    for candle in candles
+                    for candle in open_market_candles
                 ],
             )
             if signal is not None:
@@ -305,7 +315,18 @@ class MarketDataRepository:
             if cursor is not None:
                 cursor.close()
             connection.close()
-        return newly_detected_gap_count
+        latest_saved_candle = max(
+            open_market_candles,
+            key=lambda item: item.datetime.astimezone(timezone.utc),
+        )
+        latest_saved_time = latest_saved_candle.datetime.astimezone(
+            timezone.utc
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        return (
+            newly_detected_gap_count,
+            len(open_market_candles),
+            latest_saved_time,
+        )
 
     def _detect_gaps_before_candle(
         self, cursor: mysql.connector.cursor.MySQLCursor, candle: CandleRecord
@@ -676,6 +697,11 @@ def health() -> dict[str, str]:
 @app.post("/api/candles", response_class=Response)
 def save_candle(candle: CandleRecord, request: Request) -> Response:
     """Zapisuje świecę i zwraca liczbę nowo wykrytych brakujących minut."""
+    if not request.app.state.repository._is_forex_market_open(
+        candle.datetime.astimezone(timezone.utc)
+    ):
+        return Response(content="0", media_type="text/plain; charset=utf-8")
+
     try:
         with strategy_lock:
             if not request.app.state.strategy_ready:
@@ -705,7 +731,9 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                         ),
                     )
                 )
-            new_gap_count = request.app.state.repository.save_candle(candle, signal)
+            new_gap_count, _, _ = request.app.state.repository.save_candle(
+                candle, signal
+            )
             request.app.state.eurusd_strategy = updated_strategy
     except mysql.connector.Error as error:
         raise HTTPException(
@@ -723,13 +751,17 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
     )
 
 
-@app.post("/api/candles/batch", status_code=204)
-def save_candle_batch(batch: CandleBatch, request: Request) -> None:
-    """Waliduje i zapisuje maksymalnie 1000 świec w jednej transakcji."""
+@app.post("/api/candles/batch", response_class=Response)
+def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
+    """Zapisuje maksymalnie 1000 otwartych minut i zwraca liczbę zapisanych."""
     try:
         with strategy_lock:
             request.app.state.strategy_ready = False
-            request.app.state.repository.save_candles(batch.candles)
+            _, saved_candle_count, latest_saved_time = (
+                request.app.state.repository.save_candles(
+                    batch.candles
+                )
+            )
             updated_strategy = copy.deepcopy(request.app.state.eurusd_strategy)
             updated_strategy.warm_up(
                 request.app.state.repository.fetch_candle_history("EUR/USD")
@@ -741,6 +773,10 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> None:
             status_code=503,
             detail="Nie udało się zapisać świec w bazie MySQL.",
         ) from error
+    return Response(
+        content=f"{saved_candle_count}\n{latest_saved_time}",
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @app.get("/api/candles/missing", response_class=Response)
