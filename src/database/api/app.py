@@ -25,6 +25,7 @@ sys.path.insert(0, str(algorithm_directory))
 
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from market_data import Candle  # noqa: E402
+from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
@@ -89,6 +90,7 @@ class MarketDataRepository:
             "password": os.environ["MYSQL_PASSWORD"],
             "database": os.environ["MYSQL_DATABASE"],
         }
+        self.signal_potential_calculator = SignalPotentialCalculator()
 
     def initialize(self) -> None:
         """Tworzy tabele, jeśli nie istnieją; błędy połączenia przerywają start API."""
@@ -180,6 +182,13 @@ class MarketDataRepository:
                 )
                 self._migrate_signal_potention_schema(cursor)
                 self._migrate_candle_timestamps(cursor)
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO signal_potention (signal_id)
+                    SELECT id FROM signals
+                    """
+                )
+                self.signal_potential_calculator.update_pending(cursor)
                 connection.commit()
             finally:
                 cursor.close()
@@ -390,6 +399,9 @@ class MarketDataRepository:
             )
             if signal is not None:
                 self._insert_signal(cursor, signal)
+            self.signal_potential_calculator.update_pending(
+                cursor, product_symbols
+            )
             connection.commit()
         except mysql.connector.Error:
             connection.rollback()
@@ -554,6 +566,10 @@ class MarketDataRepository:
                     signal_payload, allow_nan=False, separators=(",", ":")
                 ),
             ),
+        )
+        cursor.execute(
+            "INSERT INTO signal_potention (signal_id) VALUES (%s)",
+            (cursor.lastrowid,),
         )
 
     def fetch_missing_candle_times(

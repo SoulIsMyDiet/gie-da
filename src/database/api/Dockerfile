@@ -12,6 +12,7 @@ RUN apt-get update \
     && useradd --create-home appuser
 
 COPY database/api/app.py ./app.py
+COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.py
 COPY algorithms/Chat-gpt6/ ./algorithm/
 USER appuser
 
