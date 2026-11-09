@@ -307,6 +307,42 @@ bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
     return true;
 }
 
+/**
+ * Dzieli wiersz raportu luki na pięć wymaganych pól.
+ */
+bool splitCandleGapRow(std::string_view row, CandleGapReportEntry& gap) {
+    std::string_view fields[5];
+    std::size_t fieldStart = 0;
+    for (std::size_t index = 0; index < 4; ++index) {
+        const std::size_t separator = row.find('\t', fieldStart);
+        if (separator == std::string_view::npos) {
+            return false;
+        }
+        fields[index] = row.substr(fieldStart, separator - fieldStart);
+        fieldStart = separator + 1;
+    }
+    if (row.find('\t', fieldStart) != std::string_view::npos) {
+        return false;
+    }
+    fields[4] = row.substr(fieldStart);
+
+    for (std::size_t index = 0; index < 5; ++index) {
+        if (fields[index].empty() || fields[index].size() > 128) {
+            return false;
+        }
+    }
+    if (fields[2] != "missing" && fields[2] != "filled") {
+        return false;
+    }
+
+    gap.symbol.assign(fields[0]);
+    gap.candleDatetimeUtc.assign(fields[1]);
+    gap.status.assign(fields[2]);
+    gap.detectedAtUtc.assign(fields[3]);
+    gap.filledAtUtc.assign(fields[4]);
+    return true;
+}
+
 } // namespace
 
 /**
@@ -602,6 +638,114 @@ bool CandleHistoryClient::fetchCandlePage(
     }
 
     candles = std::move(receivedCandles);
+    hasNextPage = hasNextPageText == "1";
+    return true;
+}
+
+/**
+ * Pobiera stronę historii luk i sprawdza poprawność każdego wiersza TSV.
+ */
+bool CandleHistoryClient::fetchCandleGapPage(
+    std::size_t page,
+    std::vector<CandleGapReportEntry>& gaps,
+    bool& hasNextPage,
+    std::string& error) {
+    if (page > 1000000 ||
+        page > static_cast<std::size_t>(
+                   std::numeric_limits<unsigned long long>::max() / pageSize)) {
+        error = "Numer strony tabeli brakujących świec jest poza zakresem.";
+        return false;
+    }
+
+    InternetHandle session{WinHttpOpen(
+        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (session.value == nullptr) {
+        error = "Nie udało się rozpocząć żądania tabeli brakujących świec.";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
+
+    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
+    if (connection.value == nullptr) {
+        error = "Nie można połączyć się z lokalnym API raportów.";
+        return false;
+    }
+
+    const std::wstring requestPath =
+        L"/api/candles/gaps?page=" + std::to_wstring(page);
+    InternetHandle request{WinHttpOpenRequest(
+        connection.value, L"GET", requestPath.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
+    if (request.value == nullptr ||
+        !WinHttpSendRequest(
+            request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "Lokalne API tabeli brakujących świec nie odpowiedziało.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(
+            request.value,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        error = "Nie udało się odczytać odpowiedzi lokalnego API.";
+        return false;
+    }
+    if (statusCode != 200) {
+        error = "Lokalne API zwróciło HTTP " +
+                std::to_string(statusCode) + " dla tabeli brakujących świec.";
+        return false;
+    }
+
+    std::string response;
+    if (!readResponse(request.value, response, error)) {
+        return false;
+    }
+    const std::size_t headerEnd = response.find('\n');
+    const std::string_view hasNextPageText =
+        headerEnd == std::string::npos
+            ? std::string_view(response)
+            : std::string_view(response).substr(0, headerEnd);
+    if (hasNextPageText != "0" && hasNextPageText != "1") {
+        error = "Lokalne API zwróciło nieprawidłową flagę paginacji luk.";
+        return false;
+    }
+
+    std::vector<CandleGapReportEntry> receivedGaps;
+    std::size_t lineStart = headerEnd == std::string::npos
+        ? response.size()
+        : headerEnd + 1;
+    while (lineStart < response.size()) {
+        const std::size_t lineEnd = response.find('\n', lineStart);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? response.size() : lineEnd;
+        if (effectiveEnd > lineStart) {
+            std::string_view row =
+                std::string_view(response).substr(
+                    lineStart, effectiveEnd - lineStart);
+            if (!row.empty() && row.back() == '\r') {
+                row.remove_suffix(1);
+            }
+            CandleGapReportEntry gap;
+            if (receivedGaps.size() == pageSize ||
+                !splitCandleGapRow(row, gap)) {
+                error = "Lokalne API zwróciło nieprawidłowe dane luk.";
+                return false;
+            }
+            receivedGaps.push_back(std::move(gap));
+        }
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    gaps = std::move(receivedGaps);
     hasNextPage = hasNextPageText == "1";
     return true;
 }

@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "DailySentenceClient.h"
+#include "CandleGapsPage.h"
 #include "ReportsPage.h"
 #include "StockPriceMonitor.h"
 
@@ -48,7 +49,13 @@ private:
     bool createReportsButton();
 
     /**
-     * Dopasowuje położenie przycisku „Raporty” do aktualnego rozmiaru okna.
+     * Tworzy przycisk „Luki świec” obok przycisku raportów.
+     * @return true, jeśli przycisk został utworzony; w przeciwnym razie false.
+     */
+    bool createCandleGapsButton();
+
+    /**
+     * Dopasowuje położenie przycisków widoków do aktualnego rozmiaru okna.
      */
     void positionReportsButton();
 
@@ -56,6 +63,11 @@ private:
      * Przełącza główną część okna na stronę raportów.
      */
     void onReportsClicked();
+
+    /**
+     * Przełącza główną część okna na tabelę brakujących świec.
+     */
+    void onCandleGapsClicked();
 
     /**
      * Odświeża zegar, gdy zmieni się wyświetlana minuta.
@@ -85,9 +97,11 @@ private:
     WORD previousHour_ = 0;
     WORD previousMinute_ = 0;
     HWND reportsButton_ = nullptr;
+    HWND candleGapsButton_ = nullptr;
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;
     StockPriceMonitor candleMonitor_;
     ReportsPage reportsPage_;
+    CandleGapsPage candleGapsPage_;
 };

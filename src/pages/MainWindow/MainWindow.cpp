@@ -15,8 +15,10 @@ constexpr char windowClassName[] = "HelloWorldWindow";
 constexpr UINT_PTR clockTimerId = 1;
 constexpr UINT candleUpdateMessage = WM_APP + 1;
 constexpr int reportsButtonId = 1001;
-constexpr int reportsButtonWidth = 128;
+constexpr int candleGapsButtonId = 1002;
+constexpr int reportsButtonWidth = 140;
 constexpr int reportsButtonHeight = 36;
+constexpr int reportsButtonGap = 12;
 constexpr int reportsButtonBottomMargin = 16;
 
 } // namespace
@@ -114,15 +116,25 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_SIZE:
             positionReportsButton();
             reportsPage_.positionControls();
+            candleGapsPage_.positionControls();
             return 0;
         case WM_COMMAND:
             if (reportsPage_.handleCommand(
                     LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
             }
+            if (candleGapsPage_.handleCommand(
+                    LOWORD(wParam), HIWORD(wParam))) {
+                return 0;
+            }
             if (LOWORD(wParam) == reportsButtonId &&
                 HIWORD(wParam) == BN_CLICKED) {
                 onReportsClicked();
+                return 0;
+            }
+            if (LOWORD(wParam) == candleGapsButtonId &&
+                HIWORD(wParam) == BN_CLICKED) {
+                onCandleGapsClicked();
                 return 0;
             }
             break;
@@ -150,8 +162,18 @@ bool MainWindow::onCreate() {
                     "Error", MB_ICONERROR);
         return false;
     }
+    if (!createCandleGapsButton()) {
+        MessageBoxW(handle_, L"Nie udało się utworzyć przycisku brakujących świec.",
+                    L"Błąd", MB_ICONERROR);
+        return false;
+    }
     if (!reportsPage_.create(instance_, handle_)) {
         MessageBoxW(handle_, L"Nie udało się utworzyć przycisków raportu.",
+                    L"Błąd", MB_ICONERROR);
+        return false;
+    }
+    if (!candleGapsPage_.create(instance_, handle_)) {
+        MessageBoxW(handle_, L"Nie udało się utworzyć widoku brakujących świec.",
                     L"Błąd", MB_ICONERROR);
         return false;
     }
@@ -205,10 +227,10 @@ void MainWindow::startDailySentenceRequest() {
  * Tworzy przycisk na dole okna; jego akcja zostanie podłączona później.
  */
 bool MainWindow::createReportsButton() {
-    reportsButton_ = CreateWindowExA(
+    reportsButton_ = CreateWindowExW(
         0,
-        "BUTTON",
-        "Raporty",
+        L"BUTTON",
+        L"Raporty",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, reportsButtonWidth, reportsButtonHeight,
         handle_,
@@ -224,10 +246,32 @@ bool MainWindow::createReportsButton() {
 }
 
 /**
- * Ustawia przycisk pośrodku dolnej krawędzi i ogranicza go do okna.
+ * Tworzy przycisk „Luki świec” obok przycisku raportów.
+ */
+bool MainWindow::createCandleGapsButton() {
+    candleGapsButton_ = CreateWindowExW(
+        0,
+        L"BUTTON",
+        L"Luki świec",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, reportsButtonWidth, reportsButtonHeight,
+        handle_,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(candleGapsButtonId)),
+        instance_,
+        nullptr);
+    if (candleGapsButton_ == nullptr) {
+        return false;
+    }
+
+    positionReportsButton();
+    return true;
+}
+
+/**
+ * Ustawia przyciski widoków obok siebie pośrodku dolnej krawędzi okna.
  */
 void MainWindow::positionReportsButton() {
-    if (reportsButton_ == nullptr) {
+    if (reportsButton_ == nullptr && candleGapsButton_ == nullptr) {
         return;
     }
 
@@ -236,13 +280,23 @@ void MainWindow::positionReportsButton() {
     const int clientWidth = clientArea.right - clientArea.left;
     const int clientHeight = clientArea.bottom - clientArea.top;
     const int buttonWidth = std::min(reportsButtonWidth, clientWidth);
+    const int buttonsWidth = buttonWidth * 2 + reportsButtonGap;
     const int buttonHeight = std::min(reportsButtonHeight, clientHeight);
-    const int buttonX = (clientWidth - buttonWidth) / 2;
+    const int firstButtonX = std::max(0, (clientWidth - buttonsWidth) / 2);
     const int buttonY = std::max(
         0, clientHeight - buttonHeight - reportsButtonBottomMargin);
 
-    MoveWindow(
-        reportsButton_, buttonX, buttonY, buttonWidth, buttonHeight, TRUE);
+    if (reportsButton_ != nullptr) {
+        MoveWindow(
+            reportsButton_, firstButtonX, buttonY,
+            buttonWidth, buttonHeight, TRUE);
+    }
+    if (candleGapsButton_ != nullptr) {
+        MoveWindow(
+            candleGapsButton_,
+            firstButtonX + buttonWidth + reportsButtonGap,
+            buttonY, buttonWidth, buttonHeight, TRUE);
+    }
 }
 
 /**
@@ -251,10 +305,28 @@ void MainWindow::positionReportsButton() {
 void MainWindow::onReportsClicked() {
     if (reportsPage_.isVisible()) {
         reportsPage_.close();
-        SetWindowTextA(reportsButton_, "Raporty");
+        SetWindowTextW(reportsButton_, L"Raporty");
     } else {
+        candleGapsPage_.close();
+        SetWindowTextW(candleGapsButton_, L"Luki świec");
         reportsPage_.open();
-        SetWindowTextA(reportsButton_, "Strona główna");
+        SetWindowTextW(reportsButton_, L"Strona główna");
+    }
+    InvalidateRect(handle_, nullptr, TRUE);
+}
+
+/**
+ * Przełącza główną część okna na tabelę brakujących świec.
+ */
+void MainWindow::onCandleGapsClicked() {
+    if (candleGapsPage_.isVisible()) {
+        candleGapsPage_.close();
+        SetWindowTextW(candleGapsButton_, L"Luki świec");
+    } else {
+        reportsPage_.close();
+        SetWindowTextW(reportsButton_, L"Raporty");
+        candleGapsPage_.open();
+        SetWindowTextW(candleGapsButton_, L"Strona główna");
     }
     InvalidateRect(handle_, nullptr, TRUE);
 }
@@ -294,6 +366,8 @@ void MainWindow::onPaint() {
         clientArea.bottom - reportsButtonHeight - reportsButtonBottomMargin * 2);
     if (reportsPage_.isVisible()) {
         reportsPage_.draw(deviceContext, clientArea);
+    } else if (candleGapsPage_.isVisible()) {
+        candleGapsPage_.draw(deviceContext, clientArea);
     } else {
         std::string dailySentence;
         {

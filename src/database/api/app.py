@@ -596,6 +596,57 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_candle_gap_page(
+        self, page: int
+    ) -> tuple[list[tuple[str, str, str, str, str | None]], bool]:
+        """Pobiera stronę luk świecowych, od najnowszego oczekiwanego czasu."""
+        page_size = 20
+        offset = page * page_size
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        symbol,
+                        candle_datetime_utc,
+                        status,
+                        detected_at_utc,
+                        filled_at_utc
+                    FROM candle_gaps
+                    ORDER BY candle_datetime_utc DESC, symbol ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (page_size + 1, offset),
+                )
+                rows = cursor.fetchall()
+                has_next_page = len(rows) > page_size
+                return [
+                    (
+                        symbol,
+                        candle_datetime_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                        status,
+                        detected_at_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                        (
+                            filled_at_utc.strftime("%Y-%m-%d %H:%M:%S")
+                            if filled_at_utc is not None
+                            else None
+                        ),
+                    )
+                    for (
+                        symbol,
+                        candle_datetime_utc,
+                        status,
+                        detected_at_utc,
+                        filled_at_utc,
+                    ) in rows[:page_size]
+                ], has_next_page
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     # :)
 
 
@@ -737,6 +788,33 @@ def candle_report(
 
     report_lines = ["1" if has_next_page else "0"]
     report_lines.extend("\t".join(row) for row in rows)
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/candles/gaps", response_class=Response)
+def candle_gap_report(
+    request: Request,
+    page: int = Query(ge=0, le=1000000),
+) -> Response:
+    """Zwraca stronę 20 luk świecowych wraz ze statusem i czasami UTC."""
+    try:
+        rows, has_next_page = (
+            request.app.state.repository.fetch_candle_gap_page(page)
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać tabeli brakujących świec.",
+        ) from error
+
+    report_lines = ["1" if has_next_page else "0"]
+    report_lines.extend(
+        "\t".join((symbol, candle_time, status, detected_at, filled_at or "--"))
+        for symbol, candle_time, status, detected_at, filled_at in rows
+    )
     return Response(
         content="\n".join(report_lines),
         media_type="text/tab-separated-values; charset=utf-8",

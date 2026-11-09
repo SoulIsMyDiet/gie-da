@@ -18,6 +18,17 @@ struct CandleReportEntry {
     std::string volume;
 };
 
+/**
+ * Przechowuje stan jednej brakującej świecy i czasy jej obsługi.
+ */
+struct CandleGapReportEntry {
+    std::string symbol;
+    std::string candleDatetimeUtc;
+    std::string status;
+    std::string detectedAtUtc;
+    std::string filledAtUtc;
+};
+
 class CandleHistoryClient {
 public:
     /**
@@ -73,6 +84,20 @@ public:
     static bool fetchCandlePage(
         std::size_t page,
         std::vector<CandleReportEntry>& candles,
+        bool& hasNextPage,
+        std::string& error);
+
+    /**
+     * Pobiera stronę 20 wpisów z historii brakujących świec.
+     * @param page Numer strony liczony od zera.
+     * @param gaps Otrzymuje wpisy luk świecowych.
+     * @param hasNextPage Otrzymuje informację, czy istnieje kolejna strona.
+     * @param error Otrzymuje opis błędu, jeśli pobranie się nie powiedzie.
+     * @return true, jeśli lokalne API zwróciło poprawną stronę.
+     */
+    static bool fetchCandleGapPage(
+        std::size_t page,
+        std::vector<CandleGapReportEntry>& gaps,
         bool& hasNextPage,
         std::string& error);
 };
