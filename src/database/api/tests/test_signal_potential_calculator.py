@@ -90,6 +90,21 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
             self.calculator.calculate("hold", self.entry_price, [])
         with self.assertRaises(ValueError):
             self.calculator.calculate("long", Decimal("0"), [])
+        with self.assertRaises(ValueError):
+            self.calculator.calculate(
+                "long", self.entry_price, [], Decimal("-0.0001")
+            )
+
+    def test_uses_spread_stored_for_signal(self) -> None:
+        """Kalkulator używa spreadu przekazanego z wiersza sygnału."""
+        result = self.calculator.calculate(
+            "long",
+            self.entry_price,
+            [(Decimal("1.1005"), Decimal("1.0998"))],
+            Decimal("0.0005"),
+        )
+
+        self.assertEqual(result["saldo_1st_candle"], Decimal("0.0000"))
 
 
 if __name__ == "__main__":

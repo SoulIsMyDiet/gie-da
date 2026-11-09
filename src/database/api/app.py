@@ -174,6 +174,7 @@ class MarketDataRepository:
                         saldo_20_aggr_candles DECIMAL(20, 10) NULL DEFAULT NULL,
                         max_candle INT NULL DEFAULT NULL,
                         `100zl_deal` DECIMAL(20, 10) NULL DEFAULT NULL,
+                        spread DECIMAL(20, 10) NOT NULL DEFAULT 0.0003,
                         UNIQUE KEY uq_signal_potention_signal_id (signal_id),
                         CONSTRAINT fk_signal_potention_signal
                             FOREIGN KEY (signal_id) REFERENCES signals(id)
@@ -254,6 +255,16 @@ class MarketDataRepository:
                 ALTER TABLE signal_potention
                 ADD COLUMN `100zl_deal` DECIMAL(20, 10) NULL DEFAULT NULL
                     AFTER max_candle
+                """
+            )
+            column_names.add("100zl_deal")
+
+        if "spread" not in column_names:
+            cursor.execute(
+                """
+                ALTER TABLE signal_potention
+                ADD COLUMN spread DECIMAL(20, 10) NOT NULL DEFAULT 0.0003
+                    AFTER `100zl_deal`
                 """
             )
 
@@ -568,8 +579,14 @@ class MarketDataRepository:
             ),
         )
         cursor.execute(
-            "INSERT INTO signal_potention (signal_id) VALUES (%s)",
-            (cursor.lastrowid,),
+            """
+            INSERT INTO signal_potention (signal_id, spread)
+            VALUES (%s, %s)
+            """,
+            (
+                cursor.lastrowid,
+                SignalPotentialCalculator.SPREAD_PRICE,
+            ),
         )
 
     def fetch_missing_candle_times(

@@ -23,6 +23,7 @@ class SignalPotentialCalculator:
         direction: str,
         entry_price: Decimal,
         candles: Sequence[tuple[Decimal, Decimal]],
+        spread_price: Decimal | None = None,
     ) -> dict[str, Decimal | int | None]:
         """Liczy dostępne salda dla kierunku, ceny wejścia i świec (high, low).
 
@@ -34,6 +35,11 @@ class SignalPotentialCalculator:
             raise ValueError("Kierunek sygnału musi mieć wartość long albo short.")
         if entry_price <= 0:
             raise ValueError("Cena wejścia musi być większa od zera.")
+        effective_spread = (
+            self.SPREAD_PRICE if spread_price is None else spread_price
+        )
+        if effective_spread < 0:
+            raise ValueError("Spread nie może być ujemny.")
 
         results: dict[str, Decimal | int | None] = {
             "saldo_1st_candle": None,
@@ -56,12 +62,12 @@ class SignalPotentialCalculator:
         )
         for index, (high, low) in enumerate(candles[:5]):
             results[single_candle_columns[index]] = self._balance(
-                normalized_direction, entry_price, high, low
+                normalized_direction, entry_price, high, low, effective_spread
             )
 
         if len(candles) >= 10:
             results["saldo_10aggr_candles"] = self._aggregate_balance(
-                normalized_direction, entry_price, candles[:10]
+                normalized_direction, entry_price, candles[:10], effective_spread
             )
 
         if len(candles) >= 20:
@@ -69,7 +75,10 @@ class SignalPotentialCalculator:
                 normalized_direction, candles[:20]
             )
             balance_20 = self._balance(
-                normalized_direction, entry_price, *candles[selected_index]
+                normalized_direction,
+                entry_price,
+                *candles[selected_index],
+                effective_spread,
             )
             results["saldo_20_aggr_candles"] = balance_20
             results["max_candle"] = selected_index + 1
@@ -101,7 +110,7 @@ class SignalPotentialCalculator:
 
         cursor.execute(
             f"""
-            SELECT p.signal_id, s.product, s.price, s.`signal`,
+            SELECT p.signal_id, s.product, s.price, s.`signal`, p.spread,
                    s.signal_parameters
             FROM signal_potention AS p
             JOIN signals AS s ON s.id = p.signal_id
@@ -113,7 +122,14 @@ class SignalPotentialCalculator:
         )
         pending_signals = cursor.fetchall()
 
-        for signal_id, product, entry_price, direction, signal_parameters in pending_signals:
+        for (
+            signal_id,
+            product,
+            entry_price,
+            direction,
+            spread_price,
+            signal_parameters,
+        ) in pending_signals:
             signal_timestamp = self._signal_timestamp(signal_parameters)
             local_timestamp = signal_timestamp.replace(
                 tzinfo=timezone.utc
@@ -141,6 +157,7 @@ class SignalPotentialCalculator:
                 direction,
                 Decimal(str(entry_price)),
                 candles,
+                Decimal(str(spread_price)),
             )
             cursor.execute(
                 """
@@ -179,11 +196,12 @@ class SignalPotentialCalculator:
         entry_price: Decimal,
         high: Decimal,
         low: Decimal,
+        spread_price: Decimal,
     ) -> Decimal:
         """Zwraca zmianę kursu po odjęciu spreadu, bez obcinania strat."""
         if direction == "short":
-            return entry_price - low - cls.SPREAD_PRICE
-        return high - entry_price - cls.SPREAD_PRICE
+            return entry_price - low - spread_price
+        return high - entry_price - spread_price
 
     @classmethod
     def _aggregate_balance(
@@ -191,10 +209,13 @@ class SignalPotentialCalculator:
         direction: str,
         entry_price: Decimal,
         candles: Sequence[tuple[Decimal, Decimal]],
+        spread_price: Decimal,
     ) -> Decimal:
         """Liczy saldo z najlepszego ekstremum w podanym oknie świec."""
         selected_index = cls._best_candle_index(direction, candles)
-        return cls._balance(direction, entry_price, *candles[selected_index])
+        return cls._balance(
+            direction, entry_price, *candles[selected_index], spread_price
+        )
 
     @staticmethod
     def _best_candle_index(
