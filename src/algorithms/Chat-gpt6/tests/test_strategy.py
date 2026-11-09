@@ -7,6 +7,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,7 +17,11 @@ from indicators import (  # noqa: E402
     WilderAverageTrueRange,
     WilderRelativeStrengthIndex,
 )
-from market_data import Candle, FiveMinuteCandleAggregator  # noqa: E402
+from market_data import (  # noqa: E402
+    Candle,
+    FiveMinuteCandleAggregator,
+    count_missing_market_minutes,
+)
 
 
 class IndicatorTests(unittest.TestCase):
@@ -101,7 +106,7 @@ class StrategyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             strategy.process_candle(candle)
 
-    def test_gap_resets_indicator_warmup_and_rearm(self) -> None:
+    def test_one_missing_candle_does_not_reset_indicators(self) -> None:
         strategy = EURUSDStrategyV1()
         first = make_candle(0, 1.1, 1.2, 1.0, 1.15)
         second = make_candle(1, 1.15, 1.2, 1.1, 1.16)
@@ -109,7 +114,72 @@ class StrategyTests(unittest.TestCase):
         strategy.process_candle(second)
         after_gap = make_candle(3, 1.16, 1.2, 1.1, 1.17)
         strategy.process_candle(after_gap)
+        expected_ema = 1.15 + (2 / 10) * (1.16 - 1.15)
+        expected_ema += (2 / 10) * (1.17 - expected_ema)
+        self.assertEqual(strategy.candles_count, 3)
+        self.assertAlmostEqual(strategy._m1_ema9.value, expected_ema)
+        self.assertEqual(strategy._rsi14.previous_close, 1.17)
+
+    def test_two_missing_market_candles_reset_indicators(self) -> None:
+        strategy = EURUSDStrategyV1()
+        strategy.process_candle(make_candle(0, 1.1, 1.2, 1.0, 1.15))
+        strategy.process_candle(make_candle(1, 1.15, 1.2, 1.1, 1.16))
+        strategy.process_candle(make_candle(4, 1.16, 1.2, 1.1, 1.17))
         self.assertEqual(strategy.candles_count, 1)
+        self.assertEqual(strategy._m1_ema9.value, 1.17)
+        self.assertEqual(strategy._rsi14.previous_close, 1.17)
+        self.assertIsNone(strategy._rsi14.value)
+        self.assertEqual(strategy._rsi14._change_count, 0)
+
+    def test_forex_weekend_gap_does_not_reset_indicators(self) -> None:
+        new_york = ZoneInfo("America/New_York")
+        friday_timestamp = datetime(
+            2026, 1, 9, 16, 59, tzinfo=new_york
+        ).astimezone(timezone.utc)
+        sunday_timestamp = datetime(
+            2026, 1, 11, 17, 0, tzinfo=new_york
+        ).astimezone(timezone.utc)
+        self.assertEqual(
+            count_missing_market_minutes(friday_timestamp, sunday_timestamp),
+            0,
+        )
+
+        strategy = EURUSDStrategyV1()
+        first = Candle(friday_timestamp, 1.1, 1.2, 1.0, 1.15)
+        second = Candle(
+            friday_timestamp + timedelta(minutes=1),
+            1.15, 1.2, 1.1, 1.16,
+        )
+        sunday = Candle(sunday_timestamp, 1.16, 1.2, 1.1, 1.17)
+        strategy.process_candle(first)
+        strategy.process_candle(second)
+        strategy.process_candle(sunday)
+
+        expected_ema = 1.15 + (2 / 10) * (1.16 - 1.15)
+        expected_ema += (2 / 10) * (1.17 - expected_ema)
+        self.assertEqual(strategy.candles_count, 3)
+        self.assertAlmostEqual(strategy._m1_ema9.value, expected_ema)
+
+    def test_open_market_gap_after_weekend_still_resets_indicators(self) -> None:
+        new_york = ZoneInfo("America/New_York")
+        friday_timestamp = datetime(
+            2026, 1, 9, 16, 58, tzinfo=new_york
+        ).astimezone(timezone.utc)
+        sunday_timestamp = datetime(
+            2026, 1, 11, 17, 3, tzinfo=new_york
+        ).astimezone(timezone.utc)
+
+        strategy = EURUSDStrategyV1()
+        strategy.process_candle(
+            Candle(friday_timestamp, 1.1, 1.2, 1.0, 1.15)
+        )
+        strategy.process_candle(
+            Candle(sunday_timestamp, 1.16, 1.2, 1.1, 1.17)
+        )
+
+        self.assertEqual(strategy.candles_count, 1)
+        self.assertEqual(strategy._m1_ema9.value, 1.17)
+        self.assertEqual(strategy._rsi14._change_count, 0)
 
     def test_warmup_needs_fifty_complete_m5_candles(self) -> None:
         strategy = EURUSDStrategyV1()

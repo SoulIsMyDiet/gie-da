@@ -48,6 +48,8 @@ Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każ
 
 Strategia inicjalizuje EMA wartością pierwszego `Close`, a kolejne wartości oblicza ze współczynnikiem `2 / (N + 1)`. RSI/ATR są wygładzane metodą Wildera. Nie znaleziono w repozytorium istniejącego backtestu Python, z którym można porównać obliczenia wskaźników. Do czasu podłączenia BID/ASK bieżący spread oraz jego limit są przyjęte na sztywno jako 3 pipsy, więc warunek spreadu obecnie nie odrzuca sygnału.
 
+Pojedyncza brakująca świeca M1 nie resetuje wskaźników. Brakujące minuty są liczone tylko w godzinach otwarcia Forex; zamknięcie od piątku 17:00 do niedzieli 17:00 czasu nowojorskiego jest pomijane. Więcej niż jedna brakująca minuta handlowa z rzędu resetuje wskaźniki i stan ponawiania sygnałów. Niedokończona agregacja M5 jest odrzucana przy każdej luce, aby nie łączyć świec z przerwą.
+
 Uzupełnianie luk działa od najnowszych wpisów wstecz, pomija weekendowe zamknięcie rynku Forex i obejmuje maksymalnie 1000 świec przy jednym starcie aplikacji. Jeśli baza nie ma jeszcze świec, aplikacja pobiera do 1000 najnowszych świec. Na stronie głównej wyświetlana jest liczba zapisanych świec oraz łączny czas sprawdzenia, pobrania i zapisu. Każde żądanie `/time_series` kosztuje kredyty zgodnie z planem Twelve Data; odległe luki mogą wymagać osobnych żądań.
 
 Przycisk „Raporty” otwiera tabelę 20 najnowszych świec. Przyciski „Poprzednia” i „Następna” pozwalają przechodzić pomiędzy stronami, a „Strona główna” wraca do głównego widoku. Lista jest pobierana z lokalnego API pod adresem `/api/candles/report`; nowe świece są zapisywane przez `/api/candles`.

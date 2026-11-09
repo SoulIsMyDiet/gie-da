@@ -5,6 +5,36 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import isfinite
+from zoneinfo import ZoneInfo
+
+NEW_YORK_TIME_ZONE = ZoneInfo("America/New_York")
+
+
+def is_forex_market_open(utc_time: datetime) -> bool:
+    """Sprawdza godziny rynku Forex, w tym zamknięcie od piątku do niedzieli."""
+    new_york_time = utc_time.astimezone(NEW_YORK_TIME_ZONE)
+    weekday = new_york_time.weekday()
+    minute_of_day = new_york_time.hour * 60 + new_york_time.minute
+    return (
+        weekday in (0, 1, 2, 3)
+        or (weekday == 4 and minute_of_day < 17 * 60)
+        or (weekday == 6 and minute_of_day >= 17 * 60)
+    )
+
+
+def count_missing_market_minutes(
+    previous_timestamp: datetime,
+    current_timestamp: datetime,
+    stop_after: int = 2,
+) -> int:
+    """Liczy brakujące minuty handlowe, pomijając godziny zamknięcia Forex."""
+    missing_count = 0
+    missing_timestamp = previous_timestamp + timedelta(minutes=1)
+    while missing_timestamp < current_timestamp and missing_count < stop_after:
+        if is_forex_market_open(missing_timestamp):
+            missing_count += 1
+        missing_timestamp += timedelta(minutes=1)
+    return missing_count
 
 
 @dataclass(frozen=True)

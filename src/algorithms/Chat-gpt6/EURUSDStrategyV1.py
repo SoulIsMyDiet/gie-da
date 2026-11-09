@@ -13,7 +13,11 @@ from indicators import (
     WilderAverageTrueRange,
     WilderRelativeStrengthIndex,
 )
-from market_data import Candle, FiveMinuteCandleAggregator
+from market_data import (
+    Candle,
+    FiveMinuteCandleAggregator,
+    count_missing_market_minutes,
+)
 from signal_serializer import Signal
 
 STRATEGY_NAME = "Chat-gpt6/EURUSDStrategyV1"
@@ -90,7 +94,13 @@ class EURUSDStrategyV1:
                     return None
                 raise ValueError("Świece muszą być przekazywane w kolejności czasu UTC.")
             if candle.timestamp - self._last_m1_timestamp != timedelta(minutes=1):
-                self.reset()
+                missing_market_minutes = count_missing_market_minutes(
+                    self._last_m1_timestamp,
+                    candle.timestamp,
+                )
+                self._m5_aggregator.reset()
+                if missing_market_minutes > 1:
+                    self.reset()
 
         self._last_m1_timestamp = candle.timestamp
 
