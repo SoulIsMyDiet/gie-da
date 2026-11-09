@@ -10,6 +10,7 @@
 #include "DailySentenceClient.h"
 #include "CandleGapsPage.h"
 #include "ReportsPage.h"
+#include "SignalsPage.h"
 #include "StockPriceMonitor.h"
 
 class MainWindow {
@@ -55,6 +56,12 @@ private:
     bool createCandleGapsButton();
 
     /**
+     * Tworzy przycisk „Sygnały” obok pozostałych widoków tabel.
+     * @return true, jeśli przycisk został utworzony; w przeciwnym razie false.
+     */
+    bool createSignalsButton();
+
+    /**
      * Dopasowuje położenie przycisków widoków do aktualnego rozmiaru okna.
      */
     void positionReportsButton();
@@ -68,6 +75,11 @@ private:
      * Przełącza główną część okna na tabelę brakujących świec.
      */
     void onCandleGapsClicked();
+
+    /**
+     * Przełącza główną część okna na tabelę signals.
+     */
+    void onSignalsClicked();
 
     /**
      * Odświeża zegar, gdy zmieni się wyświetlana minuta.
@@ -98,10 +110,12 @@ private:
     WORD previousMinute_ = 0;
     HWND reportsButton_ = nullptr;
     HWND candleGapsButton_ = nullptr;
+    HWND signalsButton_ = nullptr;
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;
     StockPriceMonitor candleMonitor_;
     ReportsPage reportsPage_;
     CandleGapsPage candleGapsPage_;
+    SignalsPage signalsPage_;
 };

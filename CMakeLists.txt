@@ -8,6 +8,7 @@ add_executable(gieda WIN32
     src/pages/MainWindow/MainWindow.cpp
     src/pages/reports/ReportsPage.cpp
     src/pages/reports/CandleGapsPage.cpp
+    src/pages/reports/SignalsPage.cpp
     src/stockmarket/StockPriceMonitor.cpp
     src/pages/MainWindow/MainWindowDisplay.cpp
     src/stockmarket/StockMarketClient/TwelveDataClient.cpp

@@ -138,6 +138,6 @@ Tabela `candle_gaps` zapisuje każdą wykrytą brakującą minutę. Po zapisaniu
 status zmienia się z `missing` na `filled`, a wpis pozostaje jako historia. Przy
 wykryciu luki aplikacja odtwarza dźwięk i pokazuje komunikat, który wskazuje tę tabelę.
 Podgląd aktywnych i uzupełnionych wpisów otworzysz przyciskiem „Luki świec” obok
-przycisku „Raporty”. API nie zapisuje świec przypadających na weekendowe zamknięcie
+przycisku „Raporty”. Przycisk „Sygnały” otwiera podgląd tabeli signals. API nie zapisuje świec przypadających na weekendowe zamknięcie
 Forex (piątek 17:00 – niedziela 17:00 czasu Nowego Jorku), ani przy pobieraniu co
 minutę, ani podczas nadrabiania historii.

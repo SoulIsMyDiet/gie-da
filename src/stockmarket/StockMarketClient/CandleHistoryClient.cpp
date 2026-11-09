@@ -343,6 +343,46 @@ bool splitCandleGapRow(std::string_view row, CandleGapReportEntry& gap) {
     return true;
 }
 
+/**
+ * Sprawdza i rozdziela wiersz raportu zawierający dziesięć pól sygnału.
+ */
+bool splitSignalReportRow(
+    std::string_view row, SignalReportEntry& signal) {
+    std::string_view fields[10];
+    std::size_t fieldStart = 0;
+    for (std::size_t index = 0; index < 9; ++index) {
+        const std::size_t separator = row.find('\t', fieldStart);
+        if (separator == std::string_view::npos) {
+            return false;
+        }
+        fields[index] = row.substr(fieldStart, separator - fieldStart);
+        fieldStart = separator + 1;
+    }
+    if (row.find('\t', fieldStart) != std::string_view::npos) {
+        return false;
+    }
+    fields[9] = row.substr(fieldStart);
+
+    for (std::size_t index = 0; index < 10; ++index) {
+        if (fields[index].empty() ||
+            fields[index].size() > (index == 9 ? 8192 : 512)) {
+            return false;
+        }
+    }
+
+    signal.id.assign(fields[0]);
+    signal.datetime.assign(fields[1]);
+    signal.product.assign(fields[2]);
+    signal.price.assign(fields[3]);
+    signal.direction.assign(fields[4]);
+    signal.algorithmName.assign(fields[5]);
+    signal.aiDecision.assign(fields[6]);
+    signal.transactionId.assign(fields[7]);
+    signal.candlesCount.assign(fields[8]);
+    signal.signalParameters.assign(fields[9]);
+    return true;
+}
+
 } // namespace
 
 /**
@@ -810,6 +850,116 @@ bool CandleHistoryClient::fetchCandleGapPage(
     }
 
     gaps = std::move(receivedGaps);
+    hasNextPage = hasNextPageText == "1";
+    return true;
+}
+
+/**
+ * Pobiera i waliduje stronę historii sygnałów z lokalnego API.
+ */
+bool CandleHistoryClient::fetchSignalPage(
+    std::size_t page,
+    std::vector<SignalReportEntry>& signals,
+    bool& hasNextPage,
+    std::string& error) {
+    if (page > 1000000 ||
+        page > static_cast<std::size_t>(
+                   std::numeric_limits<unsigned long long>::max() / pageSize)) {
+        error = "Numer strony tabeli sygnałów jest poza zakresem.";
+        return false;
+    }
+
+    InternetHandle session{WinHttpOpen(
+        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (session.value == nullptr) {
+        error = "Nie udało się rozpocząć żądania tabeli sygnałów.";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
+
+    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
+    if (connection.value == nullptr) {
+        error = "Nie można połączyć się z lokalnym API raportów.";
+        return false;
+    }
+
+    const std::wstring requestPath =
+        L"/api/signals/report?page=" + std::to_wstring(page);
+    InternetHandle request{WinHttpOpenRequest(
+        connection.value, L"GET", requestPath.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
+    if (request.value == nullptr ||
+        !WinHttpSendRequest(
+            request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "Lokalne API tabeli sygnałów nie odpowiedziało.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(
+            request.value,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        error = "Nie udało się odczytać odpowiedzi lokalnego API.";
+        return false;
+    }
+    if (statusCode != 200) {
+        error = "Lokalne API zwróciło HTTP " +
+                std::to_string(statusCode) + " dla tabeli sygnałów.";
+        return false;
+    }
+
+    std::string response;
+    if (!readResponse(request.value, response, error)) {
+        return false;
+    }
+    const std::size_t headerEnd = response.find('\n');
+    std::string_view hasNextPageText = headerEnd == std::string::npos
+        ? std::string_view(response)
+        : std::string_view(response).substr(0, headerEnd);
+    if (!hasNextPageText.empty() && hasNextPageText.back() == '\r') {
+        hasNextPageText.remove_suffix(1);
+    }
+    if (hasNextPageText != "0" && hasNextPageText != "1") {
+        error = "Lokalne API zwróciło nieprawidłową flagę paginacji sygnałów.";
+        return false;
+    }
+
+    std::vector<SignalReportEntry> receivedSignals;
+    std::size_t lineStart = headerEnd == std::string::npos
+        ? response.size()
+        : headerEnd + 1;
+    while (lineStart < response.size()) {
+        const std::size_t lineEnd = response.find('\n', lineStart);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? response.size() : lineEnd;
+        if (effectiveEnd > lineStart) {
+            std::string_view row =
+                std::string_view(response).substr(
+                    lineStart, effectiveEnd - lineStart);
+            if (!row.empty() && row.back() == '\r') {
+                row.remove_suffix(1);
+            }
+            SignalReportEntry signal;
+            if (receivedSignals.size() == pageSize ||
+                !splitSignalReportRow(row, signal)) {
+                error = "Lokalne API zwróciło nieprawidłowe dane sygnałów.";
+                return false;
+            }
+            receivedSignals.push_back(std::move(signal));
+        }
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    signals = std::move(receivedSignals);
     hasNextPage = hasNextPageText == "1";
     return true;
 }

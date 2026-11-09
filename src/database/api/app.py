@@ -669,6 +669,68 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_signal_page(
+        self, page: int
+    ) -> tuple[list[tuple[str, ...]], bool]:
+        """Pobiera 20 najnowszych sygnałów wraz z parametrami JSON."""
+        page_size = 20
+        offset = page * page_size
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        `datetime`,
+                        product,
+                        CAST(price AS CHAR),
+                        `signal`,
+                        algorithm_name,
+                        COALESCE(CAST(ai_decision AS CHAR), 'NULL'),
+                        COALESCE(CAST(transaction_id AS CHAR), '--'),
+                        candles_count,
+                        CAST(signal_parameters AS CHAR)
+                    FROM signals
+                    ORDER BY `datetime` DESC, id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (page_size + 1, offset),
+                )
+                rows = cursor.fetchall()
+                has_next_page = len(rows) > page_size
+                return [
+                    (
+                        str(signal_id),
+                        signal_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+                        product,
+                        price,
+                        signal_direction,
+                        algorithm_name,
+                        ai_decision,
+                        transaction_id,
+                        str(candles_count),
+                        signal_parameters,
+                    )
+                    for (
+                        signal_id,
+                        signal_datetime,
+                        product,
+                        price,
+                        signal_direction,
+                        algorithm_name,
+                        ai_decision,
+                        transaction_id,
+                        candles_count,
+                        signal_parameters,
+                    ) in rows[:page_size]
+                ], has_next_page
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     # :)
 
 
@@ -852,6 +914,28 @@ def candle_gap_report(
         "\t".join((symbol, candle_time, status, detected_at, filled_at or "--"))
         for symbol, candle_time, status, detected_at, filled_at in rows
     )
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/signals/report", response_class=Response)
+def signal_report(
+    request: Request,
+    page: int = Query(ge=0, le=1000000),
+) -> Response:
+    """Zwraca stronę 20 najnowszych sygnałów jako dane TSV."""
+    try:
+        rows, has_next_page = request.app.state.repository.fetch_signal_page(page)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać tabeli sygnałów.",
+        ) from error
+
+    report_lines = ["1" if has_next_page else "0"]
+    report_lines.extend("\t".join(row) for row in rows)
     return Response(
         content="\n".join(report_lines),
         media_type="text/tab-separated-values; charset=utf-8",

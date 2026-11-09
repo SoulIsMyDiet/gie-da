@@ -29,6 +29,22 @@ struct CandleGapReportEntry {
     std::string filledAtUtc;
 };
 
+/**
+ * Przechowuje wszystkie kolumny jednego wpisu tabeli sygnałów.
+ */
+struct SignalReportEntry {
+    std::string id;
+    std::string datetime;
+    std::string product;
+    std::string price;
+    std::string direction;
+    std::string algorithmName;
+    std::string aiDecision;
+    std::string transactionId;
+    std::string candlesCount;
+    std::string signalParameters;
+};
+
 class CandleHistoryClient {
 public:
     /**
@@ -104,6 +120,20 @@ public:
     static bool fetchCandleGapPage(
         std::size_t page,
         std::vector<CandleGapReportEntry>& gaps,
+        bool& hasNextPage,
+        std::string& error);
+
+    /**
+     * Pobiera stronę 20 najnowszych wpisów tabeli signals.
+     * @param page Numer strony liczony od zera.
+     * @param signals Otrzymuje wpisy sygnałów z bazy.
+     * @param hasNextPage Otrzymuje informację, czy istnieje kolejna strona.
+     * @param error Otrzymuje opis błędu, jeśli pobranie się nie powiedzie.
+     * @return true, jeśli lokalne API zwróciło poprawną stronę.
+     */
+    static bool fetchSignalPage(
+        std::size_t page,
+        std::vector<SignalReportEntry>& signals,
         bool& hasNextPage,
         std::string& error);
 };
