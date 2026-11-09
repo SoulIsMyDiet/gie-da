@@ -158,12 +158,95 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS signal_potention (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        signal_id BIGINT UNSIGNED NOT NULL,
+                        saldo_1st_candle DECIMAL(20, 10) NULL DEFAULT NULL,
+                        saldo_2nd_candle DECIMAL(20, 10) NULL DEFAULT NULL,
+                        saldo_3rd_candle DECIMAL(20, 10) NULL DEFAULT NULL,
+                        saldo_4th_candle DECIMAL(20, 10) NULL DEFAULT NULL,
+                        saldo_5th_candle DECIMAL(20, 10) NULL DEFAULT NULL,
+                        saldo_10aggr_candles DECIMAL(20, 10) NULL DEFAULT NULL,
+                        saldo_20_aggr_candles DECIMAL(20, 10) NULL DEFAULT NULL,
+                        max_candle INT NULL DEFAULT NULL,
+                        `100zl_deal` DECIMAL(20, 10) NULL DEFAULT NULL,
+                        UNIQUE KEY uq_signal_potention_signal_id (signal_id),
+                        CONSTRAINT fk_signal_potention_signal
+                            FOREIGN KEY (signal_id) REFERENCES signals(id)
+                    ) ENGINE=InnoDB
+                    """
+                )
+                self._migrate_signal_potention_schema(cursor)
                 self._migrate_candle_timestamps(cursor)
                 connection.commit()
             finally:
                 cursor.close()
         finally:
             connection.close()
+
+    def _migrate_signal_potention_schema(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Aktualizuje kolumny tabeli wyników sygnałów bez utraty dotychczasowych sald."""
+        cursor.execute("SHOW COLUMNS FROM signal_potention")
+        column_names = {column[0] for column in cursor.fetchall()}
+
+        old_saldo_column = "saldo_10th_candle"
+        new_saldo_column = "saldo_10aggr_candles"
+        if old_saldo_column in column_names and new_saldo_column not in column_names:
+            cursor.execute(
+                """
+                ALTER TABLE signal_potention
+                CHANGE COLUMN saldo_10th_candle saldo_10aggr_candles
+                    DECIMAL(20, 10) NULL DEFAULT NULL
+                """
+            )
+            column_names.remove(old_saldo_column)
+            column_names.add(new_saldo_column)
+        elif old_saldo_column in column_names and new_saldo_column in column_names:
+            cursor.execute(
+                """
+                UPDATE signal_potention
+                SET saldo_10aggr_candles =
+                    COALESCE(saldo_10aggr_candles, saldo_10th_candle)
+                """
+            )
+            cursor.execute(
+                "ALTER TABLE signal_potention DROP COLUMN saldo_10th_candle"
+            )
+            column_names.remove(old_saldo_column)
+
+        if "saldo_20_aggr_candles" not in column_names:
+            cursor.execute(
+                """
+                ALTER TABLE signal_potention
+                ADD COLUMN saldo_20_aggr_candles
+                    DECIMAL(20, 10) NULL DEFAULT NULL
+                    AFTER saldo_10aggr_candles
+                """
+            )
+            column_names.add("saldo_20_aggr_candles")
+
+        if "max_candle" not in column_names:
+            cursor.execute(
+                """
+                ALTER TABLE signal_potention
+                ADD COLUMN max_candle INT NULL DEFAULT NULL
+                    AFTER saldo_20_aggr_candles
+                """
+            )
+            column_names.add("max_candle")
+
+        if "100zl_deal" not in column_names:
+            cursor.execute(
+                """
+                ALTER TABLE signal_potention
+                ADD COLUMN `100zl_deal` DECIMAL(20, 10) NULL DEFAULT NULL
+                    AFTER max_candle
+                """
+            )
 
     def _migrate_candle_timestamps(
         self, cursor: mysql.connector.cursor.MySQLCursor
