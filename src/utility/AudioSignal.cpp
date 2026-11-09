@@ -6,6 +6,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 namespace {
 
@@ -15,11 +17,9 @@ constexpr DWORD signalDurationMs = 350;
 constexpr DWORD sampleCount = sampleRate * signalDurationMs / 1000;
 constexpr DWORD signalGapMs = 150;
 constexpr DWORD gapSampleCount = sampleRate * signalGapMs / 1000;
-constexpr DWORD sequenceSampleCount = sampleCount * 3 + gapSampleCount * 2;
 
 #pragma pack(push, 1)
-// WAV header followed by the generated mono, 16-bit PCM samples.
-struct WaveData {
+struct WaveHeader {
     char riffId[4];
     DWORD riffSize;
     char waveId[4];
@@ -33,24 +33,33 @@ struct WaveData {
     WORD bitsPerSample;
     char dataId[4];
     DWORD dataSize;
-    std::int16_t samples[sequenceSampleCount];
 };
 #pragma pack(pop)
 
-static_assert(sizeof(WaveData) == 44 + sequenceSampleCount * sizeof(std::int16_t));
-
-} // namespace
+static_assert(sizeof(WaveHeader) == 44);
 
 /**
- * Builds a three-pulse 440 Hz WAV signal and plays it synchronously.
- * @return true if playback succeeds; otherwise false.
+ * Buduje i odtwarza wskazaną liczbę krótkich piknięć.
  */
-bool AudioSignal::play() {
+bool playBeeps(DWORD beepCount) {
     constexpr double pi = 3.14159265358979323846;
     constexpr double frequency = 440.0;
-    WaveData wave{
+    const DWORD sequenceSampleCount =
+        sampleCount * beepCount + gapSampleCount * (beepCount - 1);
+    std::vector<std::int16_t> samples(sequenceSampleCount, 0);
+    for (DWORD beep = 0; beep < beepCount; ++beep) {
+        const DWORD start = beep * (sampleCount + gapSampleCount);
+        for (DWORD index = 0; index < sampleCount; ++index) {
+            const double phase = 2.0 * pi * frequency * index / sampleRate;
+            samples[start + index] =
+                static_cast<std::int16_t>(12000.0 * std::sin(phase));
+        }
+    }
+
+    WaveHeader header{
         {'R', 'I', 'F', 'F'},
-        static_cast<DWORD>(sizeof(WaveData) - 8),
+        static_cast<DWORD>(
+            sizeof(WaveHeader) + samples.size() * sizeof(std::int16_t) - 8),
         {'W', 'A', 'V', 'E'},
         {'f', 'm', 't', ' '},
         16,
@@ -61,17 +70,31 @@ bool AudioSignal::play() {
         sizeof(std::int16_t),
         16,
         {'d', 'a', 't', 'a'},
-        sequenceSampleCount * sizeof(std::int16_t),
-        {}
+        static_cast<DWORD>(samples.size() * sizeof(std::int16_t))
     };
 
-    for (DWORD signal = 0; signal < 3; ++signal) {
-        const DWORD start = signal * (sampleCount + gapSampleCount);
-        for (DWORD i = 0; i < sampleCount; ++i) {
-            const double phase = 2.0 * pi * frequency * i / sampleRate;
-            wave.samples[start + i] = static_cast<std::int16_t>(12000.0 * std::sin(phase));
-        }
-    }
+    std::vector<std::uint8_t> wave(
+        sizeof(header) + samples.size() * sizeof(std::int16_t));
+    std::memcpy(wave.data(), &header, sizeof(header));
+    std::memcpy(
+        wave.data() + sizeof(header), samples.data(),
+        samples.size() * sizeof(std::int16_t));
+    return PlaySoundA(
+        reinterpret_cast<LPCSTR>(wave.data()), nullptr, SND_MEMORY | SND_SYNC);
+}
 
-    return PlaySoundA(reinterpret_cast<LPCSTR>(&wave), nullptr, SND_MEMORY | SND_SYNC);
+} // namespace
+
+/**
+ * Odtwarza trzy piknięcia używane jako powiadomienie o brakujących świecach.
+ */
+bool AudioSignal::play() {
+    return playBeeps(3);
+}
+
+/**
+ * Odtwarza dwa piknięcia po potwierdzonym zapisie sygnału do bazy.
+ */
+bool AudioSignal::playSignalSaved() {
+    return playBeeps(2);
 }

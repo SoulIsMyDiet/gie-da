@@ -352,8 +352,10 @@ bool CandleHistoryClient::saveCandle(
     const std::string& symbol,
     const CandleData& candle,
     std::size_t& newlyDetectedGapCount,
+    bool& signalSaved,
     std::string& error) {
     newlyDetectedGapCount = 0;
+    signalSaved = false;
     std::string utcDatetime;
     if (!formatUtcDatetime(candle.datetime, utcDatetime)) {
         error = "Twelve Data zwróciło czas świecy w nieobsługiwanym formacie.";
@@ -366,19 +368,33 @@ bool CandleHistoryClient::saveCandle(
             singleCandleApiPath, requestBody, 200, responseBody, error)) {
         return false;
     }
-    if (responseBody.empty()) {
-        error = "Lokalne API nie zwróciło liczby wykrytych luk.";
+    const std::size_t countLineEnd = responseBody.find('\n');
+    if (countLineEnd == std::string::npos) {
+        error = "Lokalne API nie zwróciło statusu zapisu sygnału.";
         return false;
     }
-    for (const unsigned char character : responseBody) {
+    std::string_view countText(responseBody.data(), countLineEnd);
+    std::string_view signalText(responseBody.data() + countLineEnd + 1,
+                                responseBody.size() - countLineEnd - 1);
+    if (!countText.empty() && countText.back() == '\r') {
+        countText.remove_suffix(1);
+    }
+    if (!signalText.empty() && signalText.back() == '\r') {
+        signalText.remove_suffix(1);
+    }
+    for (const unsigned char character : countText) {
         if (character < '0' || character > '9') {
             error = "Lokalne API zwróciło nieprawidłową liczbę wykrytych luk.";
             return false;
         }
     }
+    if (signalText != "0" && signalText != "1") {
+        error = "Lokalne API zwróciło nieprawidłowy status zapisu sygnału.";
+        return false;
+    }
     try {
         newlyDetectedGapCount =
-            static_cast<std::size_t>(std::stoull(responseBody));
+            static_cast<std::size_t>(std::stoull(std::string(countText)));
     } catch (const std::out_of_range&) {
         error = "Lokalne API zwróciło zbyt dużą liczbę wykrytych luk.";
         return false;
@@ -386,6 +402,7 @@ bool CandleHistoryClient::saveCandle(
         error = "Lokalne API zwróciło nieprawidłową liczbę wykrytych luk.";
         return false;
     }
+    signalSaved = signalText == "1";
     return true;
 }
 

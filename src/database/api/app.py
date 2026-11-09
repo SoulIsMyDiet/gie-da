@@ -215,7 +215,7 @@ class MarketDataRepository:
 
     def save_candle(
         self, candle: CandleRecord, signal: Signal | None = None
-    ) -> tuple[int, int, str]:
+    ) -> tuple[int, int, str, bool]:
         """Zapisuje świecę i zwraca liczbę nowo wykrytych luk."""
         return self.save_candles([candle], signal, detect_gaps=True)
 
@@ -224,7 +224,7 @@ class MarketDataRepository:
         candles: list[CandleRecord],
         signal: Signal | None = None,
         detect_gaps: bool = False,
-    ) -> tuple[int, int, str]:
+    ) -> tuple[int, int, str, bool]:
         """Zapisuje tylko świece z godzin otwarcia rynku i zwraca ich najnowszy czas."""
         candle_values = []
         product_symbols = set()
@@ -237,7 +237,7 @@ class MarketDataRepository:
             )
         ]
         if not open_market_candles:
-            return 0, 0, ""
+            return 0, 0, "", False
 
         for candle in open_market_candles:
             candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
@@ -326,6 +326,7 @@ class MarketDataRepository:
             newly_detected_gap_count,
             len(open_market_candles),
             latest_saved_time,
+            signal is not None,
         )
 
     def _detect_gaps_before_candle(
@@ -700,7 +701,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
     if not request.app.state.repository._is_forex_market_open(
         candle.datetime.astimezone(timezone.utc)
     ):
-        return Response(content="0", media_type="text/plain; charset=utf-8")
+        return Response(content="0\n0", media_type="text/plain; charset=utf-8")
 
     try:
         with strategy_lock:
@@ -731,8 +732,8 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                         ),
                     )
                 )
-            new_gap_count, _, _ = request.app.state.repository.save_candle(
-                candle, signal
+            new_gap_count, _, _, signal_saved = (
+                request.app.state.repository.save_candle(candle, signal)
             )
             request.app.state.eurusd_strategy = updated_strategy
     except mysql.connector.Error as error:
@@ -746,7 +747,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
             detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
         ) from error
     return Response(
-        content=str(new_gap_count),
+        content=f"{new_gap_count}\n{int(signal_saved)}",
         media_type="text/plain; charset=utf-8",
     )
 
@@ -757,7 +758,7 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
     try:
         with strategy_lock:
             request.app.state.strategy_ready = False
-            _, saved_candle_count, latest_saved_time = (
+            _, saved_candle_count, latest_saved_time, _ = (
                 request.app.state.repository.save_candles(
                     batch.candles
                 )

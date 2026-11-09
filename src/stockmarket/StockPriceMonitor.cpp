@@ -327,9 +327,10 @@ bool StockPriceMonitor::updateCandle() {
             monitoredSymbol, candle, error);
     bool saved = false;
     std::size_t newlyDetectedGapCount = 0;
+    bool signalSaved = false;
     if (fetched) {
         saved = CandleHistoryClient::saveCandle(
-            monitoredSymbol, candle, newlyDetectedGapCount, error);
+            monitoredSymbol, candle, newlyDetectedGapCount, signalSaved, error);
     }
     std::string updateStatus;
     if (!fetched) {
@@ -345,6 +346,9 @@ bool StockPriceMonitor::updateCandle() {
     }
     if (saved && newlyDetectedGapCount > 0 && !AudioSignal::play()) {
         updateStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
+    }
+    if (saved && signalSaved && !AudioSignal::playSignalSaved()) {
+        updateStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
     }
     const bool latestCandleAvailable = fetched && isLatestClosedMinute(candle);
 

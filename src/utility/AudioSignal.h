@@ -3,8 +3,14 @@
 class AudioSignal {
 public:
     /**
-     * Generates and plays a short three-tone audio signal.
-     * @return true if Windows successfully played the signal; otherwise false.
+     * Odtwarza trzy piknięcia informujące o wykryciu luki w świecach.
+     * @return true, jeśli system Windows odtworzył dźwięk; w przeciwnym razie false.
      */
     static bool play();
+
+    /**
+     * Odtwarza dwa piknięcia potwierdzające zapis sygnału inwestycyjnego.
+     * @return true, jeśli system Windows odtworzył dźwięk; w przeciwnym razie false.
+     */
+    static bool playSignalSaved();
 };
