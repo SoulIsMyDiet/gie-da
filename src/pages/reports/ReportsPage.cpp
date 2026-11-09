@@ -54,8 +54,8 @@ void drawCell(
  */
 bool ReportsPage::create(HINSTANCE instance, HWND parent) {
     parent_ = parent;
-    previousPageButton_ = CreateWindowExA(
-        0, "BUTTON", "Poprzednia",
+    previousPageButton_ = CreateWindowExW(
+        0, L"BUTTON", L"Poprzednia",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, pageButtonWidth, pageButtonHeight,
         parent_, reinterpret_cast<HMENU>(
@@ -65,8 +65,8 @@ bool ReportsPage::create(HINSTANCE instance, HWND parent) {
         return false;
     }
 
-    nextPageButton_ = CreateWindowExA(
-        0, "BUTTON", "Następna",
+    nextPageButton_ = CreateWindowExW(
+        0, L"BUTTON", L"Następna",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, pageButtonWidth, pageButtonHeight,
         parent_, reinterpret_cast<HMENU>(
