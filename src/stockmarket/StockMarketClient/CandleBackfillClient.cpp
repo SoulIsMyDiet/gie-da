@@ -79,12 +79,15 @@ bool CandleBackfillClient::synchronize(
     result = {};
     const auto startedAt = std::chrono::steady_clock::now();
     bool hasExistingCandles = false;
+    std::size_t detectedGapCount = 0;
     std::vector<std::string> missingTimes;
     if (!CandleHistoryClient::fetchMissingCandleTimes(
-            monitoredSymbol, hasExistingCandles, missingTimes, error)) {
+            monitoredSymbol, hasExistingCandles, missingTimes,
+            detectedGapCount, error)) {
         updateElapsedTime(result, startedAt);
         return false;
     }
+    result.detectedGapCount = detectedGapCount;
 
     if (!hasExistingCandles) {
         std::vector<CandleData> latestCandles;

@@ -124,6 +124,22 @@ class MarketDataRepository:
                 )
                 cursor.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS candle_gaps (
+                        symbol VARCHAR(32) NOT NULL,
+                        candle_datetime_utc DATETIME(6) NOT NULL,
+                        status ENUM('missing', 'filled') NOT NULL DEFAULT 'missing',
+                        detected_at_utc DATETIME(6) NOT NULL,
+                        filled_at_utc DATETIME(6) NULL,
+                        PRIMARY KEY (symbol, candle_datetime_utc),
+                        INDEX idx_candle_gaps_status_time
+                            (status, candle_datetime_utc),
+                        CONSTRAINT fk_candle_gaps_product
+                            FOREIGN KEY (symbol) REFERENCES products(symbol)
+                    ) ENGINE=InnoDB
+                    """
+                )
+                cursor.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS signals (
                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
                         `datetime` DATETIME(6) NOT NULL,
@@ -199,16 +215,20 @@ class MarketDataRepository:
 
     def save_candle(
         self, candle: CandleRecord, signal: Signal | None = None
-    ) -> None:
-        """Zapisuje świecę lub aktualizuje jej wartości dla tego samego symbolu i czasu."""
-        self.save_candles([candle], signal)
+    ) -> int:
+        """Zapisuje świecę i zwraca liczbę nowo wykrytych luk."""
+        return self.save_candles([candle], signal, detect_gaps=True)
 
     def save_candles(
-        self, candles: list[CandleRecord], signal: Signal | None = None
-    ) -> None:
-        """Zapisuje paczkę świec i opcjonalny sygnał w jednej transakcji."""
+        self,
+        candles: list[CandleRecord],
+        signal: Signal | None = None,
+        detect_gaps: bool = False,
+    ) -> int:
+        """Zapisuje świece, uzupełnia status luk i opcjonalnie wykrywa nowe luki."""
         candle_values = []
         product_symbols = set()
+        newly_detected_gap_count = 0
         for candle in candles:
             candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
             local_datetime = candle_datetime_local.replace(tzinfo=None)
@@ -238,6 +258,11 @@ class MarketDataRepository:
                 """,
                 [(symbol,) for symbol in product_symbols],
             )
+            if detect_gaps:
+                for candle in candles:
+                    newly_detected_gap_count += self._detect_gaps_before_candle(
+                        cursor, candle
+                    )
             cursor.executemany(
                 """
                 INSERT INTO candles
@@ -253,6 +278,23 @@ class MarketDataRepository:
                 """,
                 candle_values,
             )
+            current_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            cursor.executemany(
+                """
+                UPDATE candle_gaps
+                SET status = 'filled', filled_at_utc = %s
+                WHERE symbol = %s AND candle_datetime_utc = %s
+                    AND status = 'missing'
+                """,
+                [
+                    (
+                        current_utc,
+                        candle.symbol,
+                        candle.datetime.astimezone(timezone.utc).replace(tzinfo=None),
+                    )
+                    for candle in candles
+                ],
+            )
             if signal is not None:
                 self._insert_signal(cursor, signal)
             connection.commit()
@@ -263,6 +305,83 @@ class MarketDataRepository:
             if cursor is not None:
                 cursor.close()
             connection.close()
+        return newly_detected_gap_count
+
+    def _detect_gaps_before_candle(
+        self, cursor: mysql.connector.cursor.MySQLCursor, candle: CandleRecord
+    ) -> int:
+        """Rejestruje brakujące minuty handlowe między poprzednią świecą a nową."""
+        current_utc = candle.datetime.astimezone(timezone.utc)
+        cursor.execute(
+            """
+            SELECT datetime, utc_offset_minutes
+            FROM candles
+            WHERE symbol = %s
+                AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE) < %s
+            ORDER BY DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE) DESC
+            LIMIT 1
+            """,
+            (candle.symbol, current_utc.replace(tzinfo=None)),
+        )
+        previous_row = cursor.fetchone()
+        if previous_row is None:
+            return 0
+
+        previous_utc = previous_row[0].replace(
+            tzinfo=timezone(timedelta(minutes=previous_row[1]))
+        ).astimezone(timezone.utc)
+        missing_times = []
+        missing_time = previous_utc + timedelta(minutes=1)
+        while missing_time < current_utc:
+            if self._is_forex_market_open(missing_time):
+                missing_times.append(missing_time)
+            missing_time += timedelta(minutes=1)
+        return self._upsert_candle_gaps(
+            cursor, candle.symbol, missing_times, count_new_records=True
+        )
+
+    @staticmethod
+    def _upsert_candle_gaps(
+        cursor: mysql.connector.cursor.MySQLCursor,
+        symbol: str,
+        missing_times: list[datetime],
+        count_new_records: bool = False,
+    ) -> int:
+        """Zapisuje lub ponownie otwiera wpisy luk, nie tworząc duplikatów."""
+        if not missing_times:
+            return 0
+
+        detected_at_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        gap_values = [
+            (
+                symbol,
+                missing_time.astimezone(timezone.utc).replace(tzinfo=None),
+                detected_at_utc,
+            )
+            for missing_time in missing_times
+        ]
+        upsert_query = """
+            INSERT INTO candle_gaps
+                (symbol, candle_datetime_utc, status, detected_at_utc)
+            VALUES (%s, %s, 'missing', %s)
+            ON DUPLICATE KEY UPDATE
+                detected_at_utc = IF(
+                    status = 'filled', VALUES(detected_at_utc),
+                    detected_at_utc
+                ),
+                filled_at_utc = IF(status = 'filled', NULL, filled_at_utc),
+                status = 'missing'
+            """
+        if not count_new_records:
+            cursor.executemany(upsert_query, gap_values)
+            return 0
+
+        newly_detected_count = 0
+        for gap_value in gap_values:
+            cursor.execute(upsert_query, gap_value)
+            if cursor.rowcount > 0:
+                newly_detected_count += 1
+        return newly_detected_count
 
     def fetch_candle_history(self, symbol: str) -> list[Candle]:
         """Pobiera świece symbolu w kolejności UTC do odtworzenia stanu strategii."""
@@ -334,8 +453,8 @@ class MarketDataRepository:
 
     def fetch_missing_candle_times(
         self, symbol: str, limit: int
-    ) -> tuple[bool, list[str]]:
-        """Zwraca do limitu brakujących minut rynku Forex, od najnowszej wstecz."""
+    ) -> tuple[bool, list[str], int]:
+        """Rejestruje wszystkie znalezione luki i zwraca najnowsze do uzupełnienia."""
         connection = mysql.connector.connect(**self.database_settings)
         try:
             cursor = connection.cursor()
@@ -361,7 +480,7 @@ class MarketDataRepository:
             connection.close()
 
         if not stored_times:
-            return False, []
+            return False, [], 0
 
         latest_closed_minute = (
             datetime.now(timezone.utc).replace(second=0, microsecond=0)
@@ -373,21 +492,41 @@ class MarketDataRepository:
             if stored_time > latest_closed_minute:
                 continue
             current_minute = upper_bound
-            while current_minute > stored_time and len(missing_times) < limit:
+            while current_minute > stored_time:
                 if (
                     current_minute not in stored_times
                     and self._is_forex_market_open(current_minute)
                 ):
-                    missing_times.append(
-                        current_minute.strftime("%Y-%m-%d %H:%M:%S")
-                    )
+                    missing_times.append(current_minute)
                 current_minute -= timedelta(minutes=1)
-            if len(missing_times) == limit:
-                break
             upper_bound = stored_time - timedelta(minutes=1)
 
-        missing_times.reverse()
-        return True, missing_times
+        if missing_times:
+            connection = mysql.connector.connect(**self.database_settings)
+            try:
+                cursor = connection.cursor()
+                try:
+                    self._upsert_candle_gaps(cursor, symbol, missing_times)
+                    connection.commit()
+                finally:
+                    cursor.close()
+            except mysql.connector.Error:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+
+        total_missing_count = len(missing_times)
+        latest_missing_times = missing_times[:limit]
+        latest_missing_times.reverse()
+        return (
+            True,
+            [
+                missing_time.strftime("%Y-%m-%d %H:%M:%S")
+                for missing_time in latest_missing_times
+            ],
+            total_missing_count,
+        )
 
     @staticmethod
     def _is_forex_market_open(utc_time: datetime) -> bool:
@@ -483,9 +622,9 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/candles", status_code=204)
-def save_candle(candle: CandleRecord, request: Request) -> None:
-    """Waliduje i zapisuje świecę rynkową; ten sam symbol i czas aktualizują wpis."""
+@app.post("/api/candles", response_class=Response)
+def save_candle(candle: CandleRecord, request: Request) -> Response:
+    """Zapisuje świecę i zwraca liczbę nowo wykrytych brakujących minut."""
     try:
         with strategy_lock:
             if not request.app.state.strategy_ready:
@@ -515,7 +654,7 @@ def save_candle(candle: CandleRecord, request: Request) -> None:
                         ),
                     )
                 )
-            request.app.state.repository.save_candle(candle, signal)
+            new_gap_count = request.app.state.repository.save_candle(candle, signal)
             request.app.state.eurusd_strategy = updated_strategy
     except mysql.connector.Error as error:
         raise HTTPException(
@@ -527,6 +666,10 @@ def save_candle(candle: CandleRecord, request: Request) -> None:
             status_code=409,
             detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
         ) from error
+    return Response(
+        content=str(new_gap_count),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @app.post("/api/candles/batch", status_code=204)
@@ -556,7 +699,7 @@ def missing_candles(
 ) -> Response:
     """Zwraca status bazy i do 1000 najnowszych brakujących minut dla symbolu."""
     try:
-        has_existing_candles, missing_times = (
+        has_existing_candles, missing_times, total_missing_count = (
             request.app.state.repository.fetch_missing_candle_times(
                 symbol, MAX_BACKFILL_CANDLES
             )
@@ -567,7 +710,10 @@ def missing_candles(
             detail="Nie udało się sprawdzić brakujących świec w bazie MySQL.",
         ) from error
 
-    report_lines = ["1" if has_existing_candles else "0"]
+    report_lines = [
+        "1" if has_existing_candles else "0",
+        str(total_missing_count),
+    ]
     report_lines.extend(missing_times)
     return Response(
         content="\n".join(report_lines),

@@ -2,6 +2,7 @@
 
 #include "CandleBackfillClient.h"
 #include "CandleHistoryClient.h"
+#include "AudioSignal.h"
 
 #include <cstdio>
 #include <utility>
@@ -32,7 +33,18 @@ std::string createBackfillStatus(
         "Zaciągnięto %zu %s. Operacja zajęła %.1f sekund.",
         count, noun, result.elapsedSeconds);
     if (!error.empty()) {
-        return std::string(status) + " Błąd: " + error;
+        std::string backfillStatus = std::string(status) + " Błąd: " + error;
+        if (result.detectedGapCount > 0) {
+            backfillStatus += " Wykryto " +
+                std::to_string(result.detectedGapCount) +
+                " brakujących świec — sprawdź tabelę candle_gaps.";
+        }
+        return backfillStatus;
+    }
+    if (result.detectedGapCount > 0) {
+        return std::string(status) + " Wykryto " +
+            std::to_string(result.detectedGapCount) +
+            " brakujących świec — sprawdź tabelę candle_gaps.";
     }
     return status;
 }
@@ -262,6 +274,11 @@ void StockPriceMonitor::run() {
     backfillStatus_ = createBackfillStatus(
         backfillResult, backfillSucceeded ? std::string{} : backfillError);
     ReleaseSRWLockExclusive(&statusLock_);
+    if (backfillResult.detectedGapCount > 0 && !AudioSignal::play()) {
+        AcquireSRWLockExclusive(&statusLock_);
+        backfillStatus_ += " Nie udało się odtworzyć sygnału dźwiękowego.";
+        ReleaseSRWLockExclusive(&statusLock_);
+    }
     if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
         return;
     }
@@ -309,16 +326,25 @@ bool StockPriceMonitor::updateCandle() {
         CandlesDataClient::fetchLatestOneMinuteCandle(
             monitoredSymbol, candle, error);
     bool saved = false;
+    std::size_t newlyDetectedGapCount = 0;
     if (fetched) {
-        saved = CandleHistoryClient::saveCandle(monitoredSymbol, candle, error);
+        saved = CandleHistoryClient::saveCandle(
+            monitoredSymbol, candle, newlyDetectedGapCount, error);
     }
     std::string updateStatus;
     if (!fetched) {
         updateStatus = "Błąd świecy 1-minutowej: " + error;
     } else if (!saved) {
         updateStatus = "Nie udało się zapisać świecy w bazie: " + error;
+    } else if (newlyDetectedGapCount > 0) {
+        updateStatus = "Wykryto " +
+            std::to_string(newlyDetectedGapCount) +
+            " brakujących świec — sprawdź tabelę candle_gaps.";
     } else {
         updateStatus = describeCandleFreshness(candle);
+    }
+    if (saved && newlyDetectedGapCount > 0 && !AudioSignal::play()) {
+        updateStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
     const bool latestCandleAvailable = fetched && isLatestClosedMinute(candle);
 

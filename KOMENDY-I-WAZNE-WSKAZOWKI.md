@@ -50,12 +50,22 @@ Struktura tabel:
 ```sql
 DESCRIBE products;
 DESCRIBE candles;
+DESCRIBE candle_gaps;
 ```
 
 Wszystkie produkty:
 
 ```sql
 SELECT * FROM products;
+```
+
+Aktywne luki świecowe:
+
+```sql
+SELECT symbol, candle_datetime_utc, status, detected_at_utc
+FROM candle_gaps
+WHERE status = 'missing'
+ORDER BY candle_datetime_utc;
 ```
 
 Wyjdź z konsoli MySQL:
@@ -123,3 +133,7 @@ MySQL przy zmianie kodu.
 Przy uruchomieniu aplikacja giełdy sprawdza luki w świecach EUR/USD i uzupełnia do
 1000 najnowszych. Wynik i czas operacji są widoczne na ekranie głównym. Zmiany w API
 wymagają `docker compose up -d --build`, a zmiany aplikacji — ponownej kompilacji.
+
+Tabela `candle_gaps` zapisuje każdą wykrytą brakującą minutę. Po zapisaniu świecy jej
+status zmienia się z `missing` na `filled`, a wpis pozostaje jako historia. Przy
+wykryciu luki aplikacja odtwarza dźwięk i pokazuje komunikat, który wskazuje tę tabelę.

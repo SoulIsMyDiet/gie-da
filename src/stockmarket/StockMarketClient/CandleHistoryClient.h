@@ -24,17 +24,22 @@ public:
      * Zapisuje świecę w lokalnym API historii rynkowej.
      * @param symbol Symbol instrumentu, którego dotyczy świeca.
      * @param candle Dane OHLCV i czas otwarcia świecy w UTC.
+     * @param newlyDetectedGapCount Otrzymuje liczbę nowo wykrytych luk.
      * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
      * @return true, jeśli API potwierdzi zapis; w przeciwnym razie false.
      */
     static bool saveCandle(
-        const std::string& symbol, const CandleData& candle, std::string& error);
+        const std::string& symbol,
+        const CandleData& candle,
+        std::size_t& newlyDetectedGapCount,
+        std::string& error);
 
     /**
      * Pobiera z bazy do 1000 brakujących minut dla wskazanego symbolu.
      * @param symbol Symbol instrumentu, którego dotyczy historia.
      * @param hasExistingCandles Otrzymuje informację, czy baza zawiera już świece.
      * @param missingTimes Otrzymuje brakujące znaczniki czasu UTC.
+     * @param totalMissingCount Otrzymuje łączną liczbę wykrytych luk.
      * @param error Otrzymuje opis błędu, jeśli odczyt się nie powiedzie.
      * @return true, jeśli lokalne API zwróciło poprawny plan uzupełnienia.
      */
@@ -42,6 +47,7 @@ public:
         const std::string& symbol,
         bool& hasExistingCandles,
         std::vector<std::string>& missingTimes,
+        std::size_t& totalMissingCount,
         std::string& error);
 
     /**
