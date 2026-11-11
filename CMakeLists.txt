@@ -17,6 +17,7 @@ add_executable(gieda WIN32
     src/stockmarket/StockMarketClient/CandleBackfillClient.cpp
     src/ai/AiClient/DailySentenceClient.cpp
     src/utility/AudioSignal.cpp
+    src/algorithms/Grok-45/SignalGenerator.cpp
 )
 set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
 target_include_directories(gieda PRIVATE
@@ -26,6 +27,7 @@ target_include_directories(gieda PRIVATE
     src/pages/reports
     src/stockmarket/StockMarketClient
     src/utility
+    src/algorithms/Grok-45
 )
 target_link_libraries(gieda PRIVATE
     winmm
