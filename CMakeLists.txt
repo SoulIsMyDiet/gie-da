@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 4.3)
 project(gieda)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(gieda WIN32
     src/main.cpp
@@ -41,3 +43,26 @@ add_custom_command(TARGET gieda POST_BUILD
         "${MINGW_COMPILER_DIR}/libwinpthread-1.dll"
         "$<TARGET_FILE_DIR:gieda>/libwinpthread-1.dll"
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(grok45_signal_generator_tests
+        src/algorithms/Grok-45/SignalGenerator.cpp
+        src/algorithms/Grok-45/tests/SignalGeneratorTests.cpp
+    )
+    set_property(
+        TARGET grok45_signal_generator_tests
+        PROPERTY CXX_SCAN_FOR_MODULES OFF
+    )
+    target_include_directories(grok45_signal_generator_tests PRIVATE
+        src/algorithms/Grok-45
+    )
+    target_link_options(grok45_signal_generator_tests PRIVATE
+        -static-libgcc
+        -static-libstdc++
+    )
+    add_test(
+        NAME grok45_signal_generator_tests
+        COMMAND grok45_signal_generator_tests
+    )
+endif()

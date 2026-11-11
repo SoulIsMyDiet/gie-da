@@ -4,6 +4,10 @@
 
 #include "CandleHistoryClient.h"
 
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -16,6 +20,8 @@ constexpr wchar_t apiHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT apiPort = 8000;
 constexpr wchar_t singleCandleApiPath[] = L"/api/candles";
 constexpr wchar_t batchApiPath[] = L"/api/candles/batch";
+constexpr wchar_t analysisCandlesApiPath[] = L"/api/candles/analysis?limit=";
+constexpr wchar_t generatedSignalApiPath[] = L"/api/signals/grok45";
 constexpr DWORD maxResponseSize = 64 * 1024;
 constexpr std::size_t pageSize = 20;
 
@@ -273,6 +279,93 @@ bool sendApiRequest(
 }
 
 /**
+ * Pobiera tekstową odpowiedź GET z lokalnego API i sprawdza kod HTTP.
+ */
+bool fetchApiResponse(
+    const std::wstring& path,
+    std::string& responseBody,
+    std::string& error) {
+    InternetHandle session{WinHttpOpen(
+        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (session.value == nullptr) {
+        error = "Nie udało się rozpocząć pobierania danych do analizy.";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
+
+    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
+    if (connection.value == nullptr) {
+        error = "Nie można połączyć się z lokalnym API bazy danych.";
+        return false;
+    }
+
+    InternetHandle request{WinHttpOpenRequest(
+        connection.value, L"GET", path.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
+    if (request.value == nullptr ||
+        !WinHttpSendRequest(
+            request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "Lokalne API nie odpowiedziało na żądanie danych do analizy.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(
+            request.value,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        error = "Nie udało się odczytać odpowiedzi lokalnego API.";
+        return false;
+    }
+    if (statusCode != 200) {
+        error = "Lokalne API zwróciło HTTP " +
+                std::to_string(statusCode) + " podczas pobierania danych.";
+        return false;
+    }
+    return readResponse(request.value, responseBody, error);
+}
+
+/**
+ * Dzieli wiersz z danymi świecy na sześć pól rozdzielonych tabulatorami.
+ */
+bool splitAnalysisCandleRow(
+    std::string_view row, std::string_view fields[6]) {
+    std::size_t fieldStart = 0;
+    for (std::size_t index = 0; index < 5; ++index) {
+        const std::size_t separator = row.find('\t', fieldStart);
+        if (separator == std::string_view::npos) {
+            return false;
+        }
+        fields[index] = row.substr(fieldStart, separator - fieldStart);
+        fieldStart = separator + 1;
+    }
+    if (row.find('\t', fieldStart) != std::string_view::npos) {
+        return false;
+    }
+    fields[5] = row.substr(fieldStart);
+    return true;
+}
+
+/**
+ * Parsuje skończoną liczbę zmiennoprzecinkową z pola odpowiedzi API.
+ */
+bool parseAnalysisPrice(std::string_view text, double& value) {
+    if (text.empty()) {
+        return false;
+    }
+    const std::string ownedText(text);
+    char* parsedEnd = nullptr;
+    value = std::strtod(ownedText.c_str(), &parsedEnd);
+    return parsedEnd == ownedText.c_str() + ownedText.size() &&
+        std::isfinite(value);
+}
+
+/**
  * Dzieli wiersz raportu na siedem wymaganych pól.
  */
 bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
@@ -444,6 +537,98 @@ bool CandleHistoryClient::saveCandle(
     }
     signalSaved = signalText == "1";
     return true;
+}
+
+/**
+ * Pobiera świece EUR/USD i zmienia kolejność odpowiedzi na chronologiczną.
+ */
+bool CandleHistoryClient::fetchLatestAnalysisCandles(
+    std::size_t maximumCandles,
+    std::vector<SignalCandleData>& candles,
+    std::string& error) {
+    candles.clear();
+    if (maximumCandles == 0 || maximumCandles > 100) {
+        error = "Liczba świec do analizy musi mieścić się w zakresie 1-100.";
+        return false;
+    }
+
+    std::string responseBody;
+    if (!fetchApiResponse(
+            std::wstring(analysisCandlesApiPath) +
+                std::to_wstring(maximumCandles),
+            responseBody, error)) {
+        return false;
+    }
+
+    std::vector<SignalCandleData> receivedCandles;
+    std::size_t lineStart = 0;
+    while (lineStart < responseBody.size()) {
+        const std::size_t lineEnd = responseBody.find('\n', lineStart);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? responseBody.size() : lineEnd;
+        std::string_view row(responseBody.data() + lineStart,
+                             effectiveEnd - lineStart);
+        if (!row.empty() && row.back() == '\r') {
+            row.remove_suffix(1);
+        }
+        if (!row.empty()) {
+            std::string_view fields[6];
+            SignalCandleData candle;
+            if (receivedCandles.size() == maximumCandles ||
+                !splitAnalysisCandleRow(row, fields)) {
+                error = "Lokalne API zwróciło nieprawidłową liczbę pól świecy.";
+                return false;
+            }
+
+            const auto timestampResult = std::from_chars(
+                fields[0].data(), fields[0].data() + fields[0].size(),
+                candle.timestamp);
+            if (timestampResult.ec != std::errc{} ||
+                timestampResult.ptr != fields[0].data() + fields[0].size() ||
+                !parseAnalysisPrice(fields[1], candle.open) ||
+                !parseAnalysisPrice(fields[2], candle.high) ||
+                !parseAnalysisPrice(fields[3], candle.low) ||
+                !parseAnalysisPrice(fields[4], candle.close) ||
+                (!fields[5].empty() &&
+                 !parseAnalysisPrice(fields[5], candle.volume))) {
+                error = "Lokalne API zwróciło nieprawidłowe wartości świecy.";
+                return false;
+            }
+            receivedCandles.push_back(candle);
+        }
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    std::reverse(receivedCandles.begin(), receivedCandles.end());
+    candles = std::move(receivedCandles);
+    return true;
+}
+
+/**
+ * Wysyła sygnał Grok-45 do API i odczytuje potwierdzenie nowego zapisu.
+ */
+bool CandleHistoryClient::saveGeneratedSignal(
+    const std::string& signalJson,
+    bool& signalSaved,
+    std::string& error) {
+    signalSaved = false;
+    std::string responseBody;
+    if (!sendApiRequest(
+            generatedSignalApiPath, signalJson, 200, responseBody, error)) {
+        return false;
+    }
+    if (responseBody == "1") {
+        signalSaved = true;
+        return true;
+    }
+    if (responseBody == "0") {
+        return true;
+    }
+    error = "Lokalne API zwróciło nieprawidłowy status zapisu sygnału Grok-45.";
+    return false;
 }
 
 /**

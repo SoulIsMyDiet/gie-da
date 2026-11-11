@@ -3,9 +3,12 @@
 #include "CandleBackfillClient.h"
 #include "CandleHistoryClient.h"
 #include "AudioSignal.h"
+#include "SignalGenerator.h"
 
 #include <cstdio>
+#include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -15,6 +18,7 @@ constexpr DWORD candleRetryIntervalMs = 5000;
 constexpr ULONGLONG candleRetryWindowMs = 30000;
 constexpr ULONGLONG fileTimeTicksPerSecond = 10000000ULL;
 constexpr ULONGLONG fileTimeTicksPerMinute = 60ULL * fileTimeTicksPerSecond;
+constexpr ULONGLONG windowsToUnixEpochTicks = 116444736000000000ULL;
 
 /**
  * Buduje czytelny komunikat z liczbą zapisanych świec i czasem operacji.
@@ -166,6 +170,30 @@ bool isLatestClosedMinute(const CandleData& candle) {
     return expectedTicks.QuadPart >= fileTimeTicksPerMinute &&
         candleTicks.QuadPart ==
             expectedTicks.QuadPart - fileTimeTicksPerMinute;
+}
+
+/**
+ * Zamienia znacznik UTC świecy na sekundy od początku epoki Unix.
+ */
+bool parseCandleUnixTimestamp(
+    const CandleData& candle, std::int64_t& unixTimestamp) {
+    SYSTEMTIME utcTime{};
+    FILETIME fileTime{};
+    if (!parseCandleUtcTime(candle.datetime, utcTime) ||
+        !SystemTimeToFileTime(&utcTime, &fileTime)) {
+        return false;
+    }
+
+    ULARGE_INTEGER fileTimeTicks{};
+    fileTimeTicks.LowPart = fileTime.dwLowDateTime;
+    fileTimeTicks.HighPart = fileTime.dwHighDateTime;
+    if (fileTimeTicks.QuadPart < windowsToUnixEpochTicks) {
+        return false;
+    }
+    unixTimestamp = static_cast<std::int64_t>(
+        (fileTimeTicks.QuadPart - windowsToUnixEpochTicks) /
+        fileTimeTicksPerSecond);
+    return true;
 }
 
 /**
@@ -332,6 +360,7 @@ bool StockPriceMonitor::updateCandle() {
         saved = CandleHistoryClient::saveCandle(
             monitoredSymbol, candle, newlyDetectedGapCount, signalSaved, error);
     }
+    const bool latestCandleAvailable = fetched && isLatestClosedMinute(candle);
     std::string updateStatus;
     if (!fetched) {
         updateStatus = "Błąd świecy 1-minutowej: " + error;
@@ -344,13 +373,58 @@ bool StockPriceMonitor::updateCandle() {
     } else {
         updateStatus = describeCandleFreshness(candle);
     }
+    bool grokSignalSaved = false;
+    if (saved && latestCandleAvailable) {
+        std::vector<SignalCandleData> analysisCandles;
+        std::string signalError;
+        if (!CandleHistoryClient::fetchLatestAnalysisCandles(
+                grok45::SignalGenerator::analysisWindowCandles,
+                analysisCandles, signalError)) {
+            updateStatus += " Błąd pobierania danych do algorytmu Grok-45: " +
+                signalError;
+        } else {
+            std::int64_t savedCandleTimestamp = 0;
+            if (analysisCandles.empty() ||
+                !parseCandleUnixTimestamp(candle, savedCandleTimestamp) ||
+                analysisCandles.back().timestamp != savedCandleTimestamp) {
+                updateStatus +=
+                    " Dane z bazy nie zawierają ostatniej zapisanej świecy; "
+                    "sygnał Grok-45 nie został obliczony.";
+            } else {
+                std::vector<grok45::Candle> candlesForAnalysis;
+                candlesForAnalysis.reserve(analysisCandles.size());
+                for (const SignalCandleData& analysisCandle : analysisCandles) {
+                    candlesForAnalysis.push_back(grok45::Candle{
+                        analysisCandle.timestamp,
+                        analysisCandle.open,
+                        analysisCandle.high,
+                        analysisCandle.low,
+                        analysisCandle.close,
+                        analysisCandle.volume});
+                }
+
+                const std::string generatedSignal =
+                    grok45::SignalGenerator{}.generate(candlesForAnalysis);
+                if (generatedSignal.find("\"signal\":\"LONG\"") !=
+                        std::string::npos ||
+                    generatedSignal.find("\"signal\":\"SHORT\"") !=
+                        std::string::npos) {
+                    if (!CandleHistoryClient::saveGeneratedSignal(
+                            generatedSignal, grokSignalSaved, signalError)) {
+                        updateStatus += " Błąd zapisu sygnału Grok-45: " +
+                            signalError;
+                    }
+                }
+            }
+        }
+    }
     if (saved && newlyDetectedGapCount > 0 && !AudioSignal::play()) {
         updateStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
-    if (saved && signalSaved && !AudioSignal::playSignalSaved()) {
+    if (saved && (signalSaved || grokSignalSaved) &&
+        !AudioSignal::playSignalSaved()) {
         updateStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
     }
-    const bool latestCandleAvailable = fetched && isLatestClosedMinute(candle);
 
     AcquireSRWLockExclusive(&statusLock_);
     if (fetched) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,18 @@ struct SignalReportEntry {
     std::string signalParameters;
 };
 
+/**
+ * Przechowuje świecę pobraną z bazy do analizy algorytmem Grok-45.
+ */
+struct SignalCandleData {
+    std::int64_t timestamp = 0;
+    double open = 0.0;
+    double high = 0.0;
+    double low = 0.0;
+    double close = 0.0;
+    double volume = 0.0;
+};
+
 class CandleHistoryClient {
 public:
     /**
@@ -60,6 +73,30 @@ public:
         const std::string& symbol,
         const CandleData& candle,
         std::size_t& newlyDetectedGapCount,
+        bool& signalSaved,
+        std::string& error);
+
+    /**
+     * Pobiera ostatnie świece EUR/USD do analizy wskaźników.
+     * @param maximumCandles Maksymalna liczba świec do pobrania (1-100).
+     * @param candles Otrzymuje świece uporządkowane chronologicznie.
+     * @param error Otrzymuje opis błędu, jeśli odczyt się nie powiedzie.
+     * @return true, jeśli API zwróciło poprawne dane świec.
+     */
+    static bool fetchLatestAnalysisCandles(
+        std::size_t maximumCandles,
+        std::vector<SignalCandleData>& candles,
+        std::string& error);
+
+    /**
+     * Zapisuje wygenerowany sygnał Grok-45; API pomija duplikaty tej samej świecy.
+     * @param signalJson Pełny dokument JSON zwrócony przez algorytm.
+     * @param signalSaved Otrzymuje informację, czy utworzono nowy wpis.
+     * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
+     * @return true, jeśli API poprawnie obsłużyło żądanie.
+     */
+    static bool saveGeneratedSignal(
+        const std::string& signalJson,
         bool& signalSaved,
         std::string& error);
 

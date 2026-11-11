@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from threading import Lock
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import mysql.connector
@@ -31,6 +32,7 @@ from signal_serializer import Signal  # noqa: E402
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 NEW_YORK_TIME_ZONE = ZoneInfo("America/New_York")
 MAX_BACKFILL_CANDLES = 1000
+GROK45_ANALYSIS_WINDOW = 100
 
 
 class CandleRecord(BaseModel):
@@ -76,6 +78,18 @@ class CandleBatch(BaseModel):
     """Opis paczki świec zapisywanych podczas uzupełniania historii."""
 
     candles: list[CandleRecord] = Field(min_length=1, max_length=MAX_BACKFILL_CANDLES)
+
+
+class Grok45SignalRecord(BaseModel):
+    """Opis sygnału LONG/SHORT wygenerowanego przez algorytm Grok-45."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instrument: Literal["EUR/USD"]
+    price: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
+    timestamp: int = Field(gt=0)
+    signal: Literal["LONG", "SHORT"]
+    parameters: dict[str, int | float | str | None]
 
 
 class MarketDataRepository:
@@ -153,13 +167,17 @@ class MarketDataRepository:
                         transaction_id BIGINT UNSIGNED NULL,
                         candles_count INT UNSIGNED NOT NULL,
                         signal_parameters JSON NOT NULL,
+                        source_timestamp BIGINT NULL,
                         INDEX idx_signals_product_datetime (product, `datetime`),
                         INDEX idx_signals_algorithm_datetime (algorithm_name, `datetime`),
+                        UNIQUE KEY uq_signals_source_timestamp
+                            (product, algorithm_name, source_timestamp),
                         CONSTRAINT fk_signals_product
                             FOREIGN KEY (product) REFERENCES products(symbol)
                     ) ENGINE=InnoDB
                     """
                 )
+                self._migrate_signal_source_timestamp(cursor)
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS signal_potention (
@@ -195,6 +213,29 @@ class MarketDataRepository:
                 cursor.close()
         finally:
             connection.close()
+
+    def _migrate_signal_source_timestamp(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Dodaje znacznik świecy i unikalny klucz chroniący przed duplikatami."""
+        cursor.execute("SHOW COLUMNS FROM signals LIKE 'source_timestamp'")
+        if cursor.fetchone() is None:
+            cursor.execute(
+                "ALTER TABLE signals ADD COLUMN source_timestamp BIGINT NULL"
+            )
+
+        cursor.execute(
+            "SHOW INDEX FROM signals WHERE Key_name = %s",
+            ("uq_signals_source_timestamp",),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                """
+                ALTER TABLE signals
+                ADD UNIQUE KEY uq_signals_source_timestamp
+                    (product, algorithm_name, source_timestamp)
+                """
+            )
 
     def _migrate_signal_potention_schema(
         self, cursor: mysql.connector.cursor.MySQLCursor
@@ -589,6 +630,98 @@ class MarketDataRepository:
             ),
         )
 
+    def save_grok45_signal(self, signal: Grok45SignalRecord) -> bool:
+        """Zapisuje sygnał Grok-45 i pomija ponowne żądania dla tej samej świecy."""
+        signal_timestamp = datetime.fromtimestamp(
+            signal.timestamp, timezone.utc
+        )
+        local_signal_time = signal_timestamp.astimezone(
+            WARSAW_TIME_ZONE
+        ).replace(tzinfo=None)
+        signal_parameters = json.dumps(
+            {
+                "instrument": signal.instrument,
+                "price": float(signal.price),
+                "timestamp": signal.timestamp,
+                "signal": signal.signal,
+                "parameters": signal.parameters,
+            },
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+
+        connection = mysql.connector.connect(**self.database_settings)
+        cursor = None
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                "INSERT IGNORE INTO products (symbol) VALUES (%s)",
+                (signal.instrument,),
+            )
+            utc_signal_time = signal_timestamp.replace(tzinfo=None)
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM (
+                    SELECT 1
+                    FROM candles
+                    WHERE symbol = %s
+                        AND DATE_SUB(
+                            datetime, INTERVAL utc_offset_minutes MINUTE
+                        ) <= %s
+                    ORDER BY DATE_SUB(
+                        datetime, INTERVAL utc_offset_minutes MINUTE
+                    ) DESC
+                    LIMIT %s
+                ) AS recent_candles
+                """,
+                (signal.instrument, utc_signal_time, GROK45_ANALYSIS_WINDOW),
+            )
+            candles_count = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO signals
+                    (`datetime`, product, price, `signal`, algorithm_name,
+                     ai_decision, transaction_id, candles_count,
+                     signal_parameters, source_timestamp)
+                VALUES (%s, %s, %s, %s, 'Grok-45', NULL, NULL, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE id = id
+                """,
+                (
+                    local_signal_time,
+                    signal.instrument,
+                    signal.price,
+                    signal.signal.lower(),
+                    candles_count,
+                    signal_parameters,
+                    signal.timestamp,
+                ),
+            )
+            signal_was_inserted = cursor.rowcount == 1
+            if signal_was_inserted:
+                cursor.execute(
+                    """
+                    INSERT INTO signal_potention (signal_id, spread)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        cursor.lastrowid,
+                        SignalPotentialCalculator.SPREAD_PRICE,
+                    ),
+                )
+                self.signal_potential_calculator.update_pending(
+                    cursor, {signal.instrument}
+                )
+            connection.commit()
+            return signal_was_inserted
+        except mysql.connector.Error:
+            connection.rollback()
+            raise
+        finally:
+            if cursor is not None:
+                cursor.close()
+            connection.close()
+
     def fetch_missing_candle_times(
         self, symbol: str, limit: int
     ) -> tuple[bool, list[str], int]:
@@ -729,6 +862,63 @@ class MarketDataRepository:
                         volume,
                     ) in page_rows
                 ], has_next_page
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def fetch_latest_analysis_candles(
+        self, limit: int
+    ) -> list[tuple[str, str, str, str, str, str]]:
+        """Pobiera do 100 ostatnich świec EUR/USD w kolejności od najnowszej."""
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        datetime,
+                        utc_offset_minutes,
+                        CAST(open AS CHAR),
+                        CAST(high AS CHAR),
+                        CAST(low AS CHAR),
+                        CAST(close AS CHAR),
+                        CAST(volume AS CHAR)
+                    FROM candles
+                    WHERE symbol = 'EUR/USD'
+                    ORDER BY DATE_SUB(
+                        datetime, INTERVAL utc_offset_minutes MINUTE
+                    ) DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+                analysis_rows = []
+                for (
+                    candle_datetime,
+                    offset_minutes,
+                    open_price,
+                    high_price,
+                    low_price,
+                    close_price,
+                    volume,
+                ) in rows:
+                    utc_datetime = candle_datetime.replace(
+                        tzinfo=timezone(timedelta(minutes=offset_minutes))
+                    ).astimezone(timezone.utc)
+                    analysis_rows.append(
+                        (
+                            str(int(utc_datetime.timestamp())),
+                            open_price,
+                            high_price,
+                            low_price,
+                            close_price,
+                            volume if volume is not None else "",
+                        )
+                    )
+                return analysis_rows
             finally:
                 cursor.close()
         finally:
@@ -926,6 +1116,48 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
         ) from error
     return Response(
         content=f"{new_gap_count}\n{int(signal_saved)}",
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+@app.get("/api/candles/analysis", response_class=Response)
+def analysis_candles(
+    request: Request,
+    limit: int = Query(ge=1, le=GROK45_ANALYSIS_WINDOW),
+) -> Response:
+    """Zwraca świece EUR/USD do analizy w formacie TSV z czasem Unix."""
+    try:
+        rows = request.app.state.repository.fetch_latest_analysis_candles(limit)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się pobrać świec do analizy Grok-45.",
+        ) from error
+    return Response(
+        content="\n".join("\t".join(row) for row in rows),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.post("/api/signals/grok45", response_class=Response)
+def save_grok45_signal(
+    signal: Grok45SignalRecord, request: Request
+) -> Response:
+    """Zapisuje sygnał Grok-45 i zwraca 1 tylko dla nowego wpisu."""
+    try:
+        signal_was_saved = request.app.state.repository.save_grok45_signal(signal)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zapisać sygnału Grok-45 w bazie MySQL.",
+        ) from error
+    except (OverflowError, OSError, ValueError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail="Czas lub parametry sygnału Grok-45 są nieprawidłowe.",
+        ) from error
+    return Response(
+        content="1" if signal_was_saved else "0",
         media_type="text/plain; charset=utf-8",
     )
 
