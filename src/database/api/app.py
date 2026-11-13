@@ -7,7 +7,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from threading import Lock
 from typing import Literal
@@ -26,8 +26,22 @@ if not algorithm_directory.is_dir():
         / "EURUSD"
     )
 sys.path.insert(0, str(algorithm_directory))
+grok_algorithm_directory = Path(__file__).resolve().parent / "grok_algorithm"
+if not grok_algorithm_directory.is_dir():
+    grok_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Grok-45"
+        / "EURUSD"
+    )
+sys.path.insert(0, str(grok_algorithm_directory))
 
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
+from EURUSDStrategyV2 import (  # noqa: E402
+    Candle as Grok45Candle,
+    EURUSDStrategyV2,
+    STRATEGY_NAME as GROK45_V2_STRATEGY_NAME,
+)
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
@@ -93,6 +107,50 @@ class Grok45SignalRecord(BaseModel):
     timestamp: int = Field(gt=0)
     signal: Literal["LONG", "SHORT"]
     parameters: dict[str, int | float | str | None]
+
+    @field_validator("price", mode="before")
+    @classmethod
+    def fit_price_to_database_precision(cls, value: object) -> object:
+        """Zaokrągla cenę sygnału do precyzji DECIMAL zapisanej w bazie."""
+        try:
+            return Decimal(str(value)).quantize(
+                Decimal("0.0000000001"), rounding=ROUND_HALF_UP
+            )
+        except InvalidOperation:
+            return value
+
+
+def _grok45_candles_from_history(candles: list[Candle]) -> list[Grok45Candle]:
+    """Przekształca ostatnie zamknięte świece API na format Grok V2."""
+    current_minute = datetime.now(timezone.utc).replace(
+        second=0, microsecond=0
+    )
+    closed_candles = [
+        candle
+        for candle in candles
+        if candle.timestamp.astimezone(timezone.utc) < current_minute
+    ]
+    return [
+        Grok45Candle(
+            timestamp=int(candle.timestamp.timestamp()),
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            volume=candle.volume or 0.0,
+        )
+        for candle in closed_candles[-GROK45_ANALYSIS_WINDOW:]
+    ]
+
+
+def _generate_grok45_v2_signal(
+    candles: list[Grok45Candle],
+) -> Grok45SignalRecord | None:
+    """Zamienia wynik Grok V2 na rekord bazy, jeśli spełniono warunki sygnału."""
+    response = json.loads(EURUSDStrategyV2().generate(candles))
+    if response["signal"] not in ("LONG", "SHORT"):
+        return None
+    return Grok45SignalRecord.model_validate(response)
 
 
 class MarketDataRepository:
@@ -408,15 +466,21 @@ class MarketDataRepository:
             )
 
     def save_candle(
-        self, candle: CandleRecord, signal: Signal | None = None
+        self,
+        candle: CandleRecord,
+        signal: Signal | None = None,
+        grok45_v2_signal: Grok45SignalRecord | None = None,
     ) -> tuple[int, int, str, bool]:
         """Zapisuje świecę i zwraca liczbę nowo wykrytych luk."""
-        return self.save_candles([candle], signal, detect_gaps=True)
+        return self.save_candles(
+            [candle], signal, grok45_v2_signal, detect_gaps=True
+        )
 
     def save_candles(
         self,
         candles: list[CandleRecord],
         signal: Signal | None = None,
+        grok45_v2_signal: Grok45SignalRecord | None = None,
         detect_gaps: bool = False,
     ) -> tuple[int, int, str, bool]:
         """Zapisuje tylko świece z godzin otwarcia rynku i zwraca ich najnowszy czas."""
@@ -501,6 +565,11 @@ class MarketDataRepository:
             )
             if signal is not None:
                 self._insert_signal(cursor, signal)
+            grok45_v2_signal_saved = False
+            if grok45_v2_signal is not None:
+                grok45_v2_signal_saved = self._insert_grok45_signal(
+                    cursor, grok45_v2_signal
+                )
             self.signal_potential_calculator.update_pending(
                 cursor, product_symbols
             )
@@ -523,7 +592,7 @@ class MarketDataRepository:
             newly_detected_gap_count,
             len(open_market_candles),
             latest_saved_time,
-            signal is not None,
+            signal is not None or grok45_v2_signal_saved,
         )
 
     def _detect_gaps_before_candle(
@@ -680,8 +749,13 @@ class MarketDataRepository:
             ),
         )
 
-    def save_grok45_signal(self, signal: Grok45SignalRecord) -> bool:
-        """Zapisuje sygnał Grok-45 i pomija ponowne żądania dla tej samej świecy."""
+    def _insert_grok45_signal(
+        self,
+        cursor: mysql.connector.cursor.MySQLCursor,
+        signal: Grok45SignalRecord,
+        algorithm_name: str = GROK45_V2_STRATEGY_NAME,
+    ) -> bool:
+        """Dodaje nowy sygnał Grok do bieżącej transakcji, pomijając duplikaty."""
         signal_timestamp = datetime.fromtimestamp(
             signal.timestamp, timezone.utc
         )
@@ -699,71 +773,79 @@ class MarketDataRepository:
             allow_nan=False,
             separators=(",", ":"),
         )
+        cursor.execute(
+            "INSERT IGNORE INTO products (symbol) VALUES (%s)",
+            (signal.instrument,),
+        )
+        utc_signal_time = signal_timestamp.replace(tzinfo=None)
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT 1
+                FROM candles
+                WHERE symbol = %s
+                    AND DATE_SUB(
+                        datetime, INTERVAL utc_offset_minutes MINUTE
+                    ) <= %s
+                ORDER BY DATE_SUB(
+                    datetime, INTERVAL utc_offset_minutes MINUTE
+                ) DESC
+                LIMIT %s
+            ) AS recent_candles
+            """,
+            (signal.instrument, utc_signal_time, GROK45_ANALYSIS_WINDOW),
+        )
+        candles_count = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            INSERT INTO signals
+                (`datetime`, product, price, `signal`, algorithm_name,
+                 ai_decision, transaction_id, candles_count,
+                 signal_parameters, source_timestamp)
+            VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE id = id
+            """,
+            (
+                local_signal_time,
+                signal.instrument,
+                signal.price,
+                signal.signal.lower(),
+                algorithm_name,
+                candles_count,
+                signal_parameters,
+                signal.timestamp,
+            ),
+        )
+        signal_was_inserted = cursor.rowcount == 1
+        if signal_was_inserted:
+            cursor.execute(
+                """
+                INSERT INTO signal_potention (signal_id, spread)
+                VALUES (%s, %s)
+                """,
+                (
+                    cursor.lastrowid,
+                    SignalPotentialCalculator.SPREAD_PRICE,
+                ),
+            )
+        return signal_was_inserted
 
+    def save_grok45_signal(self, signal: Grok45SignalRecord) -> bool:
+        """Zapisuje sygnał C++ Grok-45 i pomija duplikaty tej samej świecy."""
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
         try:
             cursor = connection.cursor()
-            cursor.execute(
-                "INSERT IGNORE INTO products (symbol) VALUES (%s)",
-                (signal.instrument,),
+            signal_was_saved = self._insert_grok45_signal(
+                cursor, signal, algorithm_name="Grok-45"
             )
-            utc_signal_time = signal_timestamp.replace(tzinfo=None)
-            cursor.execute(
-                """
-                SELECT COUNT(*)
-                FROM (
-                    SELECT 1
-                    FROM candles
-                    WHERE symbol = %s
-                        AND DATE_SUB(
-                            datetime, INTERVAL utc_offset_minutes MINUTE
-                        ) <= %s
-                    ORDER BY DATE_SUB(
-                        datetime, INTERVAL utc_offset_minutes MINUTE
-                    ) DESC
-                    LIMIT %s
-                ) AS recent_candles
-                """,
-                (signal.instrument, utc_signal_time, GROK45_ANALYSIS_WINDOW),
-            )
-            candles_count = cursor.fetchone()[0]
-            cursor.execute(
-                """
-                INSERT INTO signals
-                    (`datetime`, product, price, `signal`, algorithm_name,
-                     ai_decision, transaction_id, candles_count,
-                     signal_parameters, source_timestamp)
-                VALUES (%s, %s, %s, %s, 'Grok-45', NULL, NULL, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE id = id
-                """,
-                (
-                    local_signal_time,
-                    signal.instrument,
-                    signal.price,
-                    signal.signal.lower(),
-                    candles_count,
-                    signal_parameters,
-                    signal.timestamp,
-                ),
-            )
-            signal_was_inserted = cursor.rowcount == 1
-            if signal_was_inserted:
-                cursor.execute(
-                    """
-                    INSERT INTO signal_potention (signal_id, spread)
-                    VALUES (%s, %s)
-                    """,
-                    (
-                        cursor.lastrowid,
-                        SignalPotentialCalculator.SPREAD_PRICE,
-                    ),
-                )
+            if signal_was_saved:
                 self.signal_potential_calculator.update_pending(
                     cursor, {signal.instrument}
                 )
             connection.commit()
-            return signal_was_inserted
+            return signal_was_saved
         except mysql.connector.Error:
             connection.rollback()
             raise
@@ -1131,7 +1213,11 @@ async def lifespan(_: FastAPI):
     """Przygotowuje tabele przed obsługą żądań i kończy start przy błędzie bazy."""
     repository.initialize()
     with strategy_lock:
-        eurusd_strategy.warm_up(repository.fetch_candle_history("EURUSD/USD"))
+        candle_history = repository.fetch_candle_history("EURUSD/USD")
+        eurusd_strategy.warm_up(candle_history)
+        app.state.grok45_v2_candles = _grok45_candles_from_history(
+            candle_history
+        )
         app.state.strategy_ready = True
     yield
 
@@ -1158,18 +1244,29 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 recovered_strategy = copy.deepcopy(
                     request.app.state.eurusd_strategy
                 )
-                recovered_strategy.warm_up(
-                    request.app.state.repository.fetch_candle_history("EURUSD/USD")
+                candle_history = (
+                    request.app.state.repository.fetch_candle_history(
+                        "EURUSD/USD"
+                    )
                 )
+                recovered_strategy.warm_up(candle_history)
                 request.app.state.eurusd_strategy = recovered_strategy
+                request.app.state.grok45_v2_candles = (
+                    _grok45_candles_from_history(candle_history)
+                )
                 request.app.state.strategy_ready = True
             current_strategy = request.app.state.eurusd_strategy
             updated_strategy = copy.deepcopy(current_strategy)
             signal = None
+            updated_grok45_v2_candles = (
+                request.app.state.grok45_v2_candles
+            )
+            grok45_v2_signal = None
             if candle.symbol == "EURUSD/USD":
+                candle_timestamp = candle.datetime.astimezone(timezone.utc)
                 signal = updated_strategy.process_candle(
                     Candle(
-                        timestamp=candle.datetime.astimezone(timezone.utc),
+                        timestamp=candle_timestamp,
                         open=float(candle.open),
                         high=float(candle.high),
                         low=float(candle.low),
@@ -1181,10 +1278,44 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                         ),
                     )
                 )
+                current_minute = datetime.now(timezone.utc).replace(
+                    second=0, microsecond=0
+                )
+                if (
+                    candle_timestamp < current_minute
+                    and (
+                        not updated_grok45_v2_candles
+                        or candle_timestamp.timestamp()
+                        > updated_grok45_v2_candles[-1].timestamp
+                    )
+                ):
+                    updated_grok45_v2_candles = [
+                        *updated_grok45_v2_candles,
+                        Grok45Candle(
+                            timestamp=int(candle_timestamp.timestamp()),
+                            open=float(candle.open),
+                            high=float(candle.high),
+                            low=float(candle.low),
+                            close=float(candle.close),
+                            volume=(
+                                float(candle.volume)
+                                if candle.volume is not None
+                                else 0.0
+                            ),
+                        ),
+                    ][-GROK45_ANALYSIS_WINDOW:]
+                    grok45_v2_signal = _generate_grok45_v2_signal(
+                        updated_grok45_v2_candles
+                    )
             new_gap_count, _, _, signal_saved = (
-                request.app.state.repository.save_candle(candle, signal)
+                request.app.state.repository.save_candle(
+                    candle, signal, grok45_v2_signal
+                )
             )
             request.app.state.eurusd_strategy = updated_strategy
+            request.app.state.grok45_v2_candles = (
+                updated_grok45_v2_candles
+            )
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
@@ -1255,10 +1386,14 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                 )
             )
             updated_strategy = copy.deepcopy(request.app.state.eurusd_strategy)
-            updated_strategy.warm_up(
+            candle_history = (
                 request.app.state.repository.fetch_candle_history("EURUSD/USD")
             )
+            updated_strategy.warm_up(candle_history)
             request.app.state.eurusd_strategy = updated_strategy
+            request.app.state.grok45_v2_candles = (
+                _grok45_candles_from_history(candle_history)
+            )
             request.app.state.strategy_ready = True
     except mysql.connector.Error as error:
         raise HTTPException(
@@ -1398,3 +1533,4 @@ def signal_potential_details(
 app.state.repository = repository
 app.state.eurusd_strategy = eurusd_strategy
 app.state.strategy_ready = False
+app.state.grok45_v2_candles = []
