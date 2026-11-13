@@ -24,6 +24,7 @@ constexpr wchar_t analysisCandlesApiPath[] = L"/api/candles/analysis?limit=";
 constexpr wchar_t generatedSignalApiPath[] = L"/api/signals/grok45";
 constexpr DWORD maxResponseSize = 64 * 1024;
 constexpr std::size_t pageSize = 20;
+constexpr std::size_t signalPageSize = 15;
 
 /**
  * Zamyka uchwyt WinHTTP automatycznie po zakończeniu bieżącego zakresu.
@@ -1049,7 +1050,8 @@ bool CandleHistoryClient::fetchSignalPage(
     std::string& error) {
     if (page > 1000000 ||
         page > static_cast<std::size_t>(
-                   std::numeric_limits<unsigned long long>::max() / pageSize)) {
+                   std::numeric_limits<unsigned long long>::max() /
+                       signalPageSize)) {
         error = "Numer strony tabeli sygnałów jest poza zakresem.";
         return false;
     }
@@ -1131,7 +1133,7 @@ bool CandleHistoryClient::fetchSignalPage(
                 row.remove_suffix(1);
             }
             SignalReportEntry signal;
-            if (receivedSignals.size() == pageSize ||
+            if (receivedSignals.size() == signalPageSize ||
                 !splitSignalReportRow(row, signal)) {
                 error = "Lokalne API zwróciło nieprawidłowe dane sygnałów.";
                 return false;

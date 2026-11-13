@@ -158,7 +158,7 @@ void SignalsPage::positionControls() {
 }
 
 /**
- * Rysuje kolumny tabeli sygnałów z danymi JSON.
+ * Rysuje czas, produkt, cenę i algorytm oraz nieaktywny przycisk szczegółów.
  */
 void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
     if (!status_.empty() || signals_.empty()) {
@@ -193,10 +193,9 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
     const LONG rowHeight = std::max<LONG>(
         1, (tableArea.bottom - tableArea.top) /
                static_cast<LONG>(signals_.size() + 1));
-    const int columnWidths[] = {5, 14, 8, 8, 7, 16, 8, 8, 7, 19};
+    const int columnWidths[] = {22, 18, 14, 30, 16};
     const wchar_t* columnNames[] = {
-        L"ID", L"Czas (Polska)", L"Produkt", L"Cena", L"Sygnał",
-        L"Algorytm", L"AI", L"Transakcja", L"Świece", L"Parametry JSON"
+        L"Czas (Polska)", L"Produkt", L"Cena", L"Algorytm", L""
     };
     const UINT textFormat =
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
@@ -206,7 +205,7 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
     LONG rowTop = tableArea.top;
     LONG columnLeft = tableArea.left;
     const LONG totalWidth = tableArea.right - tableArea.left;
-    for (std::size_t column = 0; column < 10; ++column) {
+    for (std::size_t column = 0; column < 5; ++column) {
         const LONG columnWidth = totalWidth * columnWidths[column] / 100;
         RECT cell{columnLeft + 2, rowTop, columnLeft + columnWidth - 2,
                   rowTop + rowHeight};
@@ -217,21 +216,13 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
 
     for (const SignalReportEntry& signal : signals_) {
         const std::string values[] = {
-            signal.id,
             signal.datetime,
             signal.product,
             signal.price,
-            signal.direction == "long"
-                ? "LONG"
-                : (signal.direction == "short" ? "SHORT" : "NONE"),
             signal.algorithmName,
-            signal.aiDecision,
-            signal.transactionId,
-            signal.candlesCount,
-            signal.signalParameters
         };
         columnLeft = tableArea.left;
-        for (std::size_t column = 0; column < 10; ++column) {
+        for (std::size_t column = 0; column < 4; ++column) {
             std::wstring wideValue;
             if (!convertUtf8ToWide(values[column], wideValue)) {
                 wideValue = L"Nieprawidłowy tekst";
@@ -242,6 +233,25 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
             drawCell(deviceContext, wideValue, cell);
             columnLeft += columnWidth;
         }
+
+        const LONG detailsColumnWidth = totalWidth * columnWidths[4] / 100;
+        const LONG detailsButtonHeight =
+            std::min<LONG>(22, std::max<LONG>(1, rowHeight - 2));
+        const LONG detailsButtonTop =
+            rowTop + (rowHeight - detailsButtonHeight) / 2;
+        RECT detailsButtonBounds{
+            columnLeft + 4,
+            detailsButtonTop,
+            columnLeft + detailsColumnWidth - 4,
+            detailsButtonTop + detailsButtonHeight
+        };
+        // Przycisk pozostaje nieaktywny do czasu wskazania docelowego widoku.
+        DrawFrameControl(
+            deviceContext, &detailsButtonBounds, DFC_BUTTON,
+            DFCS_BUTTONPUSH | DFCS_INACTIVE);
+        DrawTextW(
+            deviceContext, L"Szczegóły", -1, &detailsButtonBounds,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         rowTop += rowHeight;
     }
 

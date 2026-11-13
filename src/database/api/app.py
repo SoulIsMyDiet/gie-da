@@ -979,8 +979,8 @@ class MarketDataRepository:
     def fetch_signal_page(
         self, page: int
     ) -> tuple[list[tuple[str, ...]], bool]:
-        """Pobiera 20 najnowszych sygnałów wraz z parametrami JSON."""
-        page_size = 20
+        """Pobiera 15 najnowszych sygnałów wraz z parametrami JSON."""
+        page_size = 15
         offset = page * page_size
         connection = mysql.connector.connect(**self.database_settings)
         try:
