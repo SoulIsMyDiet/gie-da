@@ -20,6 +20,8 @@ constexpr wchar_t apiHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT apiPort = 8000;
 constexpr wchar_t singleCandleApiPath[] = L"/api/candles";
 constexpr wchar_t batchApiPath[] = L"/api/candles/batch";
+constexpr wchar_t monitoredProductsApiPath[] = L"/api/products/monitored";
+constexpr wchar_t openProductsApiPath[] = L"/api/products/open";
 constexpr wchar_t analysisCandlesApiPath[] = L"/api/candles/analysis?limit=";
 constexpr wchar_t generatedSignalApiPath[] = L"/api/signals/grok45";
 constexpr DWORD maxResponseSize = 64 * 1024;
@@ -332,6 +334,52 @@ bool fetchApiResponse(
 }
 
 /**
+ * Pobiera i waliduje listę symboli zwróconą jako osobne wiersze tekstu.
+ */
+bool fetchSymbolList(
+    const std::wstring& path,
+    std::vector<std::string>& symbols,
+    std::string& error,
+    bool requireAtLeastOne) {
+    symbols.clear();
+    std::string responseBody;
+    if (!fetchApiResponse(path, responseBody, error)) {
+        return false;
+    }
+
+    std::size_t lineStart = 0;
+    while (lineStart < responseBody.size()) {
+        const std::size_t lineEnd = responseBody.find('\n', lineStart);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? responseBody.size() : lineEnd;
+        std::string symbol = responseBody.substr(
+            lineStart, effectiveEnd - lineStart);
+        if (!symbol.empty() && symbol.back() == '\r') {
+            symbol.pop_back();
+        }
+
+        std::wstring encodedSymbol;
+        if (symbol.empty() ||
+            !encodeSymbolForUrl(symbol, encodedSymbol) ||
+            std::find(symbols.begin(), symbols.end(), symbol) != symbols.end()) {
+            error = "Lokalne API zwróciło pusty, powtórzony lub nieprawidłowy symbol.";
+            return false;
+        }
+        symbols.push_back(std::move(symbol));
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    if (requireAtLeastOne && symbols.empty()) {
+        error = "Lokalne API nie ma aktywnych instrumentów do monitorowania.";
+        return false;
+    }
+    return true;
+}
+
+/**
  * Dzieli wiersz z danymi świecy na sześć pól rozdzielonych tabulatorami.
  */
 bool splitAnalysisCandleRow(
@@ -538,6 +586,23 @@ bool CandleHistoryClient::saveCandle(
     }
     signalSaved = signalText == "1";
     return true;
+}
+
+/**
+ * Pobiera z API skonfigurowane symbole bez wpisywania ich ponownie w C++.
+ */
+bool CandleHistoryClient::fetchMonitoredSymbols(
+    std::vector<std::string>& symbols, std::string& error) {
+    return fetchSymbolList(
+        monitoredProductsApiPath, symbols, error, true);
+}
+
+/**
+ * Pobiera listę rynków otwartych; pusta odpowiedź jest prawidłowa.
+ */
+bool CandleHistoryClient::fetchOpenSymbols(
+    std::vector<std::string>& symbols, std::string& error) {
+    return fetchSymbolList(openProductsApiPath, symbols, error, false);
 }
 
 /**

@@ -5,6 +5,8 @@
 #include "AudioSignal.h"
 #include "SignalGenerator.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdint>
 #include <utility>
@@ -14,8 +16,6 @@ namespace {
 
 constexpr UINT candleUpdateMessage = WM_APP + 1;
 constexpr DWORD candleCloseBufferMs = 2000;
-constexpr DWORD candleRetryIntervalMs = 5000;
-constexpr ULONGLONG candleRetryWindowMs = 30000;
 constexpr ULONGLONG fileTimeTicksPerSecond = 10000000ULL;
 constexpr ULONGLONG fileTimeTicksPerMinute = 60ULL * fileTimeTicksPerSecond;
 constexpr ULONGLONG windowsToUnixEpochTicks = 116444736000000000ULL;
@@ -319,10 +319,46 @@ DWORD WINAPI StockPriceMonitor::threadEntryPoint(LPVOID parameter) {
  * Uzupełnia braki po starcie, a następnie pobiera nową świecę co minutę.
  */
 void StockPriceMonitor::run() {
+    std::string symbolsError;
+    while (!CandleHistoryClient::fetchMonitoredSymbols(
+        monitoredSymbols_, symbolsError)) {
+        AcquireSRWLockExclusive(&statusLock_);
+        status_ = "Nie udało się pobrać listy instrumentów: " + symbolsError;
+        backfillStatus_ = "Oczekiwanie na konfigurację produktów.";
+        ReleaseSRWLockExclusive(&statusLock_);
+        if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0) ||
+            !waitForNextCandleClose(stopEvent_)) {
+            return;
+        }
+    }
+
     CandleBackfillResult backfillResult;
     std::string backfillError;
-    const bool backfillSucceeded =
-        CandleBackfillClient::synchronize(backfillResult, backfillError);
+    bool backfillSucceeded = true;
+    const auto backfillStartedAt = std::chrono::steady_clock::now();
+    for (const std::string& symbol : monitoredSymbols_) {
+        CandleBackfillResult productResult;
+        std::string productError;
+        const bool productSucceeded = CandleBackfillClient::synchronize(
+            symbol, productResult, productError);
+        backfillResult.savedCandleCount += productResult.savedCandleCount;
+        backfillResult.detectedGapCount += productResult.detectedGapCount;
+        if (symbol == "EURUSD/USD" &&
+            !productResult.latestCandle.datetime.empty()) {
+            backfillResult.latestCandle = std::move(productResult.latestCandle);
+        }
+        if (!productSucceeded) {
+            backfillSucceeded = false;
+            if (!backfillError.empty()) {
+                backfillError += " ";
+            }
+            backfillError += symbol + ": " + productError;
+        }
+    }
+    backfillResult.elapsedSeconds =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - backfillStartedAt)
+            .count();
     AcquireSRWLockExclusive(&statusLock_);
     if (!backfillResult.latestCandle.datetime.empty()) {
         oneMinuteCandle_ = std::move(backfillResult.latestCandle);
@@ -339,29 +375,10 @@ void StockPriceMonitor::run() {
             break;
         }
 
-        // Po zwiększeniu limitu API zastąp pojedyncze pobranie pętlą poniżej.
-        updateCandle();
+        updateAdditionalProducts();
         if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
             break;
         }
-
-        /*
-        // Odkomentuj po zwiększeniu limitu zapytań Twelve Data.
-        const ULONGLONG retryStartedAt = GetTickCount64();
-        while (true) {
-            const bool latestCandleAvailable = updateCandle();
-            if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
-                return;
-            }
-            if (latestCandleAvailable ||
-                GetTickCount64() - retryStartedAt >= candleRetryWindowMs) {
-                break;
-            }
-            if (WaitForSingleObject(stopEvent_, candleRetryIntervalMs) != WAIT_TIMEOUT) {
-                return;
-            }
-        }
-        */
     }
 }
 
@@ -456,4 +473,120 @@ bool StockPriceMonitor::updateCandle() {
     status_ = updateStatus;
     ReleaseSRWLockExclusive(&statusLock_);
     return fetched && isLatestClosedMinute(candle);
+}
+
+/**
+ * Pobiera tylko produkty z otwartą sesją, aby nie zużywać zapytań poza handlem.
+ */
+void StockPriceMonitor::updateAdditionalProducts() {
+    std::vector<std::string> configuredSymbols;
+    std::string configurationError;
+    if (!CandleHistoryClient::fetchMonitoredSymbols(
+            configuredSymbols, configurationError)) {
+        AcquireSRWLockExclusive(&statusLock_);
+        status_ += " Błąd odświeżania konfiguracji produktów: " +
+            configurationError;
+        ReleaseSRWLockExclusive(&statusLock_);
+        return;
+    }
+
+    for (const std::string& symbol : configuredSymbols) {
+        if (std::find(
+                monitoredSymbols_.begin(), monitoredSymbols_.end(), symbol) !=
+            monitoredSymbols_.end()) {
+            continue;
+        }
+
+        CandleBackfillResult backfillResult;
+        std::string backfillError;
+        const bool backfillSucceeded = CandleBackfillClient::synchronize(
+            symbol, backfillResult, backfillError);
+        std::string backfillStatus = createBackfillStatus(
+            backfillResult,
+            backfillSucceeded ? std::string{} : backfillError);
+        AcquireSRWLockExclusive(&statusLock_);
+        backfillStatus_ += " " + symbol + ": " + backfillStatus;
+        ReleaseSRWLockExclusive(&statusLock_);
+    }
+    monitoredSymbols_ = std::move(configuredSymbols);
+
+    std::vector<std::string> openSymbols;
+    std::string symbolsError;
+    if (!CandleHistoryClient::fetchOpenSymbols(openSymbols, symbolsError)) {
+        AcquireSRWLockExclusive(&statusLock_);
+        status_ += " Błąd pobierania aktywnych sesji: " + symbolsError;
+        ReleaseSRWLockExclusive(&statusLock_);
+        return;
+    }
+
+    if (openSymbols.empty()) {
+        AcquireSRWLockExclusive(&statusLock_);
+        status_ = "Brak obecnie otwartych sesji aktywnych produktów.";
+        ReleaseSRWLockExclusive(&statusLock_);
+        return;
+    }
+
+    const bool eurusdIsOpen = std::find(
+        openSymbols.begin(), openSymbols.end(), "EURUSD/USD") !=
+        openSymbols.end();
+    if (eurusdIsOpen) {
+        updateCandle();
+    }
+
+    std::string additionalStatus;
+    bool anySignalSaved = false;
+    bool anyGapDetected = false;
+    for (const std::string& symbol : openSymbols) {
+        if (symbol == "EURUSD/USD") {
+            continue;
+        }
+
+        CandleData candle;
+        std::string error;
+        if (!CandlesDataClient::fetchLatestOneMinuteCandle(
+                symbol, candle, error)) {
+            if (!additionalStatus.empty()) {
+                additionalStatus += " | ";
+            }
+            additionalStatus += symbol + ": błąd pobierania świecy: " + error;
+            continue;
+        }
+
+        std::size_t detectedGapCount = 0;
+        bool signalSaved = false;
+        if (!CandleHistoryClient::saveCandle(
+                symbol, candle, detectedGapCount, signalSaved, error)) {
+            if (!additionalStatus.empty()) {
+                additionalStatus += " | ";
+            }
+            additionalStatus += symbol + ": błąd zapisu świecy: " + error;
+            continue;
+        }
+        anySignalSaved = anySignalSaved || signalSaved;
+        anyGapDetected = anyGapDetected || detectedGapCount > 0;
+        if (!additionalStatus.empty()) {
+            additionalStatus += " | ";
+        }
+        additionalStatus += symbol + ": świeca została zapisana";
+        if (detectedGapCount > 0) {
+            additionalStatus += ", wykryto " +
+                std::to_string(detectedGapCount) + " brakujących świec";
+        }
+        additionalStatus += ".";
+    }
+
+    if (anyGapDetected && !AudioSignal::play()) {
+        additionalStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
+    }
+    if (anySignalSaved && !AudioSignal::playSignalSaved()) {
+        additionalStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
+    }
+
+    AcquireSRWLockExclusive(&statusLock_);
+    if (!eurusdIsOpen) {
+        status_ = additionalStatus;
+    } else if (!additionalStatus.empty()) {
+        status_ += " | " + additionalStatus;
+    }
+    ReleaseSRWLockExclusive(&statusLock_);
 }

@@ -42,12 +42,17 @@ from EURUSDStrategyV2 import (  # noqa: E402
     EURUSDStrategyV2,
     STRATEGY_NAME as GROK45_V2_STRATEGY_NAME,
 )
+from market_products import (  # noqa: E402
+    get_monitored_symbols,
+    get_open_symbols,
+    is_market_open,
+    is_monitored_product,
+)
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
-NEW_YORK_TIME_ZONE = ZoneInfo("America/New_York")
 MAX_BACKFILL_CANDLES = 1000
 GROK45_ANALYSIS_WINDOW = 100
 
@@ -490,7 +495,8 @@ class MarketDataRepository:
         open_market_candles = [
             candle
             for candle in candles
-            if self._is_forex_market_open(
+            if self._is_market_open(
+                candle.symbol,
                 candle.datetime.astimezone(timezone.utc)
             )
         ]
@@ -621,7 +627,7 @@ class MarketDataRepository:
         missing_times = []
         missing_time = previous_utc + timedelta(minutes=1)
         while missing_time < current_utc:
-            if self._is_forex_market_open(missing_time):
+            if self._is_market_open(candle.symbol, missing_time):
                 missing_times.append(missing_time)
             missing_time += timedelta(minutes=1)
         return self._upsert_candle_gaps(
@@ -898,7 +904,7 @@ class MarketDataRepository:
             while current_minute > stored_time:
                 if (
                     current_minute not in stored_times
-                    and self._is_forex_market_open(current_minute)
+                    and self._is_market_open(symbol, current_minute)
                 ):
                     missing_times.append(current_minute)
                 current_minute -= timedelta(minutes=1)
@@ -932,18 +938,9 @@ class MarketDataRepository:
         )
 
     @staticmethod
-    def _is_forex_market_open(utc_time: datetime) -> bool:
-        """Pomija weekendowe zamknięcie rynku Forex przy wyznaczaniu luk."""
-        new_york_time = utc_time.astimezone(NEW_YORK_TIME_ZONE)
-        weekday = new_york_time.weekday()
-        minute_of_day = new_york_time.hour * 60 + new_york_time.minute
-        friday_close = 17 * 60
-        sunday_open = 17 * 60
-        return (
-            weekday in (0, 1, 2, 3)
-            or (weekday == 4 and minute_of_day < friday_close)
-            or (weekday == 6 and minute_of_day >= sunday_open)
-        )
+    def _is_market_open(symbol: str, utc_time: datetime) -> bool:
+        """Stosuje harmonogram przypisany do produktu zamiast kalendarza Forex."""
+        return is_market_open(symbol, utc_time)
 
     def fetch_candle_page(
         self, page: int
@@ -1230,10 +1227,34 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/products/monitored", response_class=Response)
+def monitored_products() -> Response:
+    """Udostępnia monitorowi aktywne symbole bez powielania ich w C++."""
+    return Response(
+        content="\n".join(get_monitored_symbols()),
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+@app.get("/api/products/open", response_class=Response)
+def open_products() -> Response:
+    """Udostępnia tylko instrumenty z otwartą sesją, oszczędzając zapytania."""
+    return Response(
+        content="\n".join(get_open_symbols(datetime.now(timezone.utc))),
+        media_type="text/plain; charset=utf-8",
+    )
+
+
 @app.post("/api/candles", response_class=Response)
 def save_candle(candle: CandleRecord, request: Request) -> Response:
     """Zapisuje świecę i zwraca liczbę nowo wykrytych brakujących minut."""
-    if not request.app.state.repository._is_forex_market_open(
+    if not is_monitored_product(candle.symbol):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Instrument {candle.symbol} nie jest skonfigurowany.",
+        )
+    if not request.app.state.repository._is_market_open(
+        candle.symbol,
         candle.datetime.astimezone(timezone.utc)
     ):
         return Response(content="0\n0", media_type="text/plain; charset=utf-8")
@@ -1377,6 +1398,21 @@ def save_grok45_signal(
 @app.post("/api/candles/batch", response_class=Response)
 def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
     """Zapisuje maksymalnie 1000 otwartych minut i zwraca liczbę zapisanych."""
+    unsupported_symbols = sorted(
+        {
+            candle.symbol
+            for candle in batch.candles
+            if not is_monitored_product(candle.symbol)
+        }
+    )
+    if unsupported_symbols:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Nie skonfigurowano instrumentów: "
+                + ", ".join(unsupported_symbols)
+            ),
+        )
     try:
         with strategy_lock:
             request.app.state.strategy_ready = False
@@ -1412,6 +1448,11 @@ def missing_candles(
     symbol: str = Query(min_length=1, max_length=32, pattern=r"^[A-Z0-9./_-]+$"),
 ) -> Response:
     """Zwraca status bazy i do 1000 najnowszych brakujących minut dla symbolu."""
+    if not is_monitored_product(symbol):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Instrument {symbol} nie jest skonfigurowany.",
+        )
     try:
         has_existing_candles, missing_times, total_missing_count = (
             request.app.state.repository.fetch_missing_candle_times(

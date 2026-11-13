@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
 
 #include "CandlesDataClient.h"
 
@@ -57,15 +58,20 @@ private:
     void run();
 
     /**
-     * Pobiera świecę i aktualizuje wspólny stan monitora.
-     * @return true, jeśli pobrano świecę dla ostatniej zamkniętej minuty UTC.
+     * Pobiera świecę EURUSD i uruchamia przypisane jej algorytmy sygnałów.
      */
     bool updateCandle();
+
+    /**
+     * Pobiera i zapisuje świece aktywnych produktów innych niż EURUSD.
+     */
+    void updateAdditionalProducts();
 
     HWND notificationWindow_ = nullptr;
     HANDLE stopEvent_ = nullptr;
     HANDLE workerThread_ = nullptr;
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
+    std::vector<std::string> monitoredSymbols_;
     CandleData oneMinuteCandle_;
     std::string status_ = "Oczekiwanie na świecę 1-minutową...";
     std::string backfillStatus_ = "Sprawdzanie brakujących świec...";

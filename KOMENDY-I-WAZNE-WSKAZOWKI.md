@@ -130,14 +130,24 @@ Kod API i konfiguracja bazy znajdują się w `src/database`. Tabela jest przygot
 przy uruchomieniu API, a jej zmiany należy wprowadzać ostrożnie — nie usuwaj wolumenu
 MySQL przy zmianie kodu.
 
-Przy uruchomieniu aplikacja giełdy sprawdza luki w świecach EUR/USD i uzupełnia do
-1000 najnowszych. Wynik i czas operacji są widoczne na ekranie głównym. Zmiany w API
-wymagają `docker compose up -d --build`, a zmiany aplikacji — ponownej kompilacji.
+Aktywne instrumenty i ich sesje znajdują się w `src/database/api/market_products.py`.
+Nowy symbol dodaj do `MONITORED_PRODUCTS` i przypisz mu profil z `MARKET_PROFILES`.
+Dostępne profile przykładowe to Forex 24/5, akcje USA w podstawowej sesji giełdowej
+i krypto 24/7. Sesje profilu podawaj według lokalnego czasu giełdy jako minuty od
+północy; początek jest wliczony, a koniec wyłączony. Sesję przechodzącą przez
+północ podziel na przedziały przypisane do odpowiednich dni tygodnia. Na start
+aktywny pozostaje tylko `EURUSD/USD`. Monitor pobiera
+konfigurację z API, wykrywa nowe symbole bez rekompilacji aplikacji i pyta Twelve
+Data wyłącznie o instrumenty z otwartą sesją.
+Przy uruchomieniu nadrabia do 1000 brakujących świec dla każdego aktywnego produktu.
+Zmiany w API wymagają `docker compose up -d --build`, a zmiany aplikacji —
+ponownej kompilacji.
 
 Tabela `candle_gaps` zapisuje każdą wykrytą brakującą minutę. Po zapisaniu świecy jej
 status zmienia się z `missing` na `filled`, a wpis pozostaje jako historia. Przy
 wykryciu luki aplikacja odtwarza dźwięk i pokazuje komunikat, który wskazuje tę tabelę.
 Podgląd aktywnych i uzupełnionych wpisów otworzysz przyciskiem „Luki świec” obok
-przycisku „Raporty”. Przycisk „Sygnały” otwiera podgląd tabeli signals. API nie zapisuje świec przypadających na weekendowe zamknięcie
-Forex (piątek 17:00 – niedziela 17:00 czasu Nowego Jorku), ani przy pobieraniu co
-minutę, ani podczas nadrabiania historii.
+przycisku „Raporty”. Przycisk „Sygnały” otwiera podgląd tabeli signals. API zapisuje
+świece i wykrywa luki zgodnie z tygodniowym kalendarzem profilu przypisanego do
+produktu. Profile giełdowe nie uwzględniają jeszcze świąt ani nadzwyczajnych zmian
+godzin handlu.

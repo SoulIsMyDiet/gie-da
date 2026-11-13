@@ -1,0 +1,171 @@
+"""Rejestr aktywnych instrumentów i kalendarzy sesji rynkowych."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
+@dataclass(frozen=True)
+class SessionWindow:
+    """Opisuje przedział handlu w lokalnym czasie danej giełdy."""
+
+    start_minute: int
+    end_minute: int
+
+    def contains(self, minute_of_day: int) -> bool:
+        """Sprawdza, czy minuta dnia należy do przedziału handlu."""
+        return self.start_minute <= minute_of_day < self.end_minute
+
+
+@dataclass(frozen=True)
+class MarketProfile:
+    """Przechowuje strefę czasową i tygodniowy kalendarz jednego typu rynku."""
+
+    market_type: str
+    timezone_name: str
+    sessions_by_weekday: tuple[tuple[SessionWindow, ...], ...]
+
+    def is_open(self, utc_time: datetime) -> bool:
+        """Zwraca informację, czy rynek jest otwarty w podanym czasie UTC."""
+        if utc_time.tzinfo is None or utc_time.utcoffset() is None:
+            raise ValueError("Czas rynku musi zawierać strefę czasową.")
+        local_time = utc_time.astimezone(ZoneInfo(self.timezone_name))
+        minute_of_day = local_time.hour * 60 + local_time.minute
+        return any(
+            session.contains(minute_of_day)
+            for session in self.sessions_by_weekday[local_time.weekday()]
+        )
+
+
+@dataclass(frozen=True)
+class MarketProduct:
+    """Łączy symbol Twelve Data z typem rynku i jego harmonogramem."""
+
+    symbol: str
+    profile_name: str
+
+
+_CLOSED_DAY: tuple[SessionWindow, ...] = ()
+_ALL_DAY = (SessionWindow(0, 24 * 60),)
+
+MARKET_PROFILES = {
+    "forex_ny_24_5": MarketProfile(
+        market_type="forex",
+        timezone_name="America/New_York",
+        sessions_by_weekday=(
+            _ALL_DAY,
+            _ALL_DAY,
+            _ALL_DAY,
+            _ALL_DAY,
+            (SessionWindow(0, 17 * 60),),
+            _CLOSED_DAY,
+            (SessionWindow(17 * 60, 24 * 60),),
+        ),
+    ),
+    "us_equity": MarketProfile(
+        market_type="equity",
+        timezone_name="America/New_York",
+        sessions_by_weekday=(
+            (SessionWindow(9 * 60 + 30, 16 * 60),),
+            (SessionWindow(9 * 60 + 30, 16 * 60),),
+            (SessionWindow(9 * 60 + 30, 16 * 60),),
+            (SessionWindow(9 * 60 + 30, 16 * 60),),
+            (SessionWindow(9 * 60 + 30, 16 * 60),),
+            _CLOSED_DAY,
+            _CLOSED_DAY,
+        ),
+    ),
+    "crypto_24_7": MarketProfile(
+        market_type="crypto",
+        timezone_name="UTC",
+        sessions_by_weekday=(_ALL_DAY,) * 7,
+    ),
+}
+
+# Dodaj nowe symbole tutaj i przypisz im odpowiedni profil rynku.
+MONITORED_PRODUCTS = (
+    MarketProduct("EURUSD/USD", "forex_ny_24_5"),
+)
+
+
+def get_market_profile(symbol: str) -> MarketProfile:
+    """Zwraca profil instrumentu lub zgłasza błąd dla nieznanego symbolu."""
+    for product in MONITORED_PRODUCTS:
+        if product.symbol == symbol:
+            return MARKET_PROFILES[product.profile_name]
+    raise ValueError(f"Instrument {symbol} nie jest skonfigurowany.")
+
+
+def is_market_open(symbol: str, utc_time: datetime) -> bool:
+    """Sprawdza sesję właściwą dla skonfigurowanego instrumentu."""
+    return get_market_profile(symbol).is_open(utc_time)
+
+
+def get_monitored_symbols() -> tuple[str, ...]:
+    """Zwraca symbole aktywne w monitorze w kolejności z konfiguracji."""
+    return tuple(product.symbol for product in MONITORED_PRODUCTS)
+
+
+def get_open_symbols(utc_time: datetime) -> tuple[str, ...]:
+    """Zwraca tylko aktywne produkty, których sesje są teraz otwarte."""
+    return tuple(
+        product.symbol
+        for product in MONITORED_PRODUCTS
+        if MARKET_PROFILES[product.profile_name].is_open(utc_time)
+    )
+
+
+def is_monitored_product(symbol: str) -> bool:
+    """Sprawdza, czy symbol należy do aktywnej konfiguracji produktów."""
+    return any(product.symbol == symbol for product in MONITORED_PRODUCTS)
+
+
+def _validate_profile_configuration() -> None:
+    """Sprawdza profile i powiązania produktów przy imporcie modułu."""
+    for profile in MARKET_PROFILES.values():
+        if len(profile.sessions_by_weekday) != 7:
+            raise ValueError(
+                f"Profil {profile.market_type} musi zawierać 7 dni tygodnia."
+            )
+        ZoneInfo(profile.timezone_name)
+        for daily_sessions in profile.sessions_by_weekday:
+            previous_end = 0
+            for session in daily_sessions:
+                if (
+                    session.start_minute < previous_end
+                    or session.start_minute < 0
+                    or session.end_minute > 24 * 60
+                    or session.start_minute >= session.end_minute
+                ):
+                    raise ValueError(
+                        f"Profil {profile.market_type} zawiera "
+                        "nieprawidłową sesję."
+                    )
+                previous_end = session.end_minute
+
+    known_profiles = set(MARKET_PROFILES)
+    configured_symbols = set()
+    for product in MONITORED_PRODUCTS:
+        valid_symbol = (
+            0 < len(product.symbol) <= 32
+            and product.symbol.isascii()
+            and product.symbol == product.symbol.upper()
+            and all(
+                character.isalnum() or character in "./_-"
+                for character in product.symbol
+            )
+        )
+        if not valid_symbol:
+            raise ValueError(f"Nieprawidłowy symbol produktu: {product.symbol}.")
+        if product.symbol in configured_symbols:
+            raise ValueError(f"Powtórzony symbol produktu: {product.symbol}.")
+        if product.profile_name not in known_profiles:
+            raise ValueError(
+                f"Brak profilu {product.profile_name} dla {product.symbol}."
+            )
+        configured_symbols.add(product.symbol)
+
+
+_validate_profile_configuration()

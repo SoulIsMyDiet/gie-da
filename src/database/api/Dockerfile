@@ -13,6 +13,7 @@ RUN apt-get update \
 
 COPY database/api/app.py ./app.py
 COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.py
+COPY database/api/market_products.py ./market_products.py
 COPY algorithms/Chat-gpt6/EURUSD/ ./algorithm/
 COPY algorithms/Grok-45/EURUSD/EURUSDStrategyV2.py ./grok_algorithm/
 USER appuser

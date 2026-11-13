@@ -87,6 +87,24 @@ public:
         std::string& error);
 
     /**
+     * Pobiera listę instrumentów aktywnych w konfiguracji lokalnego API.
+     * @param symbols Otrzymuje unikalne symbole w kolejności konfiguracji.
+     * @param error Otrzymuje opis błędu, jeśli odpowiedź jest nieprawidłowa.
+     * @return true, jeśli API zwróciło co najmniej jeden prawidłowy symbol.
+     */
+    static bool fetchMonitoredSymbols(
+        std::vector<std::string>& symbols, std::string& error);
+
+    /**
+     * Pobiera symbole, których sesje są aktualnie otwarte.
+     * @param symbols Otrzymuje unikalne symbole; lista może być pusta.
+     * @param error Otrzymuje opis błędu, jeśli odpowiedź jest nieprawidłowa.
+     * @return true, jeśli API zwróciło prawidłową listę.
+     */
+    static bool fetchOpenSymbols(
+        std::vector<std::string>& symbols, std::string& error);
+
+    /**
      * Pobiera ostatnie świece EURUSD/USD do analizy wskaźników.
      * @param maximumCandles Maksymalna liczba świec do pobrania (1-100).
      * @param candles Otrzymuje świece uporządkowane chronologicznie.

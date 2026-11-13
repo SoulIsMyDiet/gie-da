@@ -15,7 +15,6 @@
 
 namespace {
 
-constexpr char monitoredSymbol[] = "EURUSD/USD";
 constexpr std::size_t maximumBackfillCandles = 1000;
 constexpr std::size_t maximumProviderCandles = 5000;
 constexpr ULONGLONG ticksPerMinute = 60ULL * 10000000ULL;
@@ -75,14 +74,16 @@ void updateElapsedTime(
  * Pobiera brakujące minuty z Twelve Data i zapisuje je paczkami do lokalnej bazy.
  */
 bool CandleBackfillClient::synchronize(
-    CandleBackfillResult& result, std::string& error) {
+    const std::string& symbol,
+    CandleBackfillResult& result,
+    std::string& error) {
     result = {};
     const auto startedAt = std::chrono::steady_clock::now();
     bool hasExistingCandles = false;
     std::size_t detectedGapCount = 0;
     std::vector<std::string> missingTimes;
     if (!CandleHistoryClient::fetchMissingCandleTimes(
-            monitoredSymbol, hasExistingCandles, missingTimes,
+            symbol, hasExistingCandles, missingTimes,
             detectedGapCount, error)) {
         updateElapsedTime(result, startedAt);
         return false;
@@ -92,7 +93,7 @@ bool CandleBackfillClient::synchronize(
     if (!hasExistingCandles) {
         std::vector<CandleData> latestCandles;
         if (!CandlesDataClient::fetchLatestOneMinuteCandles(
-                monitoredSymbol, maximumBackfillCandles, latestCandles, error)) {
+                symbol, maximumBackfillCandles, latestCandles, error)) {
             updateElapsedTime(result, startedAt);
             return false;
         }
@@ -100,7 +101,7 @@ bool CandleBackfillClient::synchronize(
             std::size_t savedCandleCount = 0;
             std::string latestSavedDatetime;
             if (!CandleHistoryClient::saveCandles(
-                    monitoredSymbol, latestCandles, savedCandleCount,
+                    symbol, latestCandles, savedCandleCount,
                     latestSavedDatetime, error)) {
                 updateElapsedTime(result, startedAt);
                 return false;
@@ -152,7 +153,7 @@ bool CandleBackfillClient::synchronize(
 
         std::vector<CandleData> receivedCandles;
         if (!CandlesDataClient::fetchOneMinuteCandleRange(
-                monitoredSymbol,
+                symbol,
                 missingTimes[firstIndex],
                 missingTimes[nextIndex - 1],
                 maximumProviderCandles,
@@ -172,7 +173,7 @@ bool CandleBackfillClient::synchronize(
             std::size_t savedCandleCount = 0;
             std::string latestSavedDatetime;
             if (!CandleHistoryClient::saveCandles(
-                    monitoredSymbol, missingCandles, savedCandleCount,
+                    symbol, missingCandles, savedCandleCount,
                     latestSavedDatetime, error)) {
                 updateElapsedTime(result, startedAt);
                 return false;

@@ -155,7 +155,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
                 return self
 
         repository = Mock()
-        repository._is_forex_market_open.return_value = True
+        repository._is_market_open.return_value = True
         repository.save_candle.return_value = (0, 1, "", True)
         chat_strategy = FakeChatStrategy()
         api_application = SimpleNamespace(
