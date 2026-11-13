@@ -228,7 +228,7 @@ class MarketDataRepository:
             "SHOW INDEX FROM signals WHERE Key_name = %s",
             ("uq_signals_source_timestamp",),
         )
-        if cursor.fetchone() is None:
+        if not cursor.fetchall():
             cursor.execute(
                 """
                 ALTER TABLE signals
