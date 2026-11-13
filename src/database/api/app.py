@@ -183,16 +183,16 @@ class MarketDataRepository:
                     CREATE TABLE IF NOT EXISTS signal_potention (
                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
                         signal_id BIGINT UNSIGNED NOT NULL,
-                        saldo_1st_candle DECIMAL(20, 10) NULL DEFAULT NULL,
-                        saldo_2nd_candle DECIMAL(20, 10) NULL DEFAULT NULL,
-                        saldo_3rd_candle DECIMAL(20, 10) NULL DEFAULT NULL,
-                        saldo_4th_candle DECIMAL(20, 10) NULL DEFAULT NULL,
-                        saldo_5th_candle DECIMAL(20, 10) NULL DEFAULT NULL,
-                        saldo_10aggr_candles DECIMAL(20, 10) NULL DEFAULT NULL,
-                        saldo_20_aggr_candles DECIMAL(20, 10) NULL DEFAULT NULL,
+                        saldo_1st_candle DECIMAL(20, 5) NULL DEFAULT NULL,
+                        saldo_2nd_candle DECIMAL(20, 5) NULL DEFAULT NULL,
+                        saldo_3rd_candle DECIMAL(20, 5) NULL DEFAULT NULL,
+                        saldo_4th_candle DECIMAL(20, 5) NULL DEFAULT NULL,
+                        saldo_5th_candle DECIMAL(20, 5) NULL DEFAULT NULL,
+                        saldo_10aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
+                        saldo_20_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         max_candle INT NULL DEFAULT NULL,
-                        `100zl_deal` DECIMAL(20, 10) NULL DEFAULT NULL,
-                        spread DECIMAL(20, 10) NOT NULL DEFAULT 0.0003,
+                        `100zl_deal` DECIMAL(20, 5) NULL DEFAULT NULL,
+                        spread DECIMAL(20, 5) NOT NULL DEFAULT 0.0003,
                         UNIQUE KEY uq_signal_potention_signal_id (signal_id),
                         CONSTRAINT fk_signal_potention_signal
                             FOREIGN KEY (signal_id) REFERENCES signals(id)
@@ -250,9 +250,15 @@ class MarketDataRepository:
         if old_saldo_column in column_names and new_saldo_column not in column_names:
             cursor.execute(
                 """
+                UPDATE signal_potention
+                SET saldo_10th_candle = TRUNCATE(saldo_10th_candle, 5)
+                """
+            )
+            cursor.execute(
+                """
                 ALTER TABLE signal_potention
                 CHANGE COLUMN saldo_10th_candle saldo_10aggr_candles
-                    DECIMAL(20, 10) NULL DEFAULT NULL
+                DECIMAL(20, 5) NULL DEFAULT NULL
                 """
             )
             column_names.remove(old_saldo_column)
@@ -262,7 +268,10 @@ class MarketDataRepository:
                 """
                 UPDATE signal_potention
                 SET saldo_10aggr_candles =
-                    COALESCE(saldo_10aggr_candles, saldo_10th_candle)
+                    COALESCE(
+                        saldo_10aggr_candles,
+                        TRUNCATE(saldo_10th_candle, 5)
+                    )
                 """
             )
             cursor.execute(
@@ -275,7 +284,7 @@ class MarketDataRepository:
                 """
                 ALTER TABLE signal_potention
                 ADD COLUMN saldo_20_aggr_candles
-                    DECIMAL(20, 10) NULL DEFAULT NULL
+                DECIMAL(20, 5) NULL DEFAULT NULL
                     AFTER saldo_10aggr_candles
                 """
             )
@@ -295,7 +304,7 @@ class MarketDataRepository:
             cursor.execute(
                 """
                 ALTER TABLE signal_potention
-                ADD COLUMN `100zl_deal` DECIMAL(20, 10) NULL DEFAULT NULL
+                ADD COLUMN `100zl_deal` DECIMAL(20, 5) NULL DEFAULT NULL
                     AFTER max_candle
                 """
             )
@@ -305,9 +314,46 @@ class MarketDataRepository:
             cursor.execute(
                 """
                 ALTER TABLE signal_potention
-                ADD COLUMN spread DECIMAL(20, 10) NOT NULL DEFAULT 0.0003
+                ADD COLUMN spread DECIMAL(20, 5) NOT NULL DEFAULT 0.0003
                     AFTER `100zl_deal`
                 """
+            )
+
+        decimal_columns = {
+            "saldo_1st_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "saldo_2nd_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "saldo_3rd_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "saldo_4th_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "saldo_5th_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "saldo_10aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "saldo_20_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "100zl_deal": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "spread": "DECIMAL(20, 5) NOT NULL DEFAULT 0.0003",
+        }
+        cursor.execute("SHOW COLUMNS FROM signal_potention")
+        column_types = {
+            column[0]: str(column[1]).replace(" ", "").lower()
+            for column in cursor.fetchall()
+        }
+        columns_to_update = [
+            column_name
+            for column_name in decimal_columns
+            if column_types.get(column_name) != "decimal(20,5)"
+        ]
+        if columns_to_update:
+            truncated_values = ", ".join(
+                f"`{column_name}` = TRUNCATE(`{column_name}`, 5)"
+                for column_name in columns_to_update
+            )
+            cursor.execute(
+                f"UPDATE signal_potention SET {truncated_values}"
+            )
+            modified_columns = ", ".join(
+                f"`{column_name}` {decimal_columns[column_name]}"
+                for column_name in columns_to_update
+            )
+            cursor.execute(
+                f"ALTER TABLE signal_potention MODIFY COLUMN {modified_columns}"
             )
 
     def _migrate_candle_timestamps(

@@ -48,11 +48,7 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         self.assertEqual(result["saldo_10aggr_candles"], Decimal("-0.0002"))
         self.assertEqual(result["saldo_20_aggr_candles"], Decimal("0.0017"))
         self.assertEqual(result["max_candle"], 13)
-        self.assertEqual(
-            result["100zl_deal"],
-            Decimal("100") * Decimal("30") * Decimal("0.0017")
-            / self.entry_price,
-        )
+        self.assertEqual(result["100zl_deal"], Decimal("4.63636"))
 
     def test_short_aggregates_lowest_low(self) -> None:
         """Salda SHORT wybierają najniższe low i odejmują spread."""
@@ -105,6 +101,24 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         )
 
         self.assertEqual(result["saldo_1st_candle"], Decimal("0.0000"))
+
+    def test_truncates_balance_values_to_five_decimal_places(self) -> None:
+        """Wyniki są obcinane do pięciu miejsc bez zaokrąglania."""
+        result = self.calculator.calculate(
+            "long",
+            self.entry_price,
+            [(Decimal("1.100423456"), Decimal("1.0998"))],
+        )
+
+        self.assertEqual(result["saldo_1st_candle"], Decimal("0.00012"))
+
+        negative_result = self.calculator.calculate(
+            "long",
+            self.entry_price,
+            [(Decimal("1.1000"), Decimal("1.0998"))],
+            Decimal("0.000345"),
+        )
+        self.assertEqual(negative_result["saldo_1st_candle"], Decimal("-0.00034"))
 
 
 if __name__ == "__main__":

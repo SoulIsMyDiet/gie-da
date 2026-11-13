@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
@@ -17,6 +17,7 @@ class SignalPotentialCalculator:
     SPREAD_PRICE = Decimal("0.0003")
     DEPOSIT_PLN = Decimal("100")
     LEVERAGE = Decimal("30")
+    BALANCE_DECIMAL_PLACES = Decimal("0.00001")
 
     def calculate(
         self,
@@ -85,6 +86,12 @@ class SignalPotentialCalculator:
             results["100zl_deal"] = (
                 self.DEPOSIT_PLN * self.LEVERAGE * balance_20 / entry_price
             )
+
+        for field_name, value in results.items():
+            if isinstance(value, Decimal):
+                results[field_name] = value.quantize(
+                    self.BALANCE_DECIMAL_PLACES, rounding=ROUND_DOWN
+                )
 
         return results
 
