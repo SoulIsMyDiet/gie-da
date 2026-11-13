@@ -436,16 +436,11 @@ bool StockPriceMonitor::updateCandle() {
                 if (generatedSignal.find("\"signal\":\"LONG\"") !=
                         std::string::npos ||
                     generatedSignal.find("\"signal\":\"SHORT\"") !=
-                        std::string::npos ||
-                    generatedSignal.find("\"signal\":\"NONE\"") !=
                         std::string::npos) {
                     if (!CandleHistoryClient::saveGeneratedSignal(
                             generatedSignal, grokSignalSaved, signalError)) {
                         updateStatus += " Błąd zapisu sygnału Grok-45: " +
                             signalError;
-                    } else if (generatedSignal.find("\"signal\":\"NONE\"") !=
-                               std::string::npos) {
-                        grokSignalSaved = false;
                     }
                 }
             }

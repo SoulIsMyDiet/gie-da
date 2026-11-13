@@ -81,14 +81,14 @@ class CandleBatch(BaseModel):
 
 
 class Grok45SignalRecord(BaseModel):
-    """Opis wyniku analizy wygenerowanego przez algorytm Grok-45."""
+    """Opis sygnału LONG/SHORT wygenerowanego przez algorytm Grok-45."""
 
     model_config = ConfigDict(extra="forbid")
 
     instrument: Literal["EUR/USD"]
     price: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
     timestamp: int = Field(gt=0)
-    signal: Literal["LONG", "SHORT", "NONE"]
+    signal: Literal["LONG", "SHORT"]
     parameters: dict[str, int | float | str | None]
 
 
@@ -161,7 +161,7 @@ class MarketDataRepository:
                         `datetime` DATETIME(6) NOT NULL,
                         product VARCHAR(32) NOT NULL,
                         price DECIMAL(20, 10) NOT NULL,
-                        `signal` ENUM('none', 'short', 'long') NOT NULL,
+                        `signal` ENUM('short', 'long') NOT NULL,
                         algorithm_name VARCHAR(255) NOT NULL,
                         ai_decision JSON NULL,
                         transaction_id BIGINT UNSIGNED NULL,
@@ -177,7 +177,6 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
-                self._migrate_grok45_signal_status(cursor)
                 self._migrate_signal_source_timestamp(cursor)
                 cursor.execute(
                     """
@@ -236,22 +235,6 @@ class MarketDataRepository:
                 ALTER TABLE signals
                 ADD UNIQUE KEY uq_signals_source_timestamp
                     (product, algorithm_name, source_timestamp)
-                """
-            )
-
-    def _migrate_grok45_signal_status(
-        self, cursor: mysql.connector.cursor.MySQLCursor
-    ) -> None:
-        """Rozszerza status sygnału o NONE, zachowując istniejące wpisy."""
-        cursor.execute("SHOW COLUMNS FROM signals LIKE 'signal'")
-        signal_column = cursor.fetchone()
-        if signal_column is None:
-            raise RuntimeError("Tabela signals nie zawiera kolumny signal.")
-        if "none" not in signal_column[1].lower():
-            cursor.execute(
-                """
-                ALTER TABLE signals
-                MODIFY COLUMN `signal` ENUM('none', 'short', 'long') NOT NULL
                 """
             )
 
@@ -716,7 +699,7 @@ class MarketDataRepository:
                 ),
             )
             signal_was_inserted = cursor.rowcount == 1
-            if signal_was_inserted and signal.signal != "NONE":
+            if signal_was_inserted:
                 cursor.execute(
                     """
                     INSERT INTO signal_potention (signal_id, spread)
