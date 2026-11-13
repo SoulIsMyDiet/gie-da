@@ -193,6 +193,14 @@ bool CandleBackfillClient::synchronize(
         firstIndex = nextIndex;
     }
 
+    if (!missingTimeSet.empty()) {
+        error = "Dostawca nie zwrócił " +
+            std::to_string(missingTimeSet.size()) +
+            " brakujących świec; monitor ponowi próbę.";
+        updateElapsedTime(result, startedAt);
+        return false;
+    }
+
     updateElapsedTime(result, startedAt);
     return true;
 }

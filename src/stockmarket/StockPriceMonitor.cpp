@@ -389,6 +389,8 @@ void StockPriceMonitor::run() {
         std::chrono::duration<double>(
             std::chrono::steady_clock::now() - backfillStartedAt)
             .count();
+    const bool startupGapSoundPlayed =
+        backfillResult.detectedGapCount == 0 || AudioSignal::play();
     AcquireSRWLockExclusive(&statusLock_);
     if (!backfillResult.latestCandle.datetime.empty()) {
         oneMinuteCandle_ = std::move(backfillResult.latestCandle);
@@ -397,6 +399,9 @@ void StockPriceMonitor::run() {
         backfillResult, backfillSucceeded ? std::string{} : backfillError);
     if (!deferredBackfillStatus.empty()) {
         backfillStatus_ += " " + deferredBackfillStatus;
+    }
+    if (!startupGapSoundPlayed) {
+        backfillStatus_ += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
     ReleaseSRWLockExclusive(&statusLock_);
     if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
@@ -562,6 +567,8 @@ void StockPriceMonitor::updateAdditionalProducts() {
             const bool backfillSucceeded =
                 CandleBackfillClient::synchronize(
                     symbol, backfillResult, backfillError);
+            anyGapDetected =
+                anyGapDetected || backfillResult.detectedGapCount > 0;
             if (!backfillSucceeded) {
                 if (!additionalStatus.empty()) {
                     additionalStatus += " | ";
@@ -620,6 +627,17 @@ void StockPriceMonitor::updateAdditionalProducts() {
         if (detectedGapCount > 0) {
             additionalStatus += ", wykryto " +
                 std::to_string(detectedGapCount) + " brakujących świec";
+            CandleBackfillResult backfillResult;
+            std::string backfillError;
+            if (!CandleBackfillClient::synchronize(
+                    symbol, backfillResult, backfillError)) {
+                backfilledSymbols_.erase(symbol);
+                additionalStatus +=
+                    "; nie udało się ich uzupełnić: " + backfillError;
+            } else {
+                additionalStatus +=
+                    "; brakujące świece zostały uzupełnione";
+            }
         }
         additionalStatus += ".";
     }
