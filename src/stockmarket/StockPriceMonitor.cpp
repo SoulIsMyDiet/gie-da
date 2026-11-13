@@ -142,7 +142,35 @@ std::string describeCandleFreshness(const CandleData& candle) {
 }
 
 /**
- * Sprawdza, czy znacznik świecy odpowiada ostatniej zamkniętej minucie UTC.
+ * Sprawdza, czy świeca UTC jest zamknięta, nawet jeśli dostawca ją opóźnił.
+ */
+bool isClosedCandle(const CandleData& candle) {
+    SYSTEMTIME candleTime{};
+    SYSTEMTIME currentTime{};
+    if (!parseCandleUtcTime(candle.datetime, candleTime)) {
+        return false;
+    }
+
+    GetSystemTime(&currentTime);
+    FILETIME currentFileTime{};
+    FILETIME candleFileTime{};
+    if (!SystemTimeToFileTime(&currentTime, &currentFileTime) ||
+        !SystemTimeToFileTime(&candleTime, &candleFileTime)) {
+        return false;
+    }
+
+    ULARGE_INTEGER currentTicks{};
+    currentTicks.LowPart = currentFileTime.dwLowDateTime;
+    currentTicks.HighPart = currentFileTime.dwHighDateTime;
+    ULARGE_INTEGER candleTicks{};
+    candleTicks.LowPart = candleFileTime.dwLowDateTime;
+    candleTicks.HighPart = candleFileTime.dwHighDateTime;
+    return currentTicks.QuadPart >= candleTicks.QuadPart &&
+        currentTicks.QuadPart - candleTicks.QuadPart >= fileTimeTicksPerMinute;
+}
+
+/**
+ * Sprawdza, czy świeca odpowiada dokładnie ostatniej zamkniętej minucie UTC.
  */
 bool isLatestClosedMinute(const CandleData& candle) {
     SYSTEMTIME candleTime{};
@@ -360,7 +388,7 @@ bool StockPriceMonitor::updateCandle() {
         saved = CandleHistoryClient::saveCandle(
             monitoredSymbol, candle, newlyDetectedGapCount, signalSaved, error);
     }
-    const bool latestCandleAvailable = fetched && isLatestClosedMinute(candle);
+    const bool closedCandleAvailable = fetched && isClosedCandle(candle);
     std::string updateStatus;
     if (!fetched) {
         updateStatus = "Błąd świecy 1-minutowej: " + error;
@@ -374,7 +402,7 @@ bool StockPriceMonitor::updateCandle() {
         updateStatus = describeCandleFreshness(candle);
     }
     bool grokSignalSaved = false;
-    if (saved && latestCandleAvailable) {
+    if (saved && closedCandleAvailable) {
         std::vector<SignalCandleData> analysisCandles;
         std::string signalError;
         if (!CandleHistoryClient::fetchLatestAnalysisCandles(
@@ -437,5 +465,5 @@ bool StockPriceMonitor::updateCandle() {
     }
     status_ = updateStatus;
     ReleaseSRWLockExclusive(&statusLock_);
-    return latestCandleAvailable;
+    return fetched && isLatestClosedMinute(candle);
 }
