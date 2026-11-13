@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -26,6 +26,9 @@ class MarketProfile:
     market_type: str
     timezone_name: str
     sessions_by_weekday: tuple[tuple[SessionWindow, ...], ...]
+    summer_sessions_by_weekday: (
+        tuple[tuple[SessionWindow, ...], ...] | None
+    ) = None
 
     def is_open(self, utc_time: datetime) -> bool:
         """Zwraca informację, czy rynek jest otwarty w podanym czasie UTC."""
@@ -33,9 +36,15 @@ class MarketProfile:
             raise ValueError("Czas rynku musi zawierać strefę czasową.")
         local_time = utc_time.astimezone(ZoneInfo(self.timezone_name))
         minute_of_day = local_time.hour * 60 + local_time.minute
+        sessions = self.sessions_by_weekday
+        if (
+            self.summer_sessions_by_weekday is not None
+            and local_time.dst() != timedelta(0)
+        ):
+            sessions = self.summer_sessions_by_weekday
         return any(
             session.contains(minute_of_day)
-            for session in self.sessions_by_weekday[local_time.weekday()]
+            for session in sessions[local_time.weekday()]
         )
 
 
@@ -82,11 +91,34 @@ MARKET_PROFILES = {
         timezone_name="UTC",
         sessions_by_weekday=(_ALL_DAY,) * 7,
     ),
+    "dax_index": MarketProfile(
+        market_type="index",
+        timezone_name="Europe/Berlin",
+        sessions_by_weekday=(
+            (SessionWindow(70, 22 * 60),),
+            (SessionWindow(70, 22 * 60),),
+            (SessionWindow(70, 22 * 60),),
+            (SessionWindow(70, 22 * 60),),
+            (SessionWindow(70, 22 * 60),),
+            _CLOSED_DAY,
+            _CLOSED_DAY,
+        ),
+        summer_sessions_by_weekday=(
+            (SessionWindow(130, 22 * 60),),
+            (SessionWindow(130, 22 * 60),),
+            (SessionWindow(130, 22 * 60),),
+            (SessionWindow(130, 22 * 60),),
+            (SessionWindow(130, 22 * 60),),
+            _CLOSED_DAY,
+            _CLOSED_DAY,
+        ),
+    ),
 }
 
 # Dodaj nowe symbole tutaj i przypisz im odpowiedni profil rynku.
 MONITORED_PRODUCTS = (
     MarketProduct("EURUSD/USD", "forex_ny_24_5"),
+    MarketProduct("GER30", "dax_index"),
 )
 
 
@@ -129,21 +161,32 @@ def _validate_profile_configuration() -> None:
             raise ValueError(
                 f"Profil {profile.market_type} musi zawierać 7 dni tygodnia."
             )
+        if (
+            profile.summer_sessions_by_weekday is not None
+            and len(profile.summer_sessions_by_weekday) != 7
+        ):
+            raise ValueError(
+                f"Profil letni {profile.market_type} musi zawierać 7 dni tygodnia."
+            )
         ZoneInfo(profile.timezone_name)
-        for daily_sessions in profile.sessions_by_weekday:
-            previous_end = 0
-            for session in daily_sessions:
-                if (
-                    session.start_minute < previous_end
-                    or session.start_minute < 0
-                    or session.end_minute > 24 * 60
-                    or session.start_minute >= session.end_minute
-                ):
-                    raise ValueError(
-                        f"Profil {profile.market_type} zawiera "
-                        "nieprawidłową sesję."
-                    )
-                previous_end = session.end_minute
+        schedules = (profile.sessions_by_weekday,)
+        if profile.summer_sessions_by_weekday is not None:
+            schedules += (profile.summer_sessions_by_weekday,)
+        for schedule in schedules:
+            for daily_sessions in schedule:
+                previous_end = 0
+                for session in daily_sessions:
+                    if (
+                        session.start_minute < previous_end
+                        or session.start_minute < 0
+                        or session.end_minute > 24 * 60
+                        or session.start_minute >= session.end_minute
+                    ):
+                        raise ValueError(
+                            f"Profil {profile.market_type} zawiera "
+                            "nieprawidłową sesję."
+                        )
+                    previous_end = session.end_minute
 
     known_profiles = set(MARKET_PROFILES)
     configured_symbols = set()

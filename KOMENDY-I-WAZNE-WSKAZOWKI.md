@@ -132,11 +132,13 @@ MySQL przy zmianie kodu.
 
 Aktywne instrumenty i ich sesje znajdują się w `src/database/api/market_products.py`.
 Nowy symbol dodaj do `MONITORED_PRODUCTS` i przypisz mu profil z `MARKET_PROFILES`.
-Dostępne profile przykładowe to Forex 24/5, akcje USA w podstawowej sesji giełdowej
-i krypto 24/7. Sesje profilu podawaj według lokalnego czasu giełdy jako minuty od
-północy; początek jest wliczony, a koniec wyłączony. Sesję przechodzącą przez
-północ podziel na przedziały przypisane do odpowiednich dni tygodnia. Na start
-aktywny pozostaje tylko `EURUSD/USD`. Monitor pobiera
+Dostępne profile przykładowe to Forex 24/5, akcje USA w podstawowej sesji giełdowej,
+krypto 24/7 oraz GER30. GER30 jest pobierany od poniedziałku do piątku poza
+przerwą: zimą 22:00–01:10, latem 22:00–02:10 czasu Europe/Berlin. Zmiana czasu
+letniego jest rozpoznawana automatycznie. Sesje profilu podawaj według lokalnego
+czasu giełdy jako minuty od północy; początek jest wliczony, a koniec wyłączony.
+Sesję przechodzącą przez północ podziel na przedziały przypisane do odpowiednich
+dni tygodnia. Aktywne są `EURUSD/USD` i `GER30`. Monitor pobiera
 konfigurację z API, wykrywa nowe symbole bez rekompilacji aplikacji i pyta Twelve
 Data wyłącznie o instrumenty z otwartą sesją.
 Przy uruchomieniu nadrabia do 1000 brakujących świec dla każdego aktywnego produktu.

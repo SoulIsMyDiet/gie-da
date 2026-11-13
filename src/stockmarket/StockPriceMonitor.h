@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "CandlesDataClient.h"
@@ -72,6 +73,7 @@ private:
     HANDLE workerThread_ = nullptr;
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
     std::vector<std::string> monitoredSymbols_;
+    std::unordered_set<std::string> backfilledSymbols_;
     CandleData oneMinuteCandle_;
     std::string status_ = "Oczekiwanie na świecę 1-minutową...";
     std::string backfillStatus_ = "Sprawdzanie brakujących świec...";

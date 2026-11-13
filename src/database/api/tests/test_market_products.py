@@ -57,11 +57,41 @@ class MarketProductsTests(unittest.TestCase):
 
         self.assertTrue(all(profile.is_open(timestamp) for timestamp in timestamps))
 
-    def test_only_eurusd_is_active_and_open_symbols_follow_its_schedule(self) -> None:
-        self.assertEqual(get_monitored_symbols(), ("EURUSD/USD",))
+    def test_dax40_profile_excludes_the_winter_maintenance_window(self) -> None:
+        profile = MARKET_PROFILES["dax_index"]
+        timestamps = (
+            (datetime(2026, 11, 18, 20, 59, tzinfo=timezone.utc), True),
+            (datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc), False),
+            (datetime(2026, 11, 18, 23, 0, tzinfo=timezone.utc), False),
+            (datetime(2026, 11, 19, 0, 9, tzinfo=timezone.utc), False),
+            (datetime(2026, 11, 19, 0, 10, tzinfo=timezone.utc), True),
+            (datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc), False),
+        )
+
+        for timestamp, expected_open in timestamps:
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(profile.is_open(timestamp), expected_open)
+
+    def test_dax40_profile_excludes_the_summer_maintenance_window(self) -> None:
+        profile = MARKET_PROFILES["dax_index"]
+        timestamps = (
+            (datetime(2026, 6, 17, 19, 59, tzinfo=timezone.utc), True),
+            (datetime(2026, 6, 17, 20, 0, tzinfo=timezone.utc), False),
+            (datetime(2026, 6, 17, 23, 0, tzinfo=timezone.utc), False),
+            (datetime(2026, 6, 18, 0, 9, tzinfo=timezone.utc), False),
+            (datetime(2026, 6, 18, 0, 10, tzinfo=timezone.utc), True),
+            (datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc), False),
+        )
+
+        for timestamp, expected_open in timestamps:
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(profile.is_open(timestamp), expected_open)
+
+    def test_eurusd_and_dax40_are_active_and_follow_their_schedules(self) -> None:
+        self.assertEqual(get_monitored_symbols(), ("EURUSD/USD", "GER30"))
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)),
-            ("EURUSD/USD",),
+            ("EURUSD/USD", "GER30"),
         )
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)),

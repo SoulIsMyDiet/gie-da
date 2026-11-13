@@ -332,15 +332,45 @@ void StockPriceMonitor::run() {
         }
     }
 
+    std::vector<std::string> startupOpenSymbols;
+    std::string startupSessionError;
+    while (!CandleHistoryClient::fetchOpenSymbols(
+        startupOpenSymbols, startupSessionError)) {
+        AcquireSRWLockExclusive(&statusLock_);
+        status_ = "Nie udało się pobrać otwartych sesji: " +
+            startupSessionError;
+        ReleaseSRWLockExclusive(&statusLock_);
+        if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0) ||
+            !waitForNextCandleClose(stopEvent_)) {
+            return;
+        }
+    }
+
     CandleBackfillResult backfillResult;
     std::string backfillError;
+    std::string deferredBackfillStatus;
     bool backfillSucceeded = true;
     const auto backfillStartedAt = std::chrono::steady_clock::now();
     for (const std::string& symbol : monitoredSymbols_) {
+        if (std::find(
+                startupOpenSymbols.begin(),
+                startupOpenSymbols.end(),
+                symbol) == startupOpenSymbols.end()) {
+            if (!deferredBackfillStatus.empty()) {
+                deferredBackfillStatus += " ";
+            }
+            deferredBackfillStatus +=
+                symbol + ": backfill odłożono do otwarcia sesji.";
+            continue;
+        }
+
         CandleBackfillResult productResult;
         std::string productError;
         const bool productSucceeded = CandleBackfillClient::synchronize(
             symbol, productResult, productError);
+        if (productSucceeded) {
+            backfilledSymbols_.insert(symbol);
+        }
         backfillResult.savedCandleCount += productResult.savedCandleCount;
         backfillResult.detectedGapCount += productResult.detectedGapCount;
         if (symbol == "EURUSD/USD" &&
@@ -365,6 +395,9 @@ void StockPriceMonitor::run() {
     }
     backfillStatus_ = createBackfillStatus(
         backfillResult, backfillSucceeded ? std::string{} : backfillError);
+    if (!deferredBackfillStatus.empty()) {
+        backfillStatus_ += " " + deferredBackfillStatus;
+    }
     ReleaseSRWLockExclusive(&statusLock_);
     if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
         return;
@@ -490,23 +523,16 @@ void StockPriceMonitor::updateAdditionalProducts() {
         return;
     }
 
-    for (const std::string& symbol : configuredSymbols) {
+    for (auto backfilledSymbol = backfilledSymbols_.begin();
+         backfilledSymbol != backfilledSymbols_.end();) {
         if (std::find(
-                monitoredSymbols_.begin(), monitoredSymbols_.end(), symbol) !=
-            monitoredSymbols_.end()) {
-            continue;
+                configuredSymbols.begin(),
+                configuredSymbols.end(),
+                *backfilledSymbol) == configuredSymbols.end()) {
+            backfilledSymbol = backfilledSymbols_.erase(backfilledSymbol);
+        } else {
+            ++backfilledSymbol;
         }
-
-        CandleBackfillResult backfillResult;
-        std::string backfillError;
-        const bool backfillSucceeded = CandleBackfillClient::synchronize(
-            symbol, backfillResult, backfillError);
-        std::string backfillStatus = createBackfillStatus(
-            backfillResult,
-            backfillSucceeded ? std::string{} : backfillError);
-        AcquireSRWLockExclusive(&statusLock_);
-        backfillStatus_ += " " + symbol + ": " + backfillStatus;
-        ReleaseSRWLockExclusive(&statusLock_);
     }
     monitoredSymbols_ = std::move(configuredSymbols);
 
@@ -526,18 +552,41 @@ void StockPriceMonitor::updateAdditionalProducts() {
         return;
     }
 
-    const bool eurusdIsOpen = std::find(
-        openSymbols.begin(), openSymbols.end(), "EURUSD/USD") !=
-        openSymbols.end();
-    if (eurusdIsOpen) {
-        updateCandle();
-    }
-
     std::string additionalStatus;
     bool anySignalSaved = false;
     bool anyGapDetected = false;
     for (const std::string& symbol : openSymbols) {
+        if (backfilledSymbols_.find(symbol) == backfilledSymbols_.end()) {
+            CandleBackfillResult backfillResult;
+            std::string backfillError;
+            const bool backfillSucceeded =
+                CandleBackfillClient::synchronize(
+                    symbol, backfillResult, backfillError);
+            if (!backfillSucceeded) {
+                if (!additionalStatus.empty()) {
+                    additionalStatus += " | ";
+                }
+                additionalStatus += symbol +
+                    ": błąd uzupełniania historii: " + backfillError;
+                continue;
+            }
+            backfilledSymbols_.insert(symbol);
+            if (symbol == "EURUSD/USD" &&
+                !backfillResult.latestCandle.datetime.empty()) {
+                AcquireSRWLockExclusive(&statusLock_);
+                oneMinuteCandle_ = std::move(backfillResult.latestCandle);
+                ReleaseSRWLockExclusive(&statusLock_);
+            }
+            if (!additionalStatus.empty()) {
+                additionalStatus += " | ";
+            }
+            additionalStatus += symbol +
+                ": zakończono początkowe uzupełnianie historii.";
+            continue;
+        }
+
         if (symbol == "EURUSD/USD") {
+            updateCandle();
             continue;
         }
 
@@ -583,6 +632,9 @@ void StockPriceMonitor::updateAdditionalProducts() {
     }
 
     AcquireSRWLockExclusive(&statusLock_);
+    const bool eurusdIsOpen = std::find(
+        openSymbols.begin(), openSymbols.end(), "EURUSD/USD") !=
+        openSymbols.end();
     if (!eurusdIsOpen) {
         status_ = additionalStatus;
     } else if (!additionalStatus.empty()) {
