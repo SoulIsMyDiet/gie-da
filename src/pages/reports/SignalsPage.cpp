@@ -221,7 +221,9 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
             signal.datetime,
             signal.product,
             signal.price,
-            signal.direction == "long" ? "LONG" : "SHORT",
+            signal.direction == "long"
+                ? "LONG"
+                : (signal.direction == "short" ? "SHORT" : "NONE"),
             signal.algorithmName,
             signal.aiDecision,
             signal.transactionId,

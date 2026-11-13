@@ -115,6 +115,7 @@ class SignalPotentialCalculator:
             FROM signal_potention AS p
             JOIN signals AS s ON s.id = p.signal_id
             WHERE p.saldo_20_aggr_candles IS NULL
+                AND s.`signal` IN ('long', 'short')
                 {product_filter}
             ORDER BY p.signal_id
             """,
