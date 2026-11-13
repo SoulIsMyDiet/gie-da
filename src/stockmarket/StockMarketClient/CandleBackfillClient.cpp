@@ -15,7 +15,7 @@
 
 namespace {
 
-constexpr char monitoredSymbol[] = "EUR/USD";
+constexpr char monitoredSymbol[] = "EURUSD/USD";
 constexpr std::size_t maximumBackfillCandles = 1000;
 constexpr std::size_t maximumProviderCandles = 5000;
 constexpr ULONGLONG ticksPerMinute = 60ULL * 10000000ULL;

@@ -541,7 +541,7 @@ bool CandleHistoryClient::saveCandle(
 }
 
 /**
- * Pobiera świece EUR/USD i zmienia kolejność odpowiedzi na chronologiczną.
+ * Pobiera świece EURUSD/USD i zmienia kolejność odpowiedzi na chronologiczną.
  */
 bool CandleHistoryClient::fetchLatestAnalysisCandles(
     std::size_t maximumCandles,

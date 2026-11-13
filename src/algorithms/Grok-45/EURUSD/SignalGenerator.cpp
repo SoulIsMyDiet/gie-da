@@ -247,7 +247,7 @@ std::string createJsonResponse(
 
     std::ostringstream json;
     json.imbue(std::locale::classic());
-    json << "{\"instrument\":\"EUR/USD\",\"price\":"
+    json << "{\"instrument\":\"EURUSD/USD\",\"price\":"
          << (hasLatestCandle ? formatNumber(latestCandle.close) : "null")
          << ",\"timestamp\":";
     if (hasLatestCandle) {

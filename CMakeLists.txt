@@ -19,7 +19,7 @@ add_executable(gieda WIN32
     src/stockmarket/StockMarketClient/CandleBackfillClient.cpp
     src/ai/AiClient/DailySentenceClient.cpp
     src/utility/AudioSignal.cpp
-    src/algorithms/Grok-45/SignalGenerator.cpp
+    src/algorithms/Grok-45/EURUSD/SignalGenerator.cpp
 )
 set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
 target_include_directories(gieda PRIVATE
@@ -29,7 +29,7 @@ target_include_directories(gieda PRIVATE
     src/pages/reports
     src/stockmarket/StockMarketClient
     src/utility
-    src/algorithms/Grok-45
+    src/algorithms/Grok-45/EURUSD
 )
 target_link_libraries(gieda PRIVATE
     winmm
@@ -47,15 +47,15 @@ add_custom_command(TARGET gieda POST_BUILD
 include(CTest)
 if(BUILD_TESTING)
     add_executable(grok45_signal_generator_tests
-        src/algorithms/Grok-45/SignalGenerator.cpp
-        src/algorithms/Grok-45/tests/SignalGeneratorTests.cpp
+        src/algorithms/Grok-45/EURUSD/SignalGenerator.cpp
+        src/algorithms/Grok-45/EURUSD/tests/SignalGeneratorTests.cpp
     )
     set_property(
         TARGET grok45_signal_generator_tests
         PROPERTY CXX_SCAN_FOR_MODULES OFF
     )
     target_include_directories(grok45_signal_generator_tests PRIVATE
-        src/algorithms/Grok-45
+        src/algorithms/Grok-45/EURUSD
     )
     target_link_options(grok45_signal_generator_tests PRIVATE
         -static-libgcc

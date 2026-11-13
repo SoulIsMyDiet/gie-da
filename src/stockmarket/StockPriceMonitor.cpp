@@ -372,7 +372,7 @@ void StockPriceMonitor::run() {
 bool StockPriceMonitor::updateCandle() {
     CandleData candle;
     std::string error;
-    constexpr char monitoredSymbol[] = "EUR/USD";
+    constexpr char monitoredSymbol[] = "EURUSD/USD";
     const bool fetched =
         CandlesDataClient::fetchLatestOneMinuteCandle(
             monitoredSymbol, candle, error);

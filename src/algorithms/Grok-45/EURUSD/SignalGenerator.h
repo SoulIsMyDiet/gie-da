@@ -99,7 +99,7 @@ public:
 };
 
 /**
- * Tworzy krótkoterminowy sygnał EUR/USD i zwraca go jako dokument JSON.
+ * Tworzy krótkoterminowy sygnał EURUSD/USD i zwraca go jako dokument JSON.
  */
 class SignalGenerator {
 public:
@@ -114,7 +114,7 @@ public:
     static constexpr std::size_t analysisWindowCandles = 100;
 
     /**
-     * Analizuje zamknięte świece EUR/USD i zwraca wynik w formacie JSON.
+     * Analizuje zamknięte świece EURUSD/USD i zwraca wynik w formacie JSON.
      * @param candles Świece 1-minutowe, unikalne i ułożone od najstarszej do najnowszej.
      *        Do wskaźników używanych jest maksymalnie ostatnie 100 świec.
      * @return JSON z instrumentem, ceną, czasem, sygnałem i obliczonymi wskaźnikami.

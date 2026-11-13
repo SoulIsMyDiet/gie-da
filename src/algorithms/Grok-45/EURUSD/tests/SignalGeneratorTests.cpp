@@ -150,8 +150,8 @@ void testGeneratorProducesLongForBullishPullback() {
         createMarketCandles(75, 0.000025);
     const std::string response = grok45::SignalGenerator{}.generate(candles);
 
-    require(response.find("\"instrument\":\"EUR/USD\"") != std::string::npos,
-            "JSON powinien wskazywać EUR/USD.");
+    require(response.find("\"instrument\":\"EURUSD/USD\"") != std::string::npos,
+            "JSON powinien wskazywać EURUSD/USD.");
     require(response.find("\"signal\":\"LONG\"") != std::string::npos,
             "Przykładowa seria wzrostowa powinna wygenerować LONG.");
     require(response.find("\"timestamp\":5940") != std::string::npos,

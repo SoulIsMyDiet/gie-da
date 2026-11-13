@@ -18,7 +18,7 @@ struct CandleBackfillResult {
 class CandleBackfillClient {
 public:
     /**
-     * Uzupełnia maksymalnie 1000 brakujących świec dla symbolu EUR/USD.
+     * Uzupełnia maksymalnie 1000 brakujących świec dla symbolu EURUSD/USD.
      * @param result Otrzymuje liczbę zapisanych i brakujących świec, czas i ostatnią świecę.
      * @param error Otrzymuje opis błędu, jeśli pobieranie lub zapis się nie powiedzie.
      * @return true, jeśli wszystkie pobrane zakresy zostały obsłużone.

@@ -87,7 +87,7 @@ public:
         std::string& error);
 
     /**
-     * Pobiera ostatnie świece EUR/USD do analizy wskaźników.
+     * Pobiera ostatnie świece EURUSD/USD do analizy wskaźników.
      * @param maximumCandles Maksymalna liczba świec do pobrania (1-100).
      * @param candles Otrzymuje świece uporządkowane chronologicznie.
      * @param error Otrzymuje opis błędu, jeśli odczyt się nie powiedzie.

@@ -20,7 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 algorithm_directory = Path(__file__).resolve().parent / "algorithm"
 if not algorithm_directory.is_dir():
     algorithm_directory = (
-        Path(__file__).resolve().parents[2] / "algorithms" / "Chat-gpt6"
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Chat-gpt6"
+        / "EURUSD"
     )
 sys.path.insert(0, str(algorithm_directory))
 
@@ -85,7 +88,7 @@ class Grok45SignalRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    instrument: Literal["EUR/USD"]
+    instrument: Literal["EURUSD/USD"]
     price: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
     timestamp: int = Field(gt=0)
     signal: Literal["LONG", "SHORT"]
@@ -656,7 +659,7 @@ class MarketDataRepository:
             """,
             (
                 datetime.now(WARSAW_TIME_ZONE).replace(tzinfo=None),
-                "EUR/USD",
+                "EURUSD/USD",
                 Decimal(str(signal_payload["price"])),
                 signal.direction.lower(),
                 STRATEGY_NAME,
@@ -917,7 +920,7 @@ class MarketDataRepository:
     def fetch_latest_analysis_candles(
         self, limit: int
     ) -> list[tuple[str, str, str, str, str, str]]:
-        """Pobiera do 100 ostatnich świec EUR/USD w kolejności od najnowszej."""
+        """Pobiera do 100 ostatnich świec EURUSD/USD w kolejności od najnowszej."""
         connection = mysql.connector.connect(**self.database_settings)
         try:
             cursor = connection.cursor()
@@ -933,7 +936,7 @@ class MarketDataRepository:
                         CAST(close AS CHAR),
                         CAST(volume AS CHAR)
                     FROM candles
-                    WHERE symbol = 'EUR/USD'
+                    WHERE symbol = 'EURUSD/USD'
                     ORDER BY DATE_SUB(
                         datetime, INTERVAL utc_offset_minutes MINUTE
                     ) DESC
@@ -1128,7 +1131,7 @@ async def lifespan(_: FastAPI):
     """Przygotowuje tabele przed obsługą żądań i kończy start przy błędzie bazy."""
     repository.initialize()
     with strategy_lock:
-        eurusd_strategy.warm_up(repository.fetch_candle_history("EUR/USD"))
+        eurusd_strategy.warm_up(repository.fetch_candle_history("EURUSD/USD"))
         app.state.strategy_ready = True
     yield
 
@@ -1156,14 +1159,14 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     request.app.state.eurusd_strategy
                 )
                 recovered_strategy.warm_up(
-                    request.app.state.repository.fetch_candle_history("EUR/USD")
+                    request.app.state.repository.fetch_candle_history("EURUSD/USD")
                 )
                 request.app.state.eurusd_strategy = recovered_strategy
                 request.app.state.strategy_ready = True
             current_strategy = request.app.state.eurusd_strategy
             updated_strategy = copy.deepcopy(current_strategy)
             signal = None
-            if candle.symbol == "EUR/USD":
+            if candle.symbol == "EURUSD/USD":
                 signal = updated_strategy.process_candle(
                     Candle(
                         timestamp=candle.datetime.astimezone(timezone.utc),
@@ -1203,7 +1206,7 @@ def analysis_candles(
     request: Request,
     limit: int = Query(ge=1, le=GROK45_ANALYSIS_WINDOW),
 ) -> Response:
-    """Zwraca świece EUR/USD do analizy w formacie TSV z czasem Unix."""
+    """Zwraca świece EURUSD/USD do analizy w formacie TSV z czasem Unix."""
     try:
         rows = request.app.state.repository.fetch_latest_analysis_candles(limit)
     except mysql.connector.Error as error:
@@ -1253,7 +1256,7 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
             )
             updated_strategy = copy.deepcopy(request.app.state.eurusd_strategy)
             updated_strategy.warm_up(
-                request.app.state.repository.fetch_candle_history("EUR/USD")
+                request.app.state.repository.fetch_candle_history("EURUSD/USD")
             )
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.strategy_ready = True

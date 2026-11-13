@@ -13,7 +13,7 @@ RUN apt-get update \
 
 COPY database/api/app.py ./app.py
 COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.py
-COPY algorithms/Chat-gpt6/ ./algorithm/
+COPY algorithms/Chat-gpt6/EURUSD/ ./algorithm/
 USER appuser
 
 EXPOSE 8000
