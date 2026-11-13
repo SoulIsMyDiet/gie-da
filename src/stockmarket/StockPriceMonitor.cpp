@@ -41,14 +41,14 @@ std::string createBackfillStatus(
         if (result.detectedGapCount > 0) {
             backfillStatus += " Wykryto " +
                 std::to_string(result.detectedGapCount) +
-                " brakujących świec — sprawdź tabelę candle_gaps.";
+                " brakujących świec.";
         }
         return backfillStatus;
     }
     if (result.detectedGapCount > 0) {
         return std::string(status) + " Wykryto " +
             std::to_string(result.detectedGapCount) +
-            " brakujących świec — sprawdź tabelę candle_gaps.";
+            " brakujących świec.";
     }
     return status;
 }
@@ -330,11 +330,6 @@ void StockPriceMonitor::run() {
     backfillStatus_ = createBackfillStatus(
         backfillResult, backfillSucceeded ? std::string{} : backfillError);
     ReleaseSRWLockExclusive(&statusLock_);
-    if (backfillResult.detectedGapCount > 0 && !AudioSignal::play()) {
-        AcquireSRWLockExclusive(&statusLock_);
-        backfillStatus_ += " Nie udało się odtworzyć sygnału dźwiękowego.";
-        ReleaseSRWLockExclusive(&statusLock_);
-    }
     if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
         return;
     }
@@ -397,7 +392,7 @@ bool StockPriceMonitor::updateCandle() {
     } else if (newlyDetectedGapCount > 0) {
         updateStatus = "Wykryto " +
             std::to_string(newlyDetectedGapCount) +
-            " brakujących świec — sprawdź tabelę candle_gaps.";
+            " brakujących świec.";
     } else {
         updateStatus = describeCandleFreshness(candle);
     }

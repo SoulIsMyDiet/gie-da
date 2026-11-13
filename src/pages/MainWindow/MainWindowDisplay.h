@@ -7,18 +7,14 @@
 
 #include <string>
 
-#include "StockPriceMonitor.h"
-
 class MainWindowDisplay {
 public:
     /**
-     * Rysuje sentencję dnia, zegar, status i świecę 1-minutową.
+     * Rysuje sentencję dnia na stronie głównej.
      * @param deviceContext Kontekst rysowania głównego okna.
      * @param clientArea Obszar dostępny dla strony głównej.
-     * @param snapshot Bieżąca świeca 1-minutowa i status jej pobierania.
      * @param dailySentence Sentencja lub informacja o błędzie jej pobierania.
      */
     static void draw(
-        HDC deviceContext, RECT& clientArea, const StockPriceSnapshot& snapshot,
-        const std::string& dailySentence);
+        HDC deviceContext, RECT& clientArea, const std::string& dailySentence);
 };

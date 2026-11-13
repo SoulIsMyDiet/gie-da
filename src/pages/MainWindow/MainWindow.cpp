@@ -11,8 +11,7 @@
 
 namespace {
 
-constexpr char windowClassName[] = "HelloWorldWindow";
-constexpr UINT_PTR clockTimerId = 1;
+constexpr wchar_t windowClassName[] = L"SignalReportWindow";
 constexpr UINT candleUpdateMessage = WM_APP + 1;
 constexpr int reportsButtonId = 1001;
 constexpr int candleGapsButtonId = 1002;
@@ -31,23 +30,23 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
     instance_ = instance;
     showCommand_ = showCommand;
 
-    WNDCLASSA windowClass{};
+    WNDCLASSW windowClass{};
     windowClass.lpfnWndProc = windowProcedure;
     windowClass.hInstance = instance_;
     windowClass.lpszClassName = windowClassName;
     windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
     windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 
-    if (!RegisterClassA(&windowClass)) {
+    if (!RegisterClassW(&windowClass)) {
         MessageBoxA(nullptr, "Could not register the window class.",
                     "Error", MB_ICONERROR);
         return false;
     }
 
-    handle_ = CreateWindowExA(
+    handle_ = CreateWindowExW(
         0,
         windowClassName,
-        "Hello World",
+        L"Raport sygnałów",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 640, 360,
         nullptr, nullptr, instance_, this);
@@ -81,23 +80,23 @@ int MainWindow::run() {
 LRESULT CALLBACK MainWindow::windowProcedure(
     HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     MainWindow* mainWindow = reinterpret_cast<MainWindow*>(
-        GetWindowLongPtrA(window, GWLP_USERDATA));
+        GetWindowLongPtrW(window, GWLP_USERDATA));
 
     if (message == WM_NCCREATE) {
-        const auto* createData = reinterpret_cast<const CREATESTRUCTA*>(lParam);
+        const auto* createData = reinterpret_cast<const CREATESTRUCTW*>(lParam);
         mainWindow = static_cast<MainWindow*>(createData->lpCreateParams);
         mainWindow->handle_ = window;
-        SetWindowLongPtrA(window, GWLP_USERDATA,
+        SetWindowLongPtrW(window, GWLP_USERDATA,
                           reinterpret_cast<LONG_PTR>(mainWindow));
     }
 
     if (mainWindow == nullptr) {
-        return DefWindowProcA(window, message, wParam, lParam);
+        return DefWindowProcW(window, message, wParam, lParam);
     }
 
     const LRESULT result = mainWindow->handleMessage(message, wParam, lParam);
     if (message == WM_NCDESTROY) {
-        SetWindowLongPtrA(window, GWLP_USERDATA, 0);
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
     }
     return result;
 }
@@ -109,11 +108,6 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_CREATE:
             return onCreate() ? 0 : -1;
-        case WM_TIMER:
-            if (wParam == clockTimerId) {
-                onClockTimer();
-            }
-            return 0;
         case WM_SIZE:
             positionReportsButton();
             reportsPage_.positionControls();
@@ -159,13 +153,13 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             onDestroy();
             return 0;
         default:
-            return DefWindowProcA(handle_, message, wParam, lParam);
+            return DefWindowProcW(handle_, message, wParam, lParam);
     }
-    return DefWindowProcA(handle_, message, wParam, lParam);
+    return DefWindowProcW(handle_, message, wParam, lParam);
 }
 
 /**
- * Uruchamia monitor świecy, zegar oraz pobieranie sentencji dnia.
+ * Uruchamia monitor świecy oraz pobieranie sentencji dnia.
  */
 bool MainWindow::onCreate() {
     if (!createReportsButton()) {
@@ -205,17 +199,9 @@ bool MainWindow::onCreate() {
         return false;
     }
 
-    if (SetTimer(handle_, clockTimerId, 1000, nullptr) == 0) {
-        MessageBoxA(handle_, "Could not start the clock timer.",
-                    "Error", MB_ICONERROR);
-        candleMonitor_.stop();
-        return false;
-    }
-
     try {
         startDailySentenceRequest();
     } catch (const std::system_error&) {
-        KillTimer(handle_, clockTimerId);
         candleMonitor_.stop();
         MessageBoxW(
             handle_, L"Nie udało się uruchomić pobierania sentencji.",
@@ -406,28 +392,6 @@ void MainWindow::onSignalsClicked() {
 }
 
 /**
- * Redraws the clock when its minute changes.
- */
-void MainWindow::onClockTimer() {
-    SYSTEMTIME localTime{};
-    GetLocalTime(&localTime);
-    if (!hasPreviousTime_) {
-        previousHour_ = localTime.wHour;
-        previousMinute_ = localTime.wMinute;
-        hasPreviousTime_ = true;
-        return;
-    }
-
-    if (localTime.wHour == previousHour_ && localTime.wMinute == previousMinute_) {
-        return;
-    }
-
-    previousHour_ = localTime.wHour;
-    previousMinute_ = localTime.wMinute;
-    InvalidateRect(handle_, nullptr, TRUE);
-}
-
-/**
  * Rysuje zawartość okna z bieżącymi danymi aplikacji.
  */
 void MainWindow::onPaint() {
@@ -450,17 +414,15 @@ void MainWindow::onPaint() {
             const std::lock_guard<std::mutex> lock(dailySentenceMutex_);
             dailySentence = dailySentence_;
         }
-        MainWindowDisplay::draw(
-            deviceContext, clientArea, candleMonitor_.snapshot(), dailySentence);
+        MainWindowDisplay::draw(deviceContext, clientArea, dailySentence);
     }
     EndPaint(handle_, &paint);
 }
 
 /**
- * Zatrzymuje zadania w tle, zwalnia zegar i kończy pętlę komunikatów.
+ * Zatrzymuje zadania w tle i kończy pętlę komunikatów Windows.
  */
 void MainWindow::onDestroy() {
-    KillTimer(handle_, clockTimerId);
     candleMonitor_.stop();
     if (dailySentenceThread_.joinable()) {
         dailySentenceThread_.join();

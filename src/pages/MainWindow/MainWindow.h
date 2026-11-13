@@ -38,7 +38,7 @@ private:
     LRESULT handleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     /**
-     * Uruchamia monitor świecy, zegar oraz pobieranie sentencji w tle.
+     * Uruchamia monitor świecy oraz pobieranie sentencji w tle.
      * @return true, jeśli wszystkie usługi wystartowały; w przeciwnym razie false.
      */
     bool onCreate();
@@ -82,11 +82,6 @@ private:
     void onSignalsClicked();
 
     /**
-     * Odświeża zegar, gdy zmieni się wyświetlana minuta.
-     */
-    void onClockTimer();
-
-    /**
      * Pobiera sentencję w osobnym wątku, aby nie blokować okna aplikacji.
      * @throws std::system_error, jeśli system nie może utworzyć nowego wątku.
      */
@@ -105,9 +100,6 @@ private:
     HINSTANCE instance_ = nullptr;
     HWND handle_ = nullptr;
     int showCommand_ = SW_SHOW;
-    bool hasPreviousTime_ = false;
-    WORD previousHour_ = 0;
-    WORD previousMinute_ = 0;
     HWND reportsButton_ = nullptr;
     HWND candleGapsButton_ = nullptr;
     HWND signalsButton_ = nullptr;
