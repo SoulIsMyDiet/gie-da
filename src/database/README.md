@@ -74,6 +74,6 @@ podgląd całej tabeli, w tym wpisów już uzupełnionych.
 
 Przycisk „Raporty” otwiera tabelę 20 najnowszych świec. Przyciski „Poprzednia” i „Następna” pozwalają przechodzić pomiędzy stronami, a „Strona główna” wraca do głównego widoku. Lista jest pobierana z lokalnego API pod adresem `/api/candles/report`; nowe świece są zapisywane przez `/api/candles`.
 
-Przycisk „Sygnały” obok widoków świec i luk otwiera stronicowany podgląd tabeli `signals`, obejmujący czas, produkt, cenę, kierunek, algorytm, decyzję AI, transakcję, liczbę świec i parametry JSON.
+Przycisk „Sygnały” obok widoków świec i luk otwiera stronicowany podgląd 15 wpisów tabeli `signals` na stronę. Widok pokazuje czas, produkt, cenę i algorytm; przycisk „Szczegóły” pobiera dla wybranego `signal_id` saldo z 20 świec, numer świecy maksymalnego wyniku, wynik transakcji dla 100 zł i spread z tabeli `signal_potention`.
 
 Istniejące świece zapisane wcześniej w UTC są jednorazowo przeliczane na `Europe/Warsaw`; nowe wpisy również są zapisywane w tym czasie. API i baza są dostępne wyłącznie w lokalnej konfiguracji projektu; port MySQL nie jest wystawiony na sieć hosta. Dalsze zmiany struktury będą wymagały migracji w `src/database/api/app.py` — samo `CREATE TABLE IF NOT EXISTS` nie zmienia już istniejących tabel.

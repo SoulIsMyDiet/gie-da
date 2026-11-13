@@ -349,11 +349,11 @@ class MarketDataRepository:
                 f"UPDATE signal_potention SET {truncated_values}"
             )
             modified_columns = ", ".join(
-                f"`{column_name}` {decimal_columns[column_name]}"
+                f"MODIFY COLUMN `{column_name}` {decimal_columns[column_name]}"
                 for column_name in columns_to_update
             )
             cursor.execute(
-                f"ALTER TABLE signal_potention MODIFY COLUMN {modified_columns}"
+                f"ALTER TABLE signal_potention {modified_columns}"
             )
 
     def _migrate_candle_timestamps(
@@ -1084,6 +1084,37 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_signal_potential(
+        self, signal_id: int
+    ) -> tuple[str, str, str, str] | None:
+        """Pobiera cztery końcowe wartości wyników dla wskazanego sygnału."""
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        CAST(saldo_20_aggr_candles AS CHAR),
+                        CAST(max_candle AS CHAR),
+                        CAST(`100zl_deal` AS CHAR),
+                        CAST(spread AS CHAR)
+                    FROM signal_potention
+                    WHERE signal_id = %s
+                    """,
+                    (signal_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                return tuple(
+                    "" if value is None else str(value) for value in row
+                )
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     # :)
 
 
@@ -1320,7 +1351,7 @@ def signal_report(
     request: Request,
     page: int = Query(ge=0, le=1000000),
 ) -> Response:
-    """Zwraca stronę 20 najnowszych sygnałów jako dane TSV."""
+    """Zwraca stronę 15 najnowszych sygnałów jako dane TSV."""
     try:
         rows, has_next_page = request.app.state.repository.fetch_signal_page(page)
     except mysql.connector.Error as error:
@@ -1333,6 +1364,30 @@ def signal_report(
     report_lines.extend("\t".join(row) for row in rows)
     return Response(
         content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/signals/potential", response_class=Response)
+def signal_potential_details(
+    request: Request,
+    signal_id: int = Query(ge=1),
+) -> Response:
+    """Zwraca końcowe wyniki pojedynczego sygnału w formacie TSV."""
+    try:
+        details = request.app.state.repository.fetch_signal_potential(signal_id)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać wyników sygnału.",
+        ) from error
+    if details is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Nie znaleziono wyników dla wskazanego sygnału.",
+        )
+    return Response(
+        content="\t".join(details),
         media_type="text/tab-separated-values; charset=utf-8",
     )
 

@@ -1150,3 +1150,96 @@ bool CandleHistoryClient::fetchSignalPage(
     hasNextPage = hasNextPageText == "1";
     return true;
 }
+
+/**
+ * Pobiera cztery wartości tabeli signal_potention dla jednego sygnału.
+ */
+bool CandleHistoryClient::fetchSignalPotential(
+    const std::string& signalId,
+    SignalPotentialDetails& details,
+    std::string& error) {
+    if (signalId.empty() || signalId.size() > 20 ||
+        !std::all_of(signalId.begin(), signalId.end(), [](char character) {
+            return character >= '0' && character <= '9';
+        })) {
+        error = "Identyfikator sygnału ma nieprawidłowy format.";
+        return false;
+    }
+
+    InternetHandle session{WinHttpOpen(
+        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (session.value == nullptr) {
+        error = "Nie udało się rozpocząć żądania szczegółów sygnału.";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
+
+    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
+    if (connection.value == nullptr) {
+        error = "Nie można połączyć się z lokalnym API raportów.";
+        return false;
+    }
+
+    const std::wstring requestPath =
+        L"/api/signals/potential?signal_id=" +
+        std::wstring(signalId.begin(), signalId.end());
+    InternetHandle request{WinHttpOpenRequest(
+        connection.value, L"GET", requestPath.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
+    if (request.value == nullptr ||
+        !WinHttpSendRequest(
+            request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "Lokalne API szczegółów sygnału nie odpowiedziało.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(
+            request.value,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        error = "Nie udało się odczytać odpowiedzi lokalnego API.";
+        return false;
+    }
+    if (statusCode != 200) {
+        error = "Lokalne API nie zwróciło szczegółów sygnału (HTTP " +
+            std::to_string(statusCode) + ").";
+        return false;
+    }
+
+    std::string response;
+    if (!readResponse(request.value, response, error)) {
+        return false;
+    }
+
+    std::string* fields[] = {
+        &details.saldo20,
+        &details.maxCandle,
+        &details.deal100Pln,
+        &details.spread
+    };
+    constexpr std::size_t detailFieldCount = 4;
+    std::size_t fieldStart = 0;
+    for (std::size_t index = 0; index < detailFieldCount; ++index) {
+        const std::size_t fieldEnd = response.find('\t', fieldStart);
+        if ((index + 1 < detailFieldCount && fieldEnd == std::string::npos) ||
+            (index + 1 == detailFieldCount && fieldEnd != std::string::npos)) {
+            error = "Lokalne API zwróciło nieprawidłowe szczegóły sygnału.";
+            return false;
+        }
+        const std::size_t valueEnd =
+            fieldEnd == std::string::npos ? response.size() : fieldEnd;
+        *fields[index] = response.substr(fieldStart, valueEnd - fieldStart);
+        fieldStart = valueEnd + 1;
+    }
+    if (!response.empty() && response.back() == '\n') {
+        error = "Lokalne API zwróciło nieprawidłowe szczegóły sygnału.";
+        return false;
+    }
+    return true;
+}

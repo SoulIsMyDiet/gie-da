@@ -47,6 +47,16 @@ struct SignalReportEntry {
 };
 
 /**
+ * Przechowuje cztery końcowe wyniki przypisane do sygnału.
+ */
+struct SignalPotentialDetails {
+    std::string saldo20;
+    std::string maxCandle;
+    std::string deal100Pln;
+    std::string spread;
+};
+
+/**
  * Przechowuje świecę pobraną z bazy do analizy algorytmem Grok-45.
  */
 struct SignalCandleData {
@@ -161,7 +171,7 @@ public:
         std::string& error);
 
     /**
-     * Pobiera stronę 20 najnowszych wpisów tabeli signals.
+     * Pobiera stronę 15 najnowszych wpisów tabeli signals.
      * @param page Numer strony liczony od zera.
      * @param signals Otrzymuje wpisy sygnałów z bazy.
      * @param hasNextPage Otrzymuje informację, czy istnieje kolejna strona.
@@ -172,5 +182,17 @@ public:
         std::size_t page,
         std::vector<SignalReportEntry>& signals,
         bool& hasNextPage,
+        std::string& error);
+
+    /**
+     * Pobiera saldo, numer najlepszej świecy, wynik dla 100 zł i spread sygnału.
+     * @param signalId Liczbowy identyfikator sygnału zapisany jako tekst.
+     * @param details Otrzymuje cztery wartości z tabeli signal_potention.
+     * @param error Otrzymuje opis błędu, jeśli żądanie się nie powiedzie.
+     * @return true, jeśli API zwróciło poprawne szczegóły sygnału.
+     */
+    static bool fetchSignalPotential(
+        const std::string& signalId,
+        SignalPotentialDetails& details,
         std::string& error);
 };
