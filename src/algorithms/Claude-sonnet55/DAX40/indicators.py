@@ -4,7 +4,7 @@ Obliczanie wskaźników dla zamkniętych świec w jednym ciągłym segmencie dan
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from math import sqrt
 from statistics import median
 from typing import Any
@@ -21,21 +21,23 @@ from .config import (
     FIVE_MINUTE_BUCKET_SIZE,
     FIVE_MINUTE_EMA_PERIOD,
     FIVE_MINUTE_MIN_CANDLES,
+    RELATIVE_VOLUME_PERIOD,
     RSI_PERIOD,
+    VWAP_ANCHOR_TIME,
     WARSAW_TIMEZONE,
 )
 from .schedule import expected_candle_opens, is_trading_minute
 
 
 def _ema(values: list[float], period: int) -> list[float | None]:
-    """Oblicza EMA z inicjalizacją średnią po pełnym okresie."""
+    """Oblicza EMA zgodnie z ewm(span=period, adjust=False)."""
     result: list[float | None] = [None] * len(values)
-    if period < 1 or len(values) < period:
+    if period < 1 or not values:
         return result
-    current = sum(values[:period]) / period
-    result[period - 1] = current
+    current = values[0]
+    result[0] = current
     alpha = 2.0 / (period + 1)
-    for index in range(period, len(values)):
+    for index in range(1, len(values)):
         current += alpha * (values[index] - current)
         result[index] = current
     return result
@@ -167,9 +169,11 @@ def completed_five_minute_candles(
 
 
 def calculate_indicators(
-    candles: list[dict[str, Any]], now: datetime
+    candles: list[dict[str, Any]],
+    now: datetime,
+    vwap_candles: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Oblicza wszystkie wskaźniki i dane diagnostyczne dla ostatniej świecy."""
+    """Oblicza wskaźniki segmentu; opcjonalna historia sesji służy wyłącznie do VWAP."""
     if not candles:
         return {}
     closes = [float(item["close"]) for item in candles]
@@ -223,16 +227,17 @@ def calculate_indicators(
     last_time = candles[-1]["timestamp_utc"].astimezone(timezone.utc)
     local_time = last_time.astimezone(WARSAW_TIMEZONE)
     vwap_candidates = []
-    if local_time.timetz().replace(tzinfo=None) >= time(9, 0):
+    if local_time.timetz().replace(tzinfo=None) >= VWAP_ANCHOR_TIME:
+        vwap_source = candles if vwap_candles is None else vwap_candles
         vwap_candidates = [
             item
-            for item in candles
+            for item in vwap_source
             if item["timestamp_utc"].astimezone(WARSAW_TIMEZONE).date()
             == local_time.date()
             and item["timestamp_utc"].astimezone(WARSAW_TIMEZONE).timetz().replace(
                 tzinfo=None
             )
-            >= time(9, 0)
+            >= VWAP_ANCHOR_TIME
         ]
     vwap_volume = sum(float(item.get("volume") or 0) for item in vwap_candidates)
     vwap = (
@@ -248,21 +253,17 @@ def calculate_indicators(
         )
         / vwap_volume
         if vwap_volume > 0
-        else (
-            sum(
-                (float(item["high"]) + float(item["low"]) + float(item["close"])) / 3
-                for item in vwap_candidates
-            )
-            / len(vwap_candidates)
-            if vwap_candidates
-            else None
-        )
+        else None
     )
     completed_5m = completed_five_minute_candles(candles, now)
     ema5_values = _ema(
         [float(item["close"]) for item in completed_5m], FIVE_MINUTE_EMA_PERIOD
     )
-    volume_baseline = sum(volumes[-21:-1]) / 20 if len(volumes) >= 21 else 0.0
+    volume_baseline = (
+        sum(volumes[-(RELATIVE_VOLUME_PERIOD + 1) : -1]) / RELATIVE_VOLUME_PERIOD
+        if len(volumes) >= RELATIVE_VOLUME_PERIOD + 1
+        else 0.0
+    )
     candle_range = highs[-1] - lows[-1]
     body_ratio = abs(closes[-1] - float(candles[-1]["open"])) / candle_range if candle_range else 0.0
     previous_rsi_values = [

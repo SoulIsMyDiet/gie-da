@@ -340,6 +340,7 @@ def _setup_candidates(
                 and -REVERSION_BB_ZSCORE < current_z < REVERSION_BB_ZSCORE
                 and len(rsi_last_two) == 2
                 and all(value <= REVERSION_RSI_LONG_MAX for value in rsi_last_two)
+                and close > open_price
                 and close < vwap
                 and (vwap - close) >= atr * REVERSION_VWAP_DISTANCE_ATR
                 and lower_wick / range_points >= REJECTION_WICK_MIN_RATIO
@@ -350,6 +351,7 @@ def _setup_candidates(
                 and -REVERSION_BB_ZSCORE < current_z < REVERSION_BB_ZSCORE
                 and len(rsi_last_two) == 2
                 and all(value >= REVERSION_RSI_SHORT_MIN for value in rsi_last_two)
+                and close < open_price
                 and close > vwap
                 and (close - vwap) >= atr * REVERSION_VWAP_DISTANCE_ATR
                 and upper_wick / range_points >= REJECTION_WICK_MIN_RATIO
@@ -402,8 +404,15 @@ def generate_signal(
         raise ValueError("Bieżący czas musi zawierać strefę czasową.")
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     ordered = sorted(candles, key=_candle_time)
+    if not is_trading_minute(now_utc):
+        return _none_signal(
+            ordered[-1] if ordered else None,
+            "Bieżący czas wypada poza harmonogramem handlu.",
+            ["outside_session"],
+            now_utc,
+        )
     if not ordered:
-        return _none_signal(None, "brak świec", ["no_candles"], now_utc)
+        return _none_signal(None, "Brak danych do rozgrzewki strategii.", ["warmup"], now_utc)
 
     last = ordered[-1]
     candle_open = _candle_time(last)
@@ -443,7 +452,17 @@ def generate_signal(
     if not segment or _candle_time(segment[-1]) != candle_open:
         return blocked("Brak bieżącej świecy w segmencie danych.", ["current_segment_missing"])
 
-    indicators = calculate_indicators(segment, now_utc)
+    session_candles = [
+        item
+        for item in ordered
+        if _candle_time(item).astimezone(WARSAW_TIMEZONE).date()
+        == local_close.date()
+    ]
+    indicators = calculate_indicators(
+        segment,
+        now_utc,
+        vwap_candles=session_candles,
+    )
     indicators["missing_candles_60m"] = missing_count
     indicators["maximum_consecutive_missing"] = consecutive_missing
     indicators["data_age_minutes"] = round(age, 4)
@@ -524,8 +543,10 @@ def generate_signal(
             return blocked("Aktywny jest cooldown po poprzednim sygnale.", ["cooldown_active"], indicators)
 
     efficiency = indicators["efficiency_ratio_30"]
-    if efficiency is not None and REVERSION_ER_MAX < efficiency < PULLBACK_ER_MIN:
-        return blocked("Reżim rynku jest niejednoznaczny.", ["regime_unclear"], indicators)
+    regime_unclear = (
+        efficiency is not None
+        and REVERSION_ER_MAX < efficiency < PULLBACK_ER_MIN
+    )
     opening_range = _opening_range(ordered, local_close.date())
     candidates = _setup_candidates(segment, indicators, candle_close, opening_range)
     used_orb_directions = {direction.upper() for direction in (orb_directions_today or [])}
@@ -547,6 +568,16 @@ def generate_signal(
             return blocked(
                 "Ten kierunek ORB został już wykorzystany w bieżącym dniu lokalnym.",
                 ["orb_direction_already_used"],
+                indicators,
+            )
+        setup_two_or_three_is_active = (
+            any(start <= wall_time <= end for start, end in TREND_PULLBACK_WINDOWS)
+            or RANGE_REVERSION_WINDOW[0] <= wall_time <= RANGE_REVERSION_WINDOW[1]
+        )
+        if regime_unclear and setup_two_or_three_is_active:
+            return blocked(
+                "Reżim rynku jest niejednoznaczny.",
+                ["regime_unclear"],
                 indicators,
             )
         return blocked("Nie spełniono warunków żadnego setupu.", ["no_setup"], indicators)
@@ -611,7 +642,7 @@ def generate_signal(
         "setup": candidate["setup"],
         "score": score,
         "reasons": reasons,
-        "blocked_by": None,
+        "blocked_by": [],
         "params": params,
         "max_hold_minutes": MAX_HOLD_MINUTES,
         "tp_points": round(target_points, 4),

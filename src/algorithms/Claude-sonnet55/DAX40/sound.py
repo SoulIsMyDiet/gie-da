@@ -16,9 +16,15 @@ def play_signal_confirmation() -> bool:
     try:
         import winsound
     except ImportError:
-        print("\a", end="", file=sys.stderr, flush=True)
-        time.sleep(0.1)
-        print("\a", end="", file=sys.stderr, flush=True)
+        try:
+            sys.stderr.write("\a")
+            sys.stderr.flush()
+            time.sleep(0.1)
+            sys.stderr.write("\a")
+            sys.stderr.flush()
+        except OSError as error:
+            logger.error("Nie udało się odtworzyć dzwonka terminala: %s", error)
+            return False
         return True
     try:
         winsound.Beep(1000, 120)

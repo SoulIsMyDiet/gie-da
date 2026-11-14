@@ -39,7 +39,10 @@ to dni robocze 09:05–17:25 Warszawa; obowiązują też wyłączenia 09:00–09
 
 Rozgrzewka: ATR/RSI/BB liczone są odpowiednio dla 14/5/20, pullback wymaga 100
 ciągłych świec, reversion 60, a ORB 15 minut zakresu. VWAP jest liczony od 09:00
-Warszawa. Wskaźniki rozpoczynają się od nowa po brakującej minucie i na nowej sesji.
+Warszawa z pełnej historii bieżącej sesji i nie resetuje się po luce. EMA używa
+rekurencji `ewm(span=n, adjust=False)`. Wskaźniki segmentowe rozpoczynają się od
+nowa po brakującej minucie i na nowej sesji. Jeśli wolumen sesji wynosi zero,
+VWAP jest niezdefiniowany i nie jest zastępowany średnią arytmetyczną.
 Brakujące minuty poza planem handlu nie są lukami.
 
 Wszystkie wskaźniki są resetowane po luce. Luki w zaplanowanym zamknięciu rynku

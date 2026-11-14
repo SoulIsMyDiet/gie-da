@@ -27,7 +27,9 @@ from claude_sonnet55_dax40 import storage
 from claude_sonnet55_dax40.backtest import BacktestEngine
 from claude_sonnet55_dax40.indicators import (
     _atr,
+    _ema,
     _rsi,
+    calculate_indicators,
     completed_five_minute_candles,
 )
 from claude_sonnet55_dax40.schedule import (
@@ -146,6 +148,14 @@ class ScheduleTests(unittest.TestCase):
             "us_data_blackout",
             _in_blackout(us_summer_before_eu.astimezone(WARSAW), us_summer_before_eu),
         )
+        close_during_auction = datetime(2026, 1, 12, 16, 32, tzinfo=UTC)
+        self.assertIn(
+            "warsaw_closing_blackout",
+            _in_blackout(
+                close_during_auction.astimezone(WARSAW),
+                close_during_auction,
+            ),
+        )
 
 
 class IndicatorAndGapTests(unittest.TestCase):
@@ -158,6 +168,63 @@ class IndicatorAndGapTests(unittest.TestCase):
         ]
         self.assertEqual(_atr(bars, period=2), 2.0)
         self.assertEqual(_rsi([1, 2, 3, 4, 5, 6], period=5), 100.0)
+
+    def test_ema_matches_ewm_adjust_false_calculation(self) -> None:
+        self.assertEqual(
+            _ema([1.0, 2.0, 3.0, 4.0], period=3),
+            [1.0, 1.5, 2.25, 3.125],
+        )
+
+    def test_vwap_uses_session_history_and_stays_undefined_without_volume(self) -> None:
+        session_candles = [
+            {
+                "timestamp_utc": datetime(2026, 1, 12, 8, index, tzinfo=UTC),
+                "open": price,
+                "high": price + 1,
+                "low": price - 1,
+                "close": price,
+                "volume": volume,
+            }
+            for index, price, volume in ((0, 100.0, 1.0), (1, 200.0, 3.0))
+        ]
+        indicators = calculate_indicators(
+            [session_candles[-1]],
+            now=datetime(2026, 1, 12, 8, 2, tzinfo=UTC),
+            vwap_candles=session_candles,
+        )
+        self.assertEqual(indicators["vwap"], 175.0)
+
+        no_volume = [
+            {**candle, "volume": 0.0}
+            for candle in session_candles
+        ]
+        indicators = calculate_indicators(
+            [no_volume[-1]],
+            now=datetime(2026, 1, 12, 8, 2, tzinfo=UTC),
+            vwap_candles=no_volume,
+        )
+        self.assertIsNone(indicators["vwap"])
+
+    def test_flat_prices_and_zero_volume_do_not_raise(self) -> None:
+        candles = [
+            {
+                "timestamp_utc": datetime(2026, 1, 12, 8, index, tzinfo=UTC),
+                "open": 100.0,
+                "high": 100.0,
+                "low": 100.0,
+                "close": 100.0,
+                "volume": 0.0,
+            }
+            for index in range(31)
+        ]
+        indicators = calculate_indicators(
+            candles,
+            now=datetime(2026, 1, 12, 8, 31, tzinfo=UTC),
+        )
+        self.assertEqual(indicators["rsi5"], 50.0)
+        self.assertEqual(indicators["efficiency_ratio_30"], 0.0)
+        self.assertIsNone(indicators["bb_zscore"])
+        self.assertIsNone(indicators["vwap"])
 
     def test_five_minute_aggregates_require_closed_bucket_and_four_distinct_members(self) -> None:
         base = datetime(2026, 1, 12, 8, 0, tzinfo=UTC)
@@ -194,7 +261,7 @@ class IndicatorAndGapTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
-    """Weryfikuje warunki podstawowe ORB dla obu kierunków."""
+    """Weryfikuje warunki setupów dla obu kierunków."""
 
     def _orb_data(self, direction: str):
         """Przygotowuje zgodny zakres ORB oraz potwierdzającą świecę."""
@@ -261,6 +328,169 @@ class SetupTests(unittest.TestCase):
             )
         self.assertEqual(result["signal"], "NONE")
         self.assertEqual(result["blocked_by"], ["conflicting_setups"])
+
+    def test_unclear_efficiency_does_not_block_an_orb_signal(self) -> None:
+        candles = build_candles(datetime(2026, 1, 12, 8, 0, tzinfo=UTC), 20)
+        indicators = {
+            "atr14_points": 5.0,
+            "atr_ratio": 1.0,
+            "candle_range": 2.0,
+            "relative_volume": 1.5,
+            "body_ratio": 0.8,
+            "trend_5m": "UP",
+            "rsi5": 52.0,
+            "ema20_5m_slope": 1.0,
+            "efficiency_ratio_30": 0.25,
+        }
+        with (
+            patch(
+                "claude_sonnet55_dax40.signal_logic.calculate_indicators",
+                return_value=indicators,
+            ),
+            patch(
+                "claude_sonnet55_dax40.signal_logic._setup_candidates",
+                return_value=[
+                    {"direction": "LONG", "setup": "OPENING_RANGE_BREAKOUT"}
+                ],
+            ),
+        ):
+            result = generate_signal(
+                candles,
+                now=candles[-1]["timestamp_utc"] + timedelta(minutes=1, seconds=1),
+            )
+        self.assertEqual(result["signal"], "LONG")
+
+    def test_range_reversion_requires_candle_direction(self) -> None:
+        candles = build_candles(datetime(2026, 1, 12, 10, 0, tzinfo=UTC), 60)
+        candles[-1].update(
+            open=100.0,
+            high=105.0,
+            low=90.0,
+            close=99.0,
+        )
+        indicators = {
+            "atr14_points": 5.0,
+            "relative_volume": 0.8,
+            "efficiency_ratio_30": 0.1,
+            "vwap": 107.0,
+            "ema55": 100.0,
+            "ema55_10_bars_ago": 100.0,
+            "bb_zscore_previous": -2.1,
+            "bb_zscore": -1.0,
+            "rsi5_last_two": [20.0, 20.0],
+        }
+        close_time = datetime(2026, 1, 12, 11, 0, tzinfo=UTC)
+        self.assertEqual(
+            _setup_candidates(candles, indicators, close_time, (None, None, 0)),
+            [],
+        )
+
+        candles[-1].update(
+            open=99.0,
+            high=105.0,
+            low=90.0,
+            close=100.0,
+        )
+        indicators.update(
+            vwap=108.0,
+            bb_zscore_previous=-2.1,
+            bb_zscore=-1.0,
+            rsi5_last_two=[20.0, 20.0],
+        )
+        long_candidates = _setup_candidates(
+            candles, indicators, close_time, (None, None, 0)
+        )
+        self.assertIn(
+            ("LONG", "RANGE_REVERSION"),
+            [(item["direction"], item["setup"]) for item in long_candidates],
+        )
+
+        candles[-1].update(
+            open=100.0,
+            high=110.0,
+            low=95.0,
+            close=99.0,
+        )
+        indicators.update(
+            vwap=91.0,
+            bb_zscore_previous=2.1,
+            bb_zscore=1.0,
+            rsi5_last_two=[80.0, 80.0],
+        )
+        short_candidates = _setup_candidates(
+            candles, indicators, close_time, (None, None, 0)
+        )
+        self.assertIn(
+            ("SHORT", "RANGE_REVERSION"),
+            [(item["direction"], item["setup"]) for item in short_candidates],
+        )
+
+    def test_trend_pullback_core_conditions_mirror_both_directions(self) -> None:
+        for direction in ("LONG", "SHORT"):
+            candles = build_candles(
+                datetime(2026, 1, 12, 8, 0, tzinfo=UTC),
+                100,
+            )
+            previous_close = 100.5 if direction == "LONG" else 99.5
+            if direction == "LONG":
+                candles[-1].update(
+                    open=100.0,
+                    high=102.0,
+                    low=100.5,
+                    close=101.0,
+                )
+                for candle in candles[-5:]:
+                    candle["low"] = 100.5
+                indicators = {
+                    "ema9": 102.0,
+                    "ema21": 101.0,
+                    "ema55": 100.0,
+                    "ema20_5m": 102.0,
+                    "ema20_5m_previous": 101.0,
+                    "close_5m": 103.0,
+                    "vwap": 100.0,
+                    "efficiency_ratio_30": 0.4,
+                    "rsi5_prior_three": [35.0, 41.0, 43.0],
+                    "rsi5": 46.0,
+                }
+            else:
+                candles[-1].update(
+                    open=100.0,
+                    high=99.5,
+                    low=98.0,
+                    close=99.0,
+                )
+                for candle in candles[-5:]:
+                    candle["high"] = 99.5
+                indicators = {
+                    "ema9": 98.0,
+                    "ema21": 99.0,
+                    "ema55": 100.0,
+                    "ema20_5m": 98.0,
+                    "ema20_5m_previous": 99.0,
+                    "close_5m": 97.0,
+                    "vwap": 100.0,
+                    "efficiency_ratio_30": 0.4,
+                    "rsi5_prior_three": [65.0, 59.0, 57.0],
+                    "rsi5": 54.0,
+                }
+            candles[-2]["close"] = previous_close
+            indicators.update(
+                atr14_points=5.0,
+                relative_volume=0.8,
+                body_ratio=0.6,
+            )
+            close_time = candles[-1]["timestamp_utc"] + timedelta(minutes=1)
+            candidates = _setup_candidates(
+                candles,
+                indicators,
+                close_time,
+                (None, None, 0),
+            )
+            self.assertIn(
+                (direction, "TREND_PULLBACK"),
+                [(item["direction"], item["setup"]) for item in candidates],
+            )
 
     def test_persisted_orb_direction_cannot_repeat_on_same_local_day(self) -> None:
         candles = build_candles(datetime(2026, 1, 12, 8, 0, tzinfo=UTC), 131)
@@ -333,6 +563,44 @@ class OutputAndBacktestTests(unittest.TestCase):
             [candle], now=candle["timestamp_utc"] + timedelta(minutes=1, seconds=1)
         )
         self.assertEqual(result["blocked_by"], ["warsaw_opening_blackout"])
+
+    def test_weekend_returns_outside_session_instead_of_stale_or_gap(self) -> None:
+        candle = build_candles(datetime(2026, 1, 16, 8, 0, tzinfo=UTC), 1)[0]
+        result = generate_signal(
+            [candle],
+            now=datetime(2026, 1, 17, 12, 0, tzinfo=UTC),
+        )
+        self.assertEqual(result["blocked_by"], ["outside_session"])
+
+    def test_empty_history_during_trading_hours_reports_warmup(self) -> None:
+        result = generate_signal(
+            [],
+            now=datetime(2026, 1, 12, 8, 0, tzinfo=UTC),
+        )
+        self.assertEqual(result["blocked_by"], ["warmup"])
+
+    def test_five_atr_candle_range_is_rejected(self) -> None:
+        candles = build_candles(datetime(2026, 1, 12, 8, 0, tzinfo=UTC), 131)
+        indicators = {
+            "atr14_points": 5.0,
+            "atr_ratio": 1.0,
+            "candle_range": 25.0,
+            "relative_volume": 1.5,
+            "body_ratio": 0.8,
+            "trend_5m": "UP",
+            "rsi5": 52.0,
+            "ema20_5m_slope": 1.0,
+            "efficiency_ratio_30": 0.5,
+        }
+        with patch(
+            "claude_sonnet55_dax40.signal_logic.calculate_indicators",
+            return_value=indicators,
+        ):
+            result = generate_signal(
+                candles,
+                now=candles[-1]["timestamp_utc"] + timedelta(minutes=1, seconds=1),
+            )
+        self.assertEqual(result["blocked_by"], ["candle_range_spike"])
 
     def test_actionable_signal_uses_warsaw_close_and_open_timestamps(self) -> None:
         candles = build_candles(datetime(2026, 1, 12, 8, 0, tzinfo=UTC), 131)
