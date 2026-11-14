@@ -13,11 +13,6 @@ namespace {
 
 // Audio format and signal timing used to construct the in-memory WAV data.
 constexpr DWORD sampleRate = 44100;
-constexpr DWORD signalDurationMs = 350;
-constexpr DWORD sampleCount = sampleRate * signalDurationMs / 1000;
-constexpr DWORD signalGapMs = 150;
-constexpr DWORD gapSampleCount = sampleRate * signalGapMs / 1000;
-
 #pragma pack(push, 1)
 struct WaveHeader {
     char riffId[4];
@@ -41,9 +36,10 @@ static_assert(sizeof(WaveHeader) == 44);
 /**
  * Buduje i odtwarza wskazaną liczbę krótkich piknięć.
  */
-bool playBeeps(DWORD beepCount) {
+bool playBeeps(DWORD beepCount, double frequency, DWORD durationMs, DWORD gapMs) {
     constexpr double pi = 3.14159265358979323846;
-    constexpr double frequency = 440.0;
+    const DWORD sampleCount = sampleRate * durationMs / 1000;
+    const DWORD gapSampleCount = sampleRate * gapMs / 1000;
     const DWORD sequenceSampleCount =
         sampleCount * beepCount + gapSampleCount * (beepCount - 1);
     std::vector<std::int16_t> samples(sequenceSampleCount, 0);
@@ -89,12 +85,12 @@ bool playBeeps(DWORD beepCount) {
  * Odtwarza trzy piknięcia używane jako powiadomienie o brakujących świecach.
  */
 bool AudioSignal::play() {
-    return playBeeps(3);
+    return playBeeps(3, 440.0, 350, 150);
 }
 
 /**
  * Odtwarza dwa piknięcia po potwierdzonym zapisie sygnału do bazy.
  */
 bool AudioSignal::playSignalSaved() {
-    return playBeeps(2);
+    return playBeeps(2, 1000.0, 120, 100);
 }

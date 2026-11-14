@@ -16,6 +16,7 @@ COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.p
 COPY database/api/market_products.py ./market_products.py
 COPY algorithms/Chat-gpt6/EURUSD/ ./algorithm/
 COPY algorithms/Grok-45/EURUSD/EURUSDStrategyV2.py ./grok_algorithm/
+COPY algorithms/Claude-sonnet55/DAX40/ ./dax_algorithm/
 USER appuser
 
 EXPOSE 8000

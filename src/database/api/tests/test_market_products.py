@@ -87,11 +87,12 @@ class MarketProductsTests(unittest.TestCase):
             with self.subTest(timestamp=timestamp):
                 self.assertEqual(profile.is_open(timestamp), expected_open)
 
-    def test_eurusd_and_dax40_are_active_and_follow_their_schedules(self) -> None:
-        self.assertEqual(get_monitored_symbols(), ("EURUSD/USD", "GER30"))
+    def test_all_monitored_products_follow_their_schedules(self) -> None:
+        expected_symbols = ("EURUSD/USD", "GER30", "ES", "XAU/USD")
+        self.assertEqual(get_monitored_symbols(), expected_symbols)
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)),
-            ("EURUSD/USD", "GER30"),
+            expected_symbols,
         )
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)),

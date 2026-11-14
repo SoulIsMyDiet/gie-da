@@ -2,6 +2,7 @@
 
 # Backend
 import copy
+import importlib.util
 import json
 import os
 import sys
@@ -36,6 +37,27 @@ if not grok_algorithm_directory.is_dir():
         / "EURUSD"
     )
 sys.path.insert(0, str(grok_algorithm_directory))
+dax_algorithm_directory = (
+    Path(__file__).resolve().parent / "dax_algorithm"
+)
+if not dax_algorithm_directory.is_dir():
+    dax_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Claude-sonnet55"
+        / "DAX40"
+    )
+dax_package_name = "claude_sonnet55_dax40"
+dax_package_spec = importlib.util.spec_from_file_location(
+    dax_package_name,
+    dax_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(dax_algorithm_directory)],
+)
+if dax_package_spec is None or dax_package_spec.loader is None:
+    raise ImportError("Nie można załadować pakietu strategii DAX40.")
+dax_package = importlib.util.module_from_spec(dax_package_spec)
+sys.modules[dax_package_name] = dax_package
+dax_package_spec.loader.exec_module(dax_package)
 
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from EURUSDStrategyV2 import (  # noqa: E402
@@ -53,6 +75,13 @@ from sound_alert import play_gap_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
+from claude_sonnet55_dax40.DAX40StrategyV1 import (  # noqa: E402
+    DAX40StrategyV1,
+)
+from claude_sonnet55_dax40.config import (  # noqa: E402
+    BEEP_ENABLED as DAX40_BEEP_ENABLED,
+)
+from claude_sonnet55_dax40.storage import DAX40Storage  # noqa: E402
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
@@ -229,7 +258,7 @@ class MarketDataRepository:
                         `datetime` DATETIME(6) NOT NULL,
                         product VARCHAR(32) NOT NULL,
                         price DECIMAL(20, 10) NOT NULL,
-                        `signal` ENUM('short', 'long') NOT NULL,
+                        `signal` ENUM('short', 'long', 'none') NOT NULL,
                         algorithm_name VARCHAR(255) NOT NULL,
                         ai_decision JSON NULL,
                         transaction_id BIGINT UNSIGNED NULL,
@@ -245,6 +274,7 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+                self._migrate_signal_enum(cursor)
                 self._migrate_signal_source_timestamp(cursor)
                 cursor.execute(
                     """
@@ -292,7 +322,6 @@ class MarketDataRepository:
             cursor.execute(
                 "ALTER TABLE signals ADD COLUMN source_timestamp BIGINT NULL"
             )
-
         cursor.execute(
             "SHOW INDEX FROM signals WHERE Key_name = %s",
             ("uq_signals_source_timestamp",),
@@ -303,6 +332,22 @@ class MarketDataRepository:
                 ALTER TABLE signals
                 ADD UNIQUE KEY uq_signals_source_timestamp
                     (product, algorithm_name, source_timestamp)
+                """
+            )
+
+    def _migrate_signal_enum(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Rozszerza istniejący ENUM sygnałów o NONE, również po aktualizacji bazy."""
+        cursor.execute("SHOW COLUMNS FROM signals LIKE 'signal'")
+        signal_column = cursor.fetchone()
+        if signal_column is None:
+            raise RuntimeError("Tabela signals nie zawiera kolumny signal.")
+        if "'none'" not in str(signal_column[1]).lower():
+            cursor.execute(
+                """
+                ALTER TABLE signals
+                MODIFY COLUMN `signal` ENUM('short', 'long', 'none') NOT NULL
                 """
             )
 
@@ -1252,6 +1297,8 @@ class MarketDataRepository:
 
 repository = MarketDataRepository()
 eurusd_strategy = EURUSDStrategyV1()
+dax40_strategy = DAX40StrategyV1()
+dax40_storage = DAX40Storage()
 strategy_lock = Lock()
 
 
@@ -1405,6 +1452,48 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     candle, signal, grok45_v2_signal
                 )
             )
+            if candle.symbol == "GER30":
+                candle_timestamp = candle.datetime.astimezone(timezone.utc)
+                current_minute = datetime.now(timezone.utc).replace(
+                    second=0, microsecond=0
+                )
+                last_dax_candle = getattr(
+                    request.app.state, "dax40_last_processed_timestamp", None
+                )
+                if (
+                    candle_timestamp < current_minute
+                    and (
+                        last_dax_candle is None
+                        or candle_timestamp > last_dax_candle
+                    )
+                ):
+                    dax_candles, dax_signal_state = (
+                        request.app.state.dax40_storage.load_context()
+                    )
+                    if (
+                        dax_candles
+                        and dax_candles[-1]["timestamp_utc"] == candle_timestamp
+                    ):
+                        dax_signal = request.app.state.dax40_strategy.evaluate(
+                            dax_candles,
+                            now=datetime.now(timezone.utc),
+                            last_signal_time=dax_signal_state["last_signal_time"],
+                            signals_today=dax_signal_state["signals_today"],
+                            orb_directions_today=dax_signal_state.get(
+                                "orb_directions_today", []
+                            ),
+                        )
+                        dax_signal_saved = (
+                            request.app.state.dax40_storage.save_signal(
+                                dax_signal, len(dax_candles)
+                            )
+                        )
+                        signal_saved = signal_saved or (
+                            dax_signal_saved and DAX40_BEEP_ENABLED
+                        )
+                        request.app.state.dax40_last_processed_timestamp = (
+                            candle_timestamp
+                        )
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.grok45_v2_candles = (
                 updated_grok45_v2_candles
@@ -1650,5 +1739,8 @@ def signal_potential_details(
 
 app.state.repository = repository
 app.state.eurusd_strategy = eurusd_strategy
+app.state.dax40_strategy = dax40_strategy
+app.state.dax40_storage = dax40_storage
+app.state.dax40_last_processed_timestamp = None
 app.state.strategy_ready = False
 app.state.grok45_v2_candles = []
