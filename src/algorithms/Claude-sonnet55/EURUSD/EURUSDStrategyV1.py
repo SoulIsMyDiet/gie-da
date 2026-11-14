@@ -81,7 +81,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
+#sam skrypt napisany za pomoca calude sonnet 5.5 w przciwienstwie do reszty kodu napisanego prze chat gpt6 luna
 # pisze program w c++ słuzący do zapisywania momentów (sygnałow) swiadczacych o tym że wlansie jest dobry moment na dokonanie mikrotransakcji. Przez mikrotranskacje rozumiem wykonia operacji typu long/short i sfinalizowanie tej transkacji w ciagu max 20 minut.
 
 # do tego celu sciagam z api giełdy swiece 1 minutowe co minute i zapisuje je w bazie. Nie mam tam niestety wglądu do aktualnego spreada(ani bid ani ask) wiec muszą mi wystarczyc pozostale paramtery.
