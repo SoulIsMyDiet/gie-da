@@ -77,7 +77,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# pisze program w c++ słuzący do zapisywania momentów (sygnałow) swiadczacych o tym że wlansie jest dobry moment na dokonanie mikrotransakcji. Przez mikrotranskacje rozumiem wykonia operacji typu long/short i sfinalizowanie tej transkacji w ciagu max 20 minut.
 
+# do tego celu sciagam z api giełdy swiece 1 minutowe co minute i zapisuje je w bazie. Nie mam tam niestety wglądu do aktualnego spreada(ani bid ani ask) wiec muszą mi wystarczyc pozostale paramtery.
+
+# Wymysl prosze optymalny algorytm do znadowanie takich sygnałów ze teraz jeste czas na dokonanie transkacji i sam algorytm ma być z kolei napisany w pythonie.
+
+# Chciałbym aby ten algorytm działał dobzre na instrumencie xxx i chcilabym aby ten algorytm byl dedykowany dla tego instrumentu
+
+# Algorytm ten ma zwracać jsona z parametrami zawieracjaego nazwe instrumentu(w tym prypadku EURUSD), aktualna cene instrumentu(tu pewnie bedzie to cena zamkniecia ostatniej swiecy), aktualny czas(timestamp), rodzaj transakcji (u mnie nazwa tego parametru to "signal" o wartosci 'LONG' albo 'SHORT' [lub 'NONE' - ale tylko dla testów w sumie])  oraz te paramtry na podstawie których algorytm wyliczy czy to dobry moment na transakcje krótkoterminową
+
+# Każdy sygnał ma zostać zapisany do bazy danych do tablicy signals. Jesli copilot nie wie jak to niech dopyta o sczegóły.
+
+# Przy kazdym zapisie progam ma wydac sygnał dzwiekowy składajacy sie z 2 pyknięć.
+
+# Główny plik wykonujacy algorytm ma sie nazywac EURUSDStrategyV1 a wszytkie pliki zwiazane z tym algorytmem maja sie znalesc w folderze src/alghorithms/Claude-sonnet55/EURUSD
+
+# prosze aby tymczasowo algorytm zapisywal do tabeli signals równiez te sygnały o statusie "NONE" (poza 'SHORT' i 'LONG') abym zobaczyl czy algorytm w ogole działa. jednak w taki sposob by mozna bylo szybko wycofac te zmiane bo docelowo bedziemy zapisywac do tabeli signals tylke te sygnaly o statusie 'SHORT' lub 'LONG'
+
+# Do napisania kodu uzywam copilota, ale Ciebie poprosze o przygotowanie instrukcji dla copilota aby taki algorytm napisał.
+
+# przygotuj mi tez tresc audytu zeby sie upewniec czy na pewno dobrze zaimplmentowal algorytm
 class EURUSDStrategyV1:
     """Backend - Główny algorytm generujący sygnały mikrotransakcji."""
 
