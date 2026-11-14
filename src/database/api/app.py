@@ -5,11 +5,12 @@ import copy
 import json
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -48,6 +49,7 @@ from market_products import (  # noqa: E402
     is_market_open,
     is_monitored_product,
 )
+from sound_alert import play_gap_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
@@ -942,6 +944,54 @@ class MarketDataRepository:
         """Stosuje harmonogram przypisany do produktu zamiast kalendarza Forex."""
         return is_market_open(symbol, utc_time)
 
+    def retry_fetch_missing_candles(
+        self,
+        symbol: str,
+        limit: int = 50,
+        max_retries: int = 3,
+        retry_delay_seconds: int = 2,
+    ) -> tuple[bool, list[str], int]:
+        """
+        Backend
+        Pobiera brakujące świece z automatycznym retry.
+        Zwraca tuple (has_missing, missing_times, total_count) z próbami ponowienia.
+        """
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                has_missing, missing_times, total_count = self.fetch_missing_candle_times(
+                    symbol, limit
+                )
+                if has_missing and missing_times:
+                    print(
+                        f"[Retry] {symbol}: próba {attempt + 1}/{max_retries} - "
+                        f"znaleziono {len(missing_times)} brakujących świec"
+                    )
+                    return has_missing, missing_times, total_count
+                else:
+                    return False, [], 0
+            except mysql.connector.Error as error:
+                last_error = error
+                if attempt < max_retries - 1:
+                    print(
+                        f"[Retry] {symbol}: błąd połączenia na próbie {attempt + 1}/{max_retries}. "
+                        f"Czekam {retry_delay_seconds}s przed ponowną próbą: {error}"
+                    )
+                    # Sygnał dźwiękowy dla błędu połączenia
+                    Thread(
+                        target=play_gap_alert,
+                        kwargs={"number_of_beeps": 4, "frequency": 1500},
+                        daemon=True,
+                    ).start()
+                    time.sleep(retry_delay_seconds)
+                else:
+                    print(f"[Retry] {symbol}: nie udało się po {max_retries} próbach: {error}")
+        
+        # Zwracamy ostatni błąd lub pusty wynik
+        if last_error:
+            raise last_error
+        return False, [], 0
+
     def fetch_candle_page(
         self, page: int
     ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
@@ -1207,8 +1257,29 @@ strategy_lock = Lock()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Przygotowuje tabele przed obsługą żądań i kończy start przy błędzie bazy."""
+    """Przygotowuje tabele przed obsługą żądań i pobiera brakujące świece."""
     repository.initialize()
+    
+    # Backend - Pobieranie brakujących świec dla wszystkich monitorowanych symboli z retry
+    monitored_symbols = get_monitored_symbols()
+    print(f"[Startup] Pobieranie brakujących świec dla {len(monitored_symbols)} symboli...")
+    for symbol in monitored_symbols:
+        try:
+            has_missing, missing_times, total_count = repository.retry_fetch_missing_candles(
+                symbol, limit=50, max_retries=3, retry_delay_seconds=2
+            )
+            if has_missing and missing_times:
+                print(
+                    f"[Startup] {symbol}: znaleziono {total_count} brakujących świec, "
+                    f"ładuję {len(missing_times)} najnowszych..."
+                )
+                # Sygnał dźwiękowy gdy są brakujące świece
+                Thread(target=play_gap_alert, kwargs={"number_of_beeps": 2}, daemon=True).start()
+            else:
+                print(f"[Startup] {symbol}: brak brakujących świec")
+        except Exception as error:
+            print(f"[Startup] Błąd przy pobieraniu brakujących świec dla {symbol}: {error}")
+    
     with strategy_lock:
         candle_history = repository.fetch_candle_history("EURUSD/USD")
         eurusd_strategy.warm_up(candle_history)
@@ -1216,6 +1287,7 @@ async def lifespan(_: FastAPI):
             candle_history
         )
         app.state.strategy_ready = True
+    print("[Startup] Aplikacja gotowa do obsługi żądań.")
     yield
 
 
@@ -1347,6 +1419,11 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
             status_code=409,
             detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
         ) from error
+    
+    # Front - Sygnał dźwiękowy (3 piknięcia) gdy została wykryta luka w świecach
+    if new_gap_count > 0:
+        Thread(target=play_gap_alert, kwargs={"number_of_beeps": 3}, daemon=True).start()
+    
     return Response(
         content=f"{new_gap_count}\n{int(signal_saved)}",
         media_type="text/plain; charset=utf-8",

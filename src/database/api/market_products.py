@@ -113,12 +113,40 @@ MARKET_PROFILES = {
             _CLOSED_DAY,
         ),
     ),
+    "sp500_futures": MarketProfile(
+        market_type="futures",
+        timezone_name="America/New_York",
+        sessions_by_weekday=(
+            (SessionWindow(0, 17 * 60), SessionWindow(18 * 60, 24 * 60)),  # Poniedziałek - przerwa 17-18
+            (SessionWindow(0, 17 * 60), SessionWindow(18 * 60, 24 * 60)),  # Wtorek - przerwa 17-18
+            (SessionWindow(0, 17 * 60), SessionWindow(18 * 60, 24 * 60)),  # Środa - przerwa 17-18
+            (SessionWindow(0, 17 * 60), SessionWindow(18 * 60, 24 * 60)),  # Czwartek - przerwa 17-18
+            (SessionWindow(0, 17 * 60),),  # Piątek - zamyka się o 17:00
+            _CLOSED_DAY,  # Sobota
+            (SessionWindow(17 * 60, 24 * 60),),  # Niedziela - od 17:00
+        ),
+    ),
+    "gold_spot": MarketProfile(
+        market_type="metal",
+        timezone_name="America/New_York",
+        sessions_by_weekday=(
+            _ALL_DAY,  # Poniedziałek
+            _ALL_DAY,  # Wtorek
+            _ALL_DAY,  # Środa
+            _ALL_DAY,  # Czwartek
+            (SessionWindow(0, 17 * 60),),  # Piątek - do 17:00
+            _CLOSED_DAY,  # Sobota - zamknięte
+            (SessionWindow(17 * 60, 24 * 60),),  # Niedziela - od 17:00
+        ),
+    ),
 }
 
 # Dodaj nowe symbole tutaj i przypisz im odpowiedni profil rynku.
 MONITORED_PRODUCTS = (
     MarketProduct("EURUSD/USD", "forex_ny_24_5"),
     MarketProduct("GER30", "dax_index"),
+    MarketProduct("ES", "sp500_futures"),
+    MarketProduct("XAU/USD", "gold_spot"),
 )
 
 
