@@ -21,6 +21,7 @@ from .config import (
     EMA_FAST_PERIOD,
     EMA_MIDDLE_PERIOD,
     EMA_SLOW_PERIOD,
+    HISTORY_LIMIT,
     INSTRUMENT,
     LONG_CLOSE_POSITION_MINIMUM,
     LONG_RSI_MAXIMUM,
@@ -530,8 +531,9 @@ class DAX40StrategyV1:
         results: list[dict[str, Any]] = []
         for index, candle in enumerate(ordered):
             candle_close = _candle_open_time(candle) + CANDLE_DURATION
+            history_start = max(0, index + 1 - HISTORY_LIMIT)
             result = self.evaluate(
-                ordered[: index + 1],
+                ordered[history_start : index + 1],
                 now=candle_close + timedelta(milliseconds=1),
             )
             signal_counts[result["signal"]] += 1

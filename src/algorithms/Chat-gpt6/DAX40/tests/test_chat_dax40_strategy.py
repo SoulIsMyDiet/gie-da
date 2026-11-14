@@ -23,6 +23,7 @@ PACKAGE_SPEC.loader.exec_module(PACKAGE)
 
 from chat_gpt6_dax40_test import indicators as indicator_module
 from chat_gpt6_dax40_test import DAX40StrategyV1 as strategy_module
+from chat_gpt6_dax40_test.config import HISTORY_LIMIT
 from chat_gpt6_dax40_test.DAX40StrategyV1 import DAX40StrategyV1
 from chat_gpt6_dax40_test.indicators import (
     _atr,
@@ -471,13 +472,13 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(result["timestamp"], expected_close)
             self.assertIsNone(result["signal_parameters"]["volume"])
 
-    def test_historical_backtest_uses_increasing_prefixes_only(self) -> None:
-        candles = make_candles(4)
+    def test_historical_backtest_uses_the_same_rolling_window_as_live(self) -> None:
+        candles = make_candles(HISTORY_LIMIT + 2)
         strategy = DAX40StrategyV1(ALWAYS_OPEN)
-        received_lengths: list[int] = []
+        received_windows: list[list[dict[str, object]]] = []
 
         def no_signal(prefix, now=None):
-            received_lengths.append(len(prefix))
+            received_windows.append(prefix)
             return {
                 "signal": "NONE",
                 "signal_parameters": {"reason": "no_breakout"},
@@ -485,9 +486,28 @@ class StrategyTests(unittest.TestCase):
 
         with patch.object(strategy, "evaluate", side_effect=no_signal):
             report = strategy.backtest(candles)
-        self.assertEqual(received_lengths, [1, 2, 3, 4])
-        self.assertEqual(report["signal_counts"]["NONE"], 4)
-        self.assertEqual(report["reason_counts"], {"no_breakout": 4})
+        received_lengths = [len(window) for window in received_windows]
+        self.assertEqual(received_lengths[:2], [1, 2])
+        self.assertEqual(
+            received_lengths[HISTORY_LIMIT - 1 :],
+            [HISTORY_LIMIT] * 3,
+        )
+        self.assertEqual(
+            received_windows[-2][0]["timestamp_utc"],
+            candles[1]["timestamp_utc"],
+        )
+        self.assertEqual(
+            received_windows[-1][0]["timestamp_utc"],
+            candles[2]["timestamp_utc"],
+        )
+        self.assertEqual(
+            report["signal_counts"]["NONE"],
+            HISTORY_LIMIT + 2,
+        )
+        self.assertEqual(
+            report["reason_counts"],
+            {"no_breakout": HISTORY_LIMIT + 2},
+        )
 
 
 class StorageTests(unittest.TestCase):

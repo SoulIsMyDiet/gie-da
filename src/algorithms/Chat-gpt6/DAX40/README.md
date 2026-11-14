@@ -52,8 +52,9 @@ Duplikat nie powoduje nowego sygnału dźwiękowego.
 ## Test historii
 
 `DAX40StrategyV1.backtest(candles)` lub `run_historical_backtest(...)`
-przetwarza świece chronologicznie, używając tylko prefiksu dostępnego do
-ocenianej świecy. Zwraca liczbę LONG/SHORT/NONE oraz liczniki przyczyn NONE.
-Tryb historyczny nie zapisuje do bazy i nie emituje dźwięków. Dane wejściowe
-powinny być listą obiektów z `timestamp_utc`, `open`, `high`, `low`, `close`
-i opcjonalnym `volume`.
+przetwarza świece chronologicznie. Dla każdej świecy używa maksymalnie 500
+ostatnich świec, tak jak tryb live; segment wskaźników i jego rozgrzewanie są
+więc oparte na takim samym zakresie danych. Zwraca liczbę LONG/SHORT/NONE oraz
+liczniki przyczyn NONE. Tryb historyczny nie zapisuje do bazy i nie emituje
+dźwięków. Dane wejściowe powinny być listą obiektów z `timestamp_utc`, `open`,
+`high`, `low`, `close` i opcjonalnym `volume`.

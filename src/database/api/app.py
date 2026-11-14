@@ -107,6 +107,7 @@ from chat_gpt6_dax40.DAX40StrategyV1 import (  # noqa: E402
 )
 from chat_gpt6_dax40.config import (  # noqa: E402
     BEEP_ENABLED as CHAT_DAX40_BEEP_ENABLED,
+    HISTORY_LIMIT as CHAT_DAX40_HISTORY_LIMIT,
 )
 from chat_gpt6_dax40.storage import DAX40SignalStorage  # noqa: E402
 
@@ -1590,7 +1591,9 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     and (process_claude_dax or process_chat_dax)
                 ):
                     dax_candles, dax_signal_state = (
-                        request.app.state.dax40_storage.load_context()
+                        request.app.state.dax40_storage.load_context(
+                            limit=CHAT_DAX40_HISTORY_LIMIT
+                        )
                     )
                     if (
                         dax_candles
