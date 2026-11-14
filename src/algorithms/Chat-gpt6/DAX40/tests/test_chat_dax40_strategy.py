@@ -175,7 +175,7 @@ class StrategyTests(unittest.TestCase):
             )
         return candles
 
-    def test_long_and_short_require_fresh_directional_breakouts(self) -> None:
+    def test_long_and_short_use_the_specified_directional_breakouts(self) -> None:
         strategy = DAX40StrategyV1(ALWAYS_OPEN)
         for direction in ("LONG", "SHORT"):
             candles = self._signal_candles(direction)
@@ -206,29 +206,35 @@ class StrategyTests(unittest.TestCase):
                 "decision_thresholds",
                 result["signal_parameters"],
             )
-            self.assertIn(
-                "previous_close",
-                result["signal_parameters"],
+            self.assertNotIn(
+                "fresh_breakout",
+                result["signal_parameters"]["conditions"]["long"],
             )
 
-    def test_current_breakout_does_not_repeat_when_it_was_already_active(self) -> None:
-        candles = self._signal_candles("LONG")
-        candles[-2]["close"] = 101.0
-        series = indicator_fixture(len(candles), "LONG")
-        series["breakout_high_10"][-2] = 100.0
+    def test_current_breakout_is_accepted_when_other_conditions_are_met(self) -> None:
         strategy = DAX40StrategyV1(ALWAYS_OPEN)
-        with patch.object(strategy_module, "calculate_indicator_series", return_value=series):
-            result = strategy.evaluate(
-                candles,
-                now=candles[-1]["timestamp_utc"] + timedelta(
-                    minutes=1, milliseconds=1
-                ),
+        for direction in ("LONG", "SHORT"):
+            candles = self._signal_candles(direction)
+            candles[-2]["close"] = 101.0 if direction == "LONG" else 99.0
+            series = indicator_fixture(len(candles), direction)
+            series["breakout_high_10"][-2] = 100.0
+            series["breakout_low_10"][-2] = 100.0
+            with patch.object(
+                strategy_module,
+                "calculate_indicator_series",
+                return_value=series,
+            ):
+                result = strategy.evaluate(
+                    candles,
+                    now=candles[-1]["timestamp_utc"] + timedelta(
+                        minutes=1, milliseconds=1
+                    ),
+                )
+            self.assertEqual(result["signal"], direction, result)
+            self.assertNotIn(
+                "breakout_already_active",
+                result["signal_parameters"].get("diagnostic_reasons", []),
             )
-        self.assertEqual(result["signal"], "NONE")
-        self.assertIn(
-            "breakout_already_active",
-            result["signal_parameters"]["diagnostic_reasons"],
-        )
 
     def test_fewer_than_100_candles_and_gap_recovery_return_none(self) -> None:
         strategy = DAX40StrategyV1(ALWAYS_OPEN)

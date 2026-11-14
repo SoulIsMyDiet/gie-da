@@ -283,7 +283,6 @@ class DAX40StrategyV1:
         parameters.update(
             self._decision_parameters(
                 segment,
-                indicators,
                 current_indicators,
                 index,
                 gap_parameters,
@@ -342,7 +341,6 @@ class DAX40StrategyV1:
     @staticmethod
     def _decision_parameters(
         candles: Sequence[Candle],
-        indicators: dict[str, list[float | None]],
         current: dict[str, float | None],
         index: int,
         gap_parameters: dict[str, Any],
@@ -413,28 +411,7 @@ class DAX40StrategyV1:
                 "long_rsi_maximum": LONG_RSI_MAXIMUM,
                 "short_rsi_minimum": SHORT_RSI_MINIMUM,
                 "short_rsi_maximum": SHORT_RSI_MAXIMUM,
-                "fresh_breakout_required": True,
             },
-            "previous_close": (
-                finite_number(candles[index - 1].get("close"))
-                if index > 0
-                else None
-            ),
-            "previous_breakout_high_10": (
-                finite_number(indicators["breakout_high_10"][index - 1])
-                if index > 0
-                else None
-            ),
-            "previous_breakout_low_10": (
-                finite_number(indicators["breakout_low_10"][index - 1])
-                if index > 0
-                else None
-            ),
-            "previous_atr14": (
-                finite_number(indicators["atr14"][index - 1])
-                if index > 0
-                else None
-            ),
         }
 
     @staticmethod
@@ -444,7 +421,7 @@ class DAX40StrategyV1:
         current: dict[str, float | None],
         index: int,
     ) -> dict[str, Any]:
-        """Sprawdza trend, świeże wybicie, korpus, pozycję close i RSI."""
+        """Sprawdza trend, wybicie, korpus, pozycję close i RSI."""
         candle = candles[index]
         close = float(candle["close"])
         open_price = float(candle["open"])
@@ -458,15 +435,6 @@ class DAX40StrategyV1:
         high_level = float(current["breakout_high_10"])
         low_level = float(current["breakout_low_10"])
 
-        previous_close = float(candles[index - 1]["close"])
-        previous_high_level = indicators["breakout_high_10"][index - 1]
-        previous_low_level = indicators["breakout_low_10"][index - 1]
-        previous_atr = indicators["atr14"][index - 1]
-        previous_buffer = (
-            BREAKOUT_BUFFER_ATR * previous_atr
-            if previous_atr is not None
-            else None
-        )
         long_trend = (
             float(current["ema9"]) > float(current["ema21"])
             > float(current["ema50"])
@@ -479,16 +447,6 @@ class DAX40StrategyV1:
         )
         long_breakout = close > high_level + buffer
         short_breakout = close < low_level - buffer
-        new_long_breakout = (
-            previous_high_level is not None
-            and previous_buffer is not None
-            and previous_close <= float(previous_high_level) + previous_buffer
-        )
-        new_short_breakout = (
-            previous_low_level is not None
-            and previous_buffer is not None
-            and previous_close >= float(previous_low_level) - previous_buffer
-        )
         candle_body_ok = _at_least(
             body,
             MINIMUM_CANDLE_BODY_ATR * atr,
@@ -514,8 +472,7 @@ class DAX40StrategyV1:
         long_conditions = {
             "trend": long_trend,
             "level_crossed": long_breakout,
-            "fresh_breakout": new_long_breakout,
-            "breakout": long_breakout and new_long_breakout,
+            "breakout": long_breakout,
             "candle_body": candle_body_ok,
             "close_position": long_close_position_ok,
             "momentum": long_momentum,
@@ -523,8 +480,7 @@ class DAX40StrategyV1:
         short_conditions = {
             "trend": short_trend,
             "level_crossed": short_breakout,
-            "fresh_breakout": new_short_breakout,
-            "breakout": short_breakout and new_short_breakout,
+            "breakout": short_breakout,
             "candle_body": candle_body_ok,
             "close_position": short_close_position_ok,
             "momentum": short_momentum,
@@ -551,13 +507,6 @@ class DAX40StrategyV1:
             reasons.append("trend_not_confirmed")
         if not long_breakout and not short_breakout:
             reasons.append("no_breakout")
-        elif (
-            long_breakout
-            and not new_long_breakout
-            or short_breakout
-            and not new_short_breakout
-        ):
-            reasons.append("breakout_already_active")
         if not candle_body_ok or not (
             long_close_position_ok or short_close_position_ok
         ):

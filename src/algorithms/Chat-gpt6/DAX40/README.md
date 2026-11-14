@@ -34,9 +34,9 @@ generować od kolejnej nowej zamkniętej świecy.
   jest dolną granicą, a nie pełnym zliczeniem.
 - LONG/SHORT wymagają zgodnego trendu EMA, ADX, wybicia z buforem ATR,
   odpowiedniego korpusu/pozycji zamknięcia oraz zakresu RSI.
-- Aby nie powtarzać sygnału na trwającym wybiciu, wymagane jest również
-  przekroczenie poziomu, którego poprzednia świeca jeszcze nie przekroczyła.
-  Progi decyzji i wartości poprzedniej świecy są zapisywane w JSON.
+- Każda świeca spełniająca warunki może wygenerować sygnał, również gdy
+  poprzednia świeca była już po tej samej stronie poziomu wybicia.
+- Wskaźniki, warunki i progi decyzji są zapisywane w JSON.
 - Wolumen jest przekazywany do diagnostyki, ale nie wpływa na decyzję.
 
 ## Zapis i dźwięk
