@@ -14,7 +14,7 @@ NEARBY_BAND_WIDTH_FRACTION = 0.3
 WICK_TO_BODY_MULTIPLIER = 1.5
 WICK_TO_ATR_FRACTION = 0.1
 
-
+# tresc instrukcji jest w signalGenerator ale poprosilem chatagpt-lune o przetransponowanie go na pythona
 @dataclass
 class Candle:
     """Przechowuje OHLCV jednej zamkniętej świecy 1-minutowej."""

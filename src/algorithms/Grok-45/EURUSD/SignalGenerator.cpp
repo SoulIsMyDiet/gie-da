@@ -5,7 +5,12 @@
 #include <iomanip>
 #include <locale>
 #include <sstream>
-
+/*Pisze program w c++ słuzący do zapisywania momentów (sygnałow) swiadczacych o tym że wlansie jest dobry moment na dokonanie mikrotransakcji. Przez mikrotranskacje rozumiem wykonia operacji typu long/short i sfinalizowanie tej transkacji w ciagu max 20 minut.
+do tego celu sciagam z api giełdy swiece 1 minutowe co minute i zapisuje je w bazie. Nie mam tam niestety wglądu do aktualnego spreada(ani bid ani ask) wiec muszą mi wystarczyc pozostale paramtery.
+Na początek chciałbym aby ten algorytm działał dobzre na instrumencie EUR/USD i chcilabym aby ten algorytm byl dedykowany dla tego instrumentu
+Algorytm ten ma zwracać jsona z parametrami zawieracjaego nazwe instrumentu(w tym prypadku EUR/USD), aktualna cene instrumentu(tu pewnie bedzie to cena zamkniecia ostatniej swiecy), aktualny czas(timestamp), rodzaj transakcji (u mnie nazwa tego parametru to "signal" o wartosci 'LONG' albo 'SHORT')  oraz te paramtry na podstawie których algorytm wyliczy czy to dobry moement na transakcje krótkoterminową.
+Do napisania kodu uzywam copilota, ale Ciebie poprosze o przygotowanie instrukcji dla copilota aby taki algorytm napisał.
+przygotuj mi tez tresc audytu zeby sie upewniec czy na pewno dobrze zaimplmentowal algorytm*/
 namespace grok45 {
 namespace {
 
