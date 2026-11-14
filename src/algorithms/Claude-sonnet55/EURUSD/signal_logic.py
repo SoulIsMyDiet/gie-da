@@ -6,7 +6,11 @@ Logika generowania sygnałów i scoring dla setupów.
 import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
-from zoneinfo import ZoneInfo
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 from config import (
     PIP,
@@ -301,9 +305,101 @@ class TrendPullbackSetup:
         indicators: Dict,
         candles: List[Dict],
     ) -> Tuple[Optional[str], int, List[str], List[str]]:
-        """Sprawdza SHORT (lustrzane warunki)."""
-        # Implementacja lustrzana - pomijam dla zwięzłości
-        return None, 0, [], []
+        """Sprawdza SHORT (lustrzane warunki dla LONG)."""
+        reasons = []
+        blocked_by = []
+        score = 0
+
+        # Pobierz wartości wskaźników
+        ema9 = indicators.get("ema9")
+        ema21 = indicators.get("ema21")
+        ema55 = indicators.get("ema55")
+        rsi5 = indicators.get("rsi5")
+        atr = indicators.get("atr")
+        ema20_5m = indicators.get("ema20_5m")
+        trend_5m = indicators.get("ema20_5m_slope")
+        er30 = indicators.get("efficiency_ratio")
+
+        if not all([ema9, ema21, ema55, rsi5, atr, ema20_5m, er30]):
+            return None, 0, [], ["insufficient_indicators"]
+
+        # Warunek 1: Trend 5M (close5m < EMA20_5m i nachylenie < 0) - ODWROTNIE niż LONG
+        if len(candles) >= 5:
+            close_5m = candles[-1]["close"]  # Uproszczenie: ostatnia świeca 1M ≈ ostatnia z bieżącego kubełka 5M
+            if not (close_5m < ema20_5m and trend_5m < 0):
+                return None, 0, reasons, ["5m_trend_not_bearish"]
+            reasons.append("5m_trend_bearish")
+        else:
+            return None, 0, reasons, ["insufficient_5m_data"]
+
+        # Warunek 2: Trend 1M (EMA9 < EMA21 < EMA55) - ODWROTNIE niż LONG
+        if not (ema9 < ema21 < ema55):
+            return None, 0, reasons, ["ema_not_bearish_trend"]
+        reasons.append("ema_bearish_trend")
+
+        # Warunek 3: Cena zbliżyła się do EMA21 od góry (high >= EMA21 - 0.25*ATR)
+        if len(candles) < 5:
+            return None, 0, reasons, ["insufficient_candle_history"]
+
+        last_5_highs = [c["high"] for c in candles[-5:]]
+        ema21_level = ema21
+        proximity_threshold = 0.25 * atr
+        touches_high = any(h >= ema21_level - proximity_threshold for h in last_5_highs)
+        if not touches_high:
+            return None, 0, reasons, ["no_ema21_pullback_from_top"]
+        reasons.append("ema21_pullback_from_top")
+
+        # Warunek 4: RSI odbił się (opadnięcie)
+        rsi5_history = indicators.get("rsi5_history", [])
+        if len(rsi5_history) < 3:
+            return None, 0, reasons, ["insufficient_rsi_history"]
+
+        # RSI w ostatnich 3 świecach było > 60, teraz < 55 (opadnięcie)
+        rsi_recent = rsi5_history[-3:]
+        if not any(r > 60 for r in rsi_recent[:-1]) or rsi5 >= 55:
+            return None, 0, reasons, ["rsi_not_overbought_rejection"]
+        reasons.append("rsi_overbought_rejection")
+
+        # Warunek 5: Ostatnia świeca niedźwiedzca
+        last_open = candles[-1]["open"]
+        last_close = candles[-1]["close"]
+        last_high = candles[-1]["high"]
+        last_low = candles[-1]["low"]
+        prev_close = candles[-2]["close"] if len(candles) > 1 else last_close
+
+        if not (last_close < last_open):
+            return None, 0, reasons, ["candle_not_bearish"]
+        candle_body = last_open - last_close
+        candle_range = last_high - last_low
+        if candle_range > 0 and candle_body / candle_range < 0.4:
+            return None, 0, reasons, ["candle_body_too_small"]
+        if not (last_close < prev_close):
+            return None, 0, reasons, ["close_not_lower_than_prev"]
+
+        reasons.append("candle_bearish")
+
+        # Setup przeszedł - oblicz score
+        score = CORE_SETUP_POINTS
+        reasons.append("trend_pullback_short_core_conditions_met")
+
+        # Bonusy (takie same jak dla LONG, ale teraz dla SHORT)
+        if indicators.get("relative_volume", 0) >= 1.2:
+            score += BONUS_RELATIVE_VOLUME
+            reasons.append("bonus_high_volume")
+
+        if indicators.get("is_prime_session", False):
+            score += BONUS_PRIME_SESSION
+            reasons.append("bonus_prime_session")
+
+        if er30 > 0.45:
+            score += BONUS_STRONG_TREND
+            reasons.append("bonus_strong_trend")
+
+        if candle_body / candle_range >= 0.7:
+            score += BONUS_CANDLE_QUALITY
+            reasons.append("bonus_candle_quality")
+
+        return "SHORT", score, reasons, []
 
 
 class RangeReversionSetup:
@@ -406,8 +502,104 @@ class RangeReversionSetup:
         indicators: Dict,
         candles: List[Dict],
     ) -> Tuple[Optional[str], int, List[str], List[str]]:
-        """Sprawdza SHORT (lustrzane warunki)."""
-        return None, 0, [], []
+        """Sprawdza SHORT (lustrzane warunki dla RANGE_REVERSION LONG)."""
+        reasons = []
+        blocked_by = []
+        score = 0
+
+        from config import (
+            REVERSION_EMA55_SLOPE_THRESHOLD,
+            REVERSION_BB_ZSCORE,
+            REVERSION_RSI_THRESHOLD,
+            REVERSION_ATR_DISTANCE,
+        )
+
+        # Pobierz wartości
+        atr = indicators.get("atr")
+        ema55_slope = indicators.get("ema55_slope")
+        bb = indicators.get("bollinger_bands", {})
+        bb_zscore = indicators.get("bb_zscore")
+        rsi5 = indicators.get("rsi5")
+        rsi5_history = indicators.get("rsi5_history", [])
+        vwap = indicators.get("vwap")
+        last_close = candles[-1]["close"] if candles else None
+
+        if not all([atr, ema55_slope is not None, bb, rsi5, vwap, last_close]):
+            return None, 0, [], ["insufficient_indicators"]
+
+        # Warunek 1: EMA55 nachylenie płaskie (< 0.3 * ATR)
+        if abs(ema55_slope) >= REVERSION_EMA55_SLOPE_THRESHOLD * atr:
+            return None, 0, reasons, ["ema55_slope_not_flat"]
+        reasons.append("ema55_flat")
+
+        # Warunek 2: Poprzednia świeca poniżej górnej wstęgi, obecna wraca (SHORT!)
+        if len(candles) < 2:
+            return None, 0, reasons, ["insufficient_candle_history"]
+
+        prev_close = candles[-2]["close"]
+        bb_upper = bb.get("upper", 0)
+        bb_lower = bb.get("lower", 0)
+
+        # SHORT: poprzednia zamknęła się POWYŻEJ górnej wstęgi, obecna wraca
+        if not (prev_close > bb_upper and REVERSION_BB_ZSCORE <= bb_zscore <= 2.0):
+            return None, 0, reasons, ["no_bb_rejection_from_top"]
+        reasons.append("bb_rejection_from_top")
+
+        # Warunek 3: RSI w ostatnich 2 świecach ≥ 75 (lustrzane: wysoko overbought, teraz spada)
+        if len(rsi5_history) < 2:
+            return None, 0, reasons, ["insufficient_rsi_history"]
+
+        rsi_recent = rsi5_history[-2:]
+        if not any(r >= 75 for r in rsi_recent):
+            return None, 0, reasons, ["rsi_not_overbought"]
+        reasons.append("rsi_overbought")
+
+        # Warunek 4: Odległość od VWAP ≥ 1.5 * ATR
+        distance_to_vwap = abs(last_close - vwap)
+        if distance_to_vwap < REVERSION_ATR_DISTANCE * atr:
+            return None, 0, reasons, ["distance_to_vwap_insufficient"]
+        reasons.append("distance_to_vwap_confirmed")
+
+        # Warunek 5: Ostatnia świeca niedźwiedzca (górny knot ≥ 30%)
+        last_open = candles[-1]["open"]
+        last_high = candles[-1]["high"]
+        last_low = candles[-1]["low"]
+
+        if not (last_close < last_open):
+            return None, 0, reasons, ["candle_not_bearish"]
+
+        candle_range = last_high - last_low
+        upper_wick = last_high - last_open if candle_range > 0 else 0
+        if candle_range > 0 and upper_wick / candle_range < 0.3:
+            return None, 0, reasons, ["upper_wick_insufficient"]
+
+        reasons.append("candle_rejection_confirmed")
+
+        # Setup przeszedł
+        score = CORE_SETUP_POINTS
+        reasons.append("range_reversion_short_core_conditions_met")
+
+        # Bonusy
+        if indicators.get("relative_volume", 0) >= 1.2:
+            score += BONUS_RELATIVE_VOLUME
+            reasons.append("bonus_high_volume")
+
+        if indicators.get("is_prime_session", False):
+            score += BONUS_PRIME_SESSION
+            reasons.append("bonus_prime_session")
+
+        # Dla SHORT w range reversion: niska ER (poniżej 0.20 to dobrze)
+        if indicators.get("efficiency_ratio", 0) < 0.20:
+            score += BONUS_STRONG_TREND
+            reasons.append("bonus_range_confirmed")
+
+        candle_body = last_open - last_close
+        candle_range = last_high - last_low
+        if candle_range > 0 and candle_body / candle_range >= 0.5:
+            score += BONUS_CANDLE_QUALITY
+            reasons.append("bonus_candle_quality")
+
+        return "SHORT", score, reasons, []
 
 
 def calculate_risk_reward(atr: float, pip: float = PIP) -> Tuple[float, float]:

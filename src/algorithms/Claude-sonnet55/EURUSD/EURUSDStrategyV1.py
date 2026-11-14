@@ -19,7 +19,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Tuple
 from decimal import Decimal
-from zoneinfo import ZoneInfo
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 # Importy lokalne (wszystkie w tym samym folderze)
 from config import (
@@ -57,6 +61,7 @@ from indicators import (
     BollingerBands,
     KaufmanEfficiencyRatio,
     VolumeWeightedAveragePrice,
+    Candle5mAggregator,
 )
 from signal_logic import (
     SessionFilter,
@@ -118,6 +123,7 @@ class EURUSDStrategyV1:
 
         # Wskaźniki 5M
         self.ema20_5m = ExponentialMovingAverage(EMA_5M)
+        self.aggregator_5m = Candle5mAggregator()
 
         # VWAP
         self.vwap = VolumeWeightedAveragePrice()
@@ -128,6 +134,7 @@ class EURUSDStrategyV1:
         self.ema55_history: List[float] = []
         self.rsi5_history: List[float] = []
         self.close_history: List[float] = []
+        self.ema20_5m_history: List[float] = []  # Historia EMA 5M dla obliczenia nachylenia
 
         # Ostatni sygnał i cooldown
         self.last_signal_time: Optional[datetime] = None
@@ -156,6 +163,14 @@ class EURUSDStrategyV1:
 
             # VWAP (tutaj byś potrzebował timestamp, używam dummy)
             self.vwap.add(candle.get("datetime_utc"), high, low, close, volume)
+
+            # Agregacja 5M i EMA20_5m
+            completed_5m = self.aggregator_5m.add_candle(candle)
+            if completed_5m:
+                # Oblicz EMA na kompletnej świecy 5M
+                ema_5m = self.ema20_5m.add(completed_5m["close"])
+                if ema_5m:
+                    self.ema20_5m_history.append(ema_5m)
 
             # Historia
             if self.ema9.value():
@@ -296,9 +311,47 @@ class EURUSDStrategyV1:
 
     def _update_indicators(self, candles: List[Dict]) -> None:
         """Backend - Aktualizuje wskaźniki nowymi świecami."""
-        # Najprościej: załaduj wszystko jeszcze raz
-        # W produkcji byś dodawał tylko ostatnią świecę
-        pass
+        # Dodaj ostatnią świecę do wskaźników (jeśli warm_up już się uruchomił)
+        if not candles:
+            return
+
+        last_candle = candles[-1]
+        close = last_candle["close"]
+        high = last_candle["high"]
+        low = last_candle["low"]
+        volume = last_candle.get("volume")
+
+        # Wskaźniki 1M
+        self.ema9.add(close)
+        self.ema21.add(close)
+        self.ema55.add(close)
+        self.rsi5.add(close)
+        self.atr14.add(high, low, close)
+        self.bb20.add(close)
+        self.er30.add(close)
+        self.volume_sma.add(volume if volume else 1.0)
+        self.atr_median.add(self.atr14.value() if self.atr14.value() else 0)
+
+        # VWAP
+        self.vwap.add(last_candle.get("datetime_utc"), high, low, close, volume)
+
+        # Agregacja 5M i EMA20_5m
+        completed_5m = self.aggregator_5m.add_candle(last_candle)
+        if completed_5m:
+            ema_5m = self.ema20_5m.add(completed_5m["close"])
+            if ema_5m:
+                self.ema20_5m_history.append(ema_5m)
+
+        # Historia
+        if self.ema9.value():
+            self.ema9_history.append(self.ema9.value())
+        if self.ema21.value():
+            self.ema21_history.append(self.ema21.value())
+        if self.ema55.value():
+            self.ema55_history.append(self.ema55.value())
+        if self.rsi5.value():
+            self.rsi5_history.append(self.rsi5.value())
+        self.close_history.append(close)
 
     def _collect_indicators(self, last_candle: Dict) -> Dict:
         """Backend - Zbiera wszystkie wartości wskaźników."""
@@ -332,9 +385,17 @@ class EURUSDStrategyV1:
                 else 1.0
             ),
             "ema20_5m": self.ema20_5m.value(),
-            "ema20_5m_slope": 0,  # TODO: oblicz z historii
+            "ema20_5m_slope": self._calculate_ema20_5m_slope(),
             "is_prime_session": self._is_prime_session(datetime.now(UTC_TIMEZONE)),
         }
+
+    def _calculate_ema20_5m_slope(self) -> float:
+        """Backend - Oblicza nachylenie EMA20 na świecach 5M (ostatnie 10 świec)."""
+        if len(self.ema20_5m_history) < 10:
+            return 0.0
+        # Nachylenie = zmiana w ostatnich 10 świecach 5M
+        slope = self.ema20_5m_history[-1] - self.ema20_5m_history[-10]
+        return slope / 10
 
     @staticmethod
     def _is_prime_session(utc_time: datetime) -> bool:

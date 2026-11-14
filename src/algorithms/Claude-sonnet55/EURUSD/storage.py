@@ -128,8 +128,10 @@ class CandleDatabase:
             if timestamp_utc.tzinfo is None:
                 timestamp_utc = timestamp_utc.replace(tzinfo=UTC_TIMEZONE)
 
-            timestamp_local = timestamp_utc.astimezone(WARSAW_TIMEZONE).replace(tzinfo=None)
-            offset_minutes = int(timestamp_local.astimezone(WARSAW_TIMEZONE).utcoffset().total_seconds() // 60)
+            # Najpierw konwertuj do Warszawy (z tzinfo), potem usuń tzinfo
+            timestamp_warsaw = timestamp_utc.astimezone(WARSAW_TIMEZONE)
+            timestamp_local = timestamp_warsaw.replace(tzinfo=None)
+            offset_minutes = int(timestamp_warsaw.utcoffset().total_seconds() // 60)
 
             # Przygotuj parametry do zapisu
             price = Decimal(str(signal_dict.get("price", 0)))

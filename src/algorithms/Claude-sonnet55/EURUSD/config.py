@@ -5,7 +5,13 @@ Todas wartości tutaj mogą być zmieniane dla tuningu algorytmu.
 """
 
 from datetime import time
-from zoneinfo import ZoneInfo
+from typing import List, Tuple
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Fallback dla Python 3.8
+    from backports.zoneinfo import ZoneInfo
 
 # ============================================================================
 # OGÓLNE PARAMETRY INSTRUMENTU
@@ -37,7 +43,7 @@ WEEKEND_CLOSE_END_UTC = time(23, 59)
 TRADING_DAYS = [0, 1, 2, 3, 4, 5, 6]  # Poniżej dodajemy filtrowanie
 
 # Czasy blackoutu (news events itd.) - domyślnie puste
-NEWS_BLACKOUTS: list[tuple[time, time]] = []
+NEWS_BLACKOUTS: List[Tuple[time, time]] = []
 
 # ============================================================================
 # PARAMETRY WSKAŹNIKÓW (1M)

@@ -3,7 +3,7 @@ Backend
 Wskaźniki techniczne dla strategii mikrotransakcji.
 """
 
-from typing import Optional
+from typing import Optional, List, Dict
 import math
 
 
@@ -310,3 +310,99 @@ class VolumeWeightedAveragePrice:
         last_candle_date = self.candles_in_session[-1].get("timestamp_date")
         current_date = timestamp.date()
         return last_candle_date != current_date if last_candle_date else False
+
+
+class Candle5mAggregator:
+    """
+    Backend
+    Agreguje świece 1-minutowe w świece 5-minutowe.
+    Tworzy pełne 5-minutowe "kubełki" (00, 05, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55 minut).
+    """
+
+    def __init__(self) -> None:
+        self.candles_5m: List[Dict] = []
+        self.current_bucket: Optional[Dict] = None
+        self.last_close_time: Optional[int] = None
+
+    @staticmethod
+    def _get_bucket_minute(timestamp_utc) -> int:
+        """
+        Zwraca minutę kubełka 5M dla danego timestamp.
+        np. 00:03 → 0, 00:07 → 5, 00:12 → 10, itd.
+        """
+        minute = timestamp_utc.minute
+        return (minute // 5) * 5
+
+    def add_candle(self, candle: Dict) -> Optional[Dict]:
+        """
+        Dodaje świecę 1M i zwraca KOMPLETNĄ świecę 5M jeśli kubełek jest pełny.
+        Zwraca None jeśli kubełek jeszcze się tworzy.
+        """
+        timestamp_utc = candle.get("datetime_utc")
+        if not timestamp_utc:
+            return None
+
+        bucket_minute = self._get_bucket_minute(timestamp_utc)
+        hour = timestamp_utc.hour
+
+        # Jeśli to nowy kubełek, zwróć poprzedni (jeśli istnieje)
+        completed_candle = None
+        if self.current_bucket and self.current_bucket["bucket_minute"] != bucket_minute:
+            # Poprzedni kubełek jest kompletny
+            completed_candle = self._finalize_bucket()
+
+        # Jeśli to nowy kubełek, inicjalizuj go
+        if not self.current_bucket or self.current_bucket["bucket_minute"] != bucket_minute:
+            self.current_bucket = {
+                "bucket_minute": bucket_minute,
+                "hour": hour,
+                "open": candle["open"],
+                "high": candle["high"],
+                "low": candle["low"],
+                "close": candle["close"],
+                "volume": candle.get("volume", 0) or 0,
+                "count": 1,
+            }
+        else:
+            # Kontynuuj kubełek
+            self.current_bucket["high"] = max(self.current_bucket["high"], candle["high"])
+            self.current_bucket["low"] = min(self.current_bucket["low"], candle["low"])
+            self.current_bucket["close"] = candle["close"]
+            self.current_bucket["volume"] += candle.get("volume", 0) or 0
+            self.current_bucket["count"] += 1
+
+        return completed_candle
+
+    def _finalize_bucket(self) -> Optional[dict]:
+        """Finalizuje bieżący kubełek i zwraca świecę 5M."""
+        if not self.current_bucket:
+            return None
+
+        bucket = self.current_bucket
+        hour = bucket["hour"]
+        minute = bucket["bucket_minute"]
+
+        # Oblicz czas zamknięcia świecy 5M (5 minut po otwarciu kubełka)
+        # Uwaga: timestamp z ostatniej świecy 1M w kubełku to już czas zamknięcia
+        return {
+            "open": bucket["open"],
+            "high": bucket["high"],
+            "low": bucket["low"],
+            "close": bucket["close"],
+            "volume": bucket["volume"],
+            "timestamp_minute": minute,
+            "timestamp_hour": hour,
+        }
+
+    def get_completed_5m_candles(self, candles_1m: List[Dict]) -> List[Dict]:
+        """
+        Agreguje listę świec 1M i zwraca TYLKO kompletne świece 5M.
+        Pomiń ostatnią świecę 1M (może być niekompletna).
+        """
+        result = []
+        for i, candle in enumerate(candles_1m[:-1]):  # Pomiń ostatnią
+            completed = self.add_candle(candle)
+            if completed:
+                result.append(completed)
+
+        return result
