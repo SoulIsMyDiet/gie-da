@@ -534,10 +534,10 @@ bool CandleHistoryClient::saveCandle(
     const std::string& symbol,
     const CandleData& candle,
     std::size_t& newlyDetectedGapCount,
-    bool& signalSaved,
+    std::size_t& savedSignalCount,
     std::string& error) {
     newlyDetectedGapCount = 0;
-    signalSaved = false;
+    savedSignalCount = 0;
     std::string utcDatetime;
     if (!formatUtcDatetime(candle.datetime, utcDatetime)) {
         error = "Twelve Data zwróciło czas świecy w nieobsługiwanym formacie.";
@@ -570,9 +570,11 @@ bool CandleHistoryClient::saveCandle(
             return false;
         }
     }
-    if (signalText != "0" && signalText != "1") {
-        error = "Lokalne API zwróciło nieprawidłowy status zapisu sygnału.";
-        return false;
+    for (const unsigned char character : signalText) {
+        if (character < '0' || character > '9') {
+            error = "Lokalne API zwróciło nieprawidłową liczbę zapisanych sygnałów.";
+            return false;
+        }
     }
     try {
         newlyDetectedGapCount =
@@ -584,7 +586,16 @@ bool CandleHistoryClient::saveCandle(
         error = "Lokalne API zwróciło nieprawidłową liczbę wykrytych luk.";
         return false;
     }
-    signalSaved = signalText == "1";
+    try {
+        savedSignalCount =
+            static_cast<std::size_t>(std::stoull(std::string(signalText)));
+    } catch (const std::out_of_range&) {
+        error = "Lokalne API zwróciło zbyt dużą liczbę zapisanych sygnałów.";
+        return false;
+    } catch (const std::invalid_argument&) {
+        error = "Lokalne API zwróciło nieprawidłową liczbę zapisanych sygnałów.";
+        return false;
+    }
     return true;
 }
 

@@ -433,10 +433,14 @@ bool StockPriceMonitor::updateCandle() {
             monitoredSymbol, candle, error);
     bool saved = false;
     std::size_t newlyDetectedGapCount = 0;
-    bool signalSaved = false;
+    std::size_t savedSignalCount = 0;
     if (fetched) {
         saved = CandleHistoryClient::saveCandle(
-            monitoredSymbol, candle, newlyDetectedGapCount, signalSaved, error);
+            monitoredSymbol,
+            candle,
+            newlyDetectedGapCount,
+            savedSignalCount,
+            error);
     }
     const bool closedCandleAvailable = fetched && isClosedCandle(candle);
     std::string updateStatus;
@@ -451,7 +455,6 @@ bool StockPriceMonitor::updateCandle() {
     } else {
         updateStatus = describeCandleFreshness(candle);
     }
-    bool grokSignalSaved = false;
     if (saved && closedCandleAvailable) {
         std::vector<SignalCandleData> analysisCandles;
         std::string signalError;
@@ -487,10 +490,13 @@ bool StockPriceMonitor::updateCandle() {
                         std::string::npos ||
                     generatedSignal.find("\"signal\":\"SHORT\"") !=
                         std::string::npos) {
+                    bool grokSignalSaved = false;
                     if (!CandleHistoryClient::saveGeneratedSignal(
                             generatedSignal, grokSignalSaved, signalError)) {
                         updateStatus += " Błąd zapisu sygnału Grok-45: " +
                             signalError;
+                    } else if (grokSignalSaved) {
+                        ++savedSignalCount;
                     }
                 }
             }
@@ -499,9 +505,13 @@ bool StockPriceMonitor::updateCandle() {
     if (saved && newlyDetectedGapCount > 0 && !AudioSignal::play()) {
         updateStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
-    if (saved && (signalSaved || grokSignalSaved) &&
-        !AudioSignal::playSignalSaved()) {
-        updateStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
+    if (saved) {
+        for (std::size_t index = 0; index < savedSignalCount; ++index) {
+            if (!AudioSignal::playSignalSaved()) {
+                updateStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
+                break;
+            }
+        }
     }
 
     AcquireSRWLockExclusive(&statusLock_);
@@ -558,7 +568,7 @@ void StockPriceMonitor::updateAdditionalProducts() {
     }
 
     std::string additionalStatus;
-    bool anySignalSaved = false;
+    std::size_t savedSignalCount = 0;
     bool anyGapDetected = false;
     for (const std::string& symbol : openSymbols) {
         if (backfilledSymbols_.find(symbol) == backfilledSymbols_.end()) {
@@ -609,16 +619,16 @@ void StockPriceMonitor::updateAdditionalProducts() {
         }
 
         std::size_t detectedGapCount = 0;
-        bool signalSaved = false;
+        std::size_t signalSaveCount = 0;
         if (!CandleHistoryClient::saveCandle(
-                symbol, candle, detectedGapCount, signalSaved, error)) {
+                symbol, candle, detectedGapCount, signalSaveCount, error)) {
             if (!additionalStatus.empty()) {
                 additionalStatus += " | ";
             }
             additionalStatus += symbol + ": błąd zapisu świecy: " + error;
             continue;
         }
-        anySignalSaved = anySignalSaved || signalSaved;
+        savedSignalCount += signalSaveCount;
         anyGapDetected = anyGapDetected || detectedGapCount > 0;
         if (!additionalStatus.empty()) {
             additionalStatus += " | ";
@@ -645,8 +655,11 @@ void StockPriceMonitor::updateAdditionalProducts() {
     if (anyGapDetected && !AudioSignal::play()) {
         additionalStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
-    if (anySignalSaved && !AudioSignal::playSignalSaved()) {
-        additionalStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
+    for (std::size_t index = 0; index < savedSignalCount; ++index) {
+        if (!AudioSignal::playSignalSaved()) {
+            additionalStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
+            break;
+        }
     }
 
     AcquireSRWLockExclusive(&statusLock_);

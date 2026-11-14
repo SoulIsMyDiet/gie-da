@@ -75,7 +75,7 @@ public:
      * @param symbol Symbol instrumentu, którego dotyczy świeca.
      * @param candle Dane OHLCV i czas otwarcia świecy w UTC.
      * @param newlyDetectedGapCount Otrzymuje liczbę nowo wykrytych luk.
-     * @param signalSaved Otrzymuje informację, czy sygnał został zapisany.
+     * @param savedSignalCount Otrzymuje liczbę nowych rekordów sygnałów.
      * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
      * @return true, jeśli API potwierdzi zapis; w przeciwnym razie false.
      */
@@ -83,7 +83,7 @@ public:
         const std::string& symbol,
         const CandleData& candle,
         std::size_t& newlyDetectedGapCount,
-        bool& signalSaved,
+        std::size_t& savedSignalCount,
         std::string& error);
 
     /**

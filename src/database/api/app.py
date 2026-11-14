@@ -59,6 +59,26 @@ dax_package = importlib.util.module_from_spec(dax_package_spec)
 sys.modules[dax_package_name] = dax_package
 dax_package_spec.loader.exec_module(dax_package)
 
+chat_dax_algorithm_directory = Path(__file__).resolve().parent / "chat_dax_algorithm"
+if not chat_dax_algorithm_directory.is_dir():
+    chat_dax_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Chat-gpt6"
+        / "DAX40"
+    )
+chat_dax_package_name = "chat_gpt6_dax40"
+chat_dax_package_spec = importlib.util.spec_from_file_location(
+    chat_dax_package_name,
+    chat_dax_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(chat_dax_algorithm_directory)],
+)
+if chat_dax_package_spec is None or chat_dax_package_spec.loader is None:
+    raise ImportError("Nie można załadować pakietu strategii Chat-gpt6 DAX40.")
+chat_dax_package = importlib.util.module_from_spec(chat_dax_package_spec)
+sys.modules[chat_dax_package_name] = chat_dax_package
+chat_dax_package_spec.loader.exec_module(chat_dax_package)
+
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from EURUSDStrategyV2 import (  # noqa: E402
     Candle as Grok45Candle,
@@ -82,6 +102,13 @@ from claude_sonnet55_dax40.config import (  # noqa: E402
     BEEP_ENABLED as DAX40_BEEP_ENABLED,
 )
 from claude_sonnet55_dax40.storage import DAX40Storage  # noqa: E402
+from chat_gpt6_dax40.DAX40StrategyV1 import (  # noqa: E402
+    DAX40StrategyV1 as ChatDAX40Strategy,
+)
+from chat_gpt6_dax40.config import (  # noqa: E402
+    BEEP_ENABLED as CHAT_DAX40_BEEP_ENABLED,
+)
+from chat_gpt6_dax40.storage import DAX40SignalStorage  # noqa: E402
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
@@ -522,7 +549,7 @@ class MarketDataRepository:
         candle: CandleRecord,
         signal: Signal | None = None,
         grok45_v2_signal: Grok45SignalRecord | None = None,
-    ) -> tuple[int, int, str, bool]:
+    ) -> tuple[int, int, str, int]:
         """Zapisuje świecę i zwraca liczbę nowo wykrytych luk."""
         return self.save_candles(
             [candle], signal, grok45_v2_signal, detect_gaps=True
@@ -534,7 +561,7 @@ class MarketDataRepository:
         signal: Signal | None = None,
         grok45_v2_signal: Grok45SignalRecord | None = None,
         detect_gaps: bool = False,
-    ) -> tuple[int, int, str, bool]:
+    ) -> tuple[int, int, str, int]:
         """Zapisuje tylko świece z godzin otwarcia rynku i zwraca ich najnowszy czas."""
         candle_values = []
         product_symbols = set()
@@ -645,7 +672,7 @@ class MarketDataRepository:
             newly_detected_gap_count,
             len(open_market_candles),
             latest_saved_time,
-            signal is not None or grok45_v2_signal_saved,
+            int(signal is not None) + int(grok45_v2_signal_saved),
         )
 
     def _detect_gaps_before_candle(
@@ -883,6 +910,79 @@ class MarketDataRepository:
                 ),
             )
         return signal_was_inserted
+
+    def save_algorithm_signal(
+        self,
+        product: str,
+        algorithm_name: str,
+        signal: dict[str, object],
+        candles_count: int,
+    ) -> bool:
+        """Zapisuje sygnał dowolnej strategii przez istniejący adapter MySQL."""
+        direction = str(signal.get("signal", "")).upper()
+        if direction not in {"LONG", "SHORT", "NONE"}:
+            raise ValueError("Sygnał musi mieć wartość LONG, SHORT albo NONE.")
+        price = signal.get("price")
+        candle_open_epoch = signal.get("candle_open_epoch")
+        close_time_value = signal.get("timestamp")
+        parameters = signal.get("signal_parameters")
+        if (
+            price is None
+            or candle_open_epoch is None
+            or not isinstance(close_time_value, str)
+            or not isinstance(parameters, dict)
+        ):
+            raise ValueError("Sygnał nie zawiera wymaganych pól do zapisu.")
+
+        close_time = datetime.fromisoformat(
+            close_time_value.replace("Z", "+00:00")
+        )
+        if close_time.tzinfo is None or close_time.utcoffset() is None:
+            raise ValueError("Czas sygnału musi zawierać strefę czasową.")
+        local_close_time = close_time.astimezone(WARSAW_TIME_ZONE).replace(
+            tzinfo=None
+        )
+        source_timestamp = int(candle_open_epoch)
+        serialized_parameters = json.dumps(
+            parameters,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+
+        connection = mysql.connector.connect(**self.database_settings)
+        cursor = None
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                INSERT IGNORE INTO signals
+                    (`datetime`, product, price, `signal`, algorithm_name,
+                     ai_decision, transaction_id, candles_count,
+                     signal_parameters, source_timestamp)
+                VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)
+                """,
+                (
+                    local_close_time,
+                    product,
+                    Decimal(str(price)),
+                    direction.lower(),
+                    algorithm_name,
+                    max(0, int(candles_count)),
+                    serialized_parameters,
+                    source_timestamp,
+                ),
+            )
+            inserted = cursor.rowcount == 1
+            connection.commit()
+            return inserted
+        except mysql.connector.Error:
+            connection.rollback()
+            raise
+        finally:
+            if cursor is not None:
+                cursor.close()
+            connection.close()
 
     def save_grok45_signal(self, signal: Grok45SignalRecord) -> bool:
         """Zapisuje sygnał C++ Grok-45 i pomija duplikaty tej samej świecy."""
@@ -1299,6 +1399,8 @@ repository = MarketDataRepository()
 eurusd_strategy = EURUSDStrategyV1()
 dax40_strategy = DAX40StrategyV1()
 dax40_storage = DAX40Storage()
+chat_dax40_strategy = ChatDAX40Strategy(market_is_open=is_market_open)
+chat_dax40_storage = DAX40SignalStorage(repository)
 strategy_lock = Lock()
 
 
@@ -1447,11 +1549,12 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     grok45_v2_signal = _generate_grok45_v2_signal(
                         updated_grok45_v2_candles
                     )
-            new_gap_count, _, _, signal_saved = (
+            new_gap_count, _, _, signal_save_count = (
                 request.app.state.repository.save_candle(
                     candle, signal, grok45_v2_signal
                 )
             )
+            signal_save_count = int(signal_save_count)
             if candle.symbol == "GER30":
                 candle_timestamp = candle.datetime.astimezone(timezone.utc)
                 current_minute = datetime.now(timezone.utc).replace(
@@ -1460,12 +1563,31 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 last_dax_candle = getattr(
                     request.app.state, "dax40_last_processed_timestamp", None
                 )
+                last_chat_dax_candle = getattr(
+                    request.app.state,
+                    "chat_dax40_last_processed_timestamp",
+                    None,
+                )
+                chat_dax_strategy = getattr(
+                    request.app.state, "chat_dax40_strategy", None
+                )
+                chat_dax_storage = getattr(
+                    request.app.state, "chat_dax40_storage", None
+                )
+                process_claude_dax = (
+                    last_dax_candle is None or candle_timestamp > last_dax_candle
+                )
+                process_chat_dax = (
+                    chat_dax_strategy is not None
+                    and chat_dax_storage is not None
+                    and (
+                        last_chat_dax_candle is None
+                        or candle_timestamp > last_chat_dax_candle
+                    )
+                )
                 if (
                     candle_timestamp < current_minute
-                    and (
-                        last_dax_candle is None
-                        or candle_timestamp > last_dax_candle
-                    )
+                    and (process_claude_dax or process_chat_dax)
                 ):
                     dax_candles, dax_signal_state = (
                         request.app.state.dax40_storage.load_context()
@@ -1474,26 +1596,40 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                         dax_candles
                         and dax_candles[-1]["timestamp_utc"] == candle_timestamp
                     ):
-                        dax_signal = request.app.state.dax40_strategy.evaluate(
-                            dax_candles,
-                            now=datetime.now(timezone.utc),
-                            last_signal_time=dax_signal_state["last_signal_time"],
-                            signals_today=dax_signal_state["signals_today"],
-                            orb_directions_today=dax_signal_state.get(
-                                "orb_directions_today", []
-                            ),
-                        )
-                        dax_signal_saved = (
-                            request.app.state.dax40_storage.save_signal(
-                                dax_signal, len(dax_candles)
+                        if process_claude_dax:
+                            dax_signal = request.app.state.dax40_strategy.evaluate(
+                                dax_candles,
+                                now=datetime.now(timezone.utc),
+                                last_signal_time=dax_signal_state["last_signal_time"],
+                                signals_today=dax_signal_state["signals_today"],
+                                orb_directions_today=dax_signal_state.get(
+                                    "orb_directions_today", []
+                                ),
                             )
-                        )
-                        signal_saved = signal_saved or (
-                            dax_signal_saved and DAX40_BEEP_ENABLED
-                        )
-                        request.app.state.dax40_last_processed_timestamp = (
-                            candle_timestamp
-                        )
+                            dax_signal_saved = (
+                                request.app.state.dax40_storage.save_signal(
+                                    dax_signal, len(dax_candles)
+                                )
+                            )
+                            if dax_signal_saved and DAX40_BEEP_ENABLED:
+                                signal_save_count += 1
+                            request.app.state.dax40_last_processed_timestamp = (
+                                candle_timestamp
+                            )
+                        if process_chat_dax:
+                            chat_dax_signal = chat_dax_strategy.evaluate(
+                                dax_candles,
+                                now=datetime.now(timezone.utc),
+                            )
+                            chat_dax_signal_saved = chat_dax_storage.save(
+                                chat_dax_signal,
+                                len(dax_candles),
+                            )
+                            if chat_dax_signal_saved and CHAT_DAX40_BEEP_ENABLED:
+                                signal_save_count += 1
+                            request.app.state.chat_dax40_last_processed_timestamp = (
+                                candle_timestamp
+                            )
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.grok45_v2_candles = (
                 updated_grok45_v2_candles
@@ -1514,7 +1650,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
         Thread(target=play_gap_alert, kwargs={"number_of_beeps": 3}, daemon=True).start()
     
     return Response(
-        content=f"{new_gap_count}\n{int(signal_saved)}",
+        content=f"{new_gap_count}\n{signal_save_count}",
         media_type="text/plain; charset=utf-8",
     )
 
@@ -1742,5 +1878,8 @@ app.state.eurusd_strategy = eurusd_strategy
 app.state.dax40_strategy = dax40_strategy
 app.state.dax40_storage = dax40_storage
 app.state.dax40_last_processed_timestamp = None
+app.state.chat_dax40_strategy = chat_dax40_strategy
+app.state.chat_dax40_storage = chat_dax40_storage
+app.state.chat_dax40_last_processed_timestamp = None
 app.state.strategy_ready = False
 app.state.grok45_v2_candles = []
