@@ -185,6 +185,28 @@ class EURUSDStrategyV1:
 
         logger.info("Wskaźniki załadowane pomyślnie.")
 
+    def _is_candle_forming(self, last_timestamp: datetime) -> bool:
+        """
+        Backend
+        Sprawdza czy ostatnia świeca w bazie jest jeszcze formowana.
+        Świeca jest zamknięta jeśli: last_timestamp + 1 minuta <= teraz
+        """
+        if not last_timestamp:
+            return True  # Brak danych - załóż że formuje się
+
+        current_time = datetime.now(UTC_TIMEZONE)
+        # Świeca 1M zamyka się dokładnie 1 minutę po jej timestamp (opening time)
+        closing_time = last_timestamp + timedelta(minutes=1)
+
+        # Jeśli teraz jest przed zamknięciem świecy, to jeszcze się formuje
+        is_forming = current_time < closing_time
+        
+        if is_forming:
+            time_until_close = (closing_time - current_time).total_seconds()
+            logger.debug(f"Świeca w formowaniu ({time_until_close:.1f}s do zamknięcia)")
+        
+        return is_forming
+
     def generate_signal(self, candles: List[Dict]) -> Dict:
         """
         Backend
@@ -214,6 +236,11 @@ class EURUSDStrategyV1:
             logger.warning(f"Stale data ({time_since_candle:.1f} minut temu)")
             return self._format_signal("NONE", None, 0, [], ["stale_data"])
 
+        # Check: Świeca nie jest w formowaniu (musimy czekać na zamknięcie)
+        if self._is_candle_forming(last_timestamp):
+            logger.debug("Ostatnia świeca jeszcze się formuje - pominięcie")
+            return self._format_signal("NONE", None, 0, [], ["formulating_candle"])
+
         # Aktualizuj wskaźniki
         try:
             self._update_indicators(candles)
@@ -227,8 +254,13 @@ class EURUSDStrategyV1:
         # Hard filters
         blocked_by = []
 
-        # Filter 1: Sesja
-        session_ok, session_blocked = SessionFilter.check_session(last_timestamp)
+        # Filter 1: Sesja + cooldown
+        from config import COOLDOWN_MINUTES
+        session_ok, session_blocked = SessionFilter.check_session(
+            last_timestamp,
+            last_signal_time=self.last_signal_time,
+            cooldown_minutes=COOLDOWN_MINUTES,
+        )
         if not session_ok:
             blocked_by.extend(session_blocked)
 
@@ -443,6 +475,12 @@ class EURUSDStrategyV1:
                 else:  # SHORT
                     result["tp_price"] = current_price - tp_pips * PIP
                     result["sl_price"] = current_price + sl_pips * PIP
+
+        # Aktualizuj cooldown jeśli to LONG/SHORT
+        if signal in ("LONG", "SHORT"):
+            self.last_signal_time = datetime.now(UTC_TIMEZONE)
+            self.last_signal_direction = signal
+            logger.info(f"Cooldown started: {signal} at {self.last_signal_time.isoformat()}")
 
         return result
 

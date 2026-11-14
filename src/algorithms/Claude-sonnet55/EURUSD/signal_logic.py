@@ -103,9 +103,13 @@ class SessionFilter:
         return False, None
 
     @staticmethod
-    def check_session(utc_time: datetime) -> Tuple[bool, List[str]]:
+    def check_session(
+        utc_time: datetime,
+        last_signal_time: Optional[datetime] = None,
+        cooldown_minutes: int = 10,
+    ) -> Tuple[bool, List[str]]:
         """
-        Sprawdza wszystkie filtry sesji. Zwraca (pass, blocked_by_reasons).
+        Sprawdza wszystkie filtry sesji + cooldown. Zwraca (pass, blocked_by_reasons).
         """
         blocked_by = []
 
@@ -123,6 +127,14 @@ class SessionFilter:
         passed, reason = SessionFilter.is_publication_blackout(utc_time)
         if passed:
             blocked_by.append(reason)
+
+        # Check 4: Cooldown timer (jeśli był ostatni sygnał)
+        if last_signal_time:
+            time_since_signal = (utc_time - last_signal_time).total_seconds() / 60
+            if time_since_signal < cooldown_minutes:
+                blocked_by.append(
+                    f"cooldown_active ({time_since_signal:.1f} min / {cooldown_minutes} min)"
+                )
 
         return len(blocked_by) == 0, blocked_by
 

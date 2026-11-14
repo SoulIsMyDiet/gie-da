@@ -261,7 +261,8 @@ class VolumeWeightedAveragePrice:
     def __init__(self, anchor_time_utc=None) -> None:
         """anchor_time_utc - czas UTC startu sesji (lub None dla domyślnego dzisiaj)."""
         self.anchor_time_utc = anchor_time_utc
-        self.candles_in_session: list[dict] = []
+        self.candles_in_session: List[Dict] = []
+        self.last_session_date = None  # Śledzenie daty sesji
 
     def add(self, timestamp, high: float, low: float, close: float, volume: Optional[float]) -> Optional[float]:
         """
@@ -276,11 +277,12 @@ class VolumeWeightedAveragePrice:
         typical_price = (high + low + close) / 3.0
 
         # Jeśli to nowa sesja, resetuj
-        if not self.candles_in_session or self._is_new_session(timestamp):
+        if self._is_new_session(timestamp):
             self.candles_in_session = []
+            self.last_session_date = timestamp.date() if timestamp else None
 
         self.candles_in_session.append(
-            {"typical_price": typical_price, "volume": volume}
+            {"typical_price": typical_price, "volume": volume, "timestamp": timestamp}
         )
 
         # VWAP = suma(typical_price * volume) / suma(volume)
@@ -304,12 +306,15 @@ class VolumeWeightedAveragePrice:
 
     def _is_new_session(self, timestamp) -> bool:
         """Sprawdza czy to nowa sesja (nowy dzień UTC)."""
-        if not self.candles_in_session:
+        if not self.candles_in_session or not timestamp:
             return False
-        # Porównaj datę UTC
-        last_candle_date = self.candles_in_session[-1].get("timestamp_date")
+        
         current_date = timestamp.date()
-        return last_candle_date != current_date if last_candle_date else False
+        # Porównaj z ostatnią zapisaną datą sesji
+        if self.last_session_date:
+            return current_date != self.last_session_date
+        
+        return False
 
 
 class Candle5mAggregator:
