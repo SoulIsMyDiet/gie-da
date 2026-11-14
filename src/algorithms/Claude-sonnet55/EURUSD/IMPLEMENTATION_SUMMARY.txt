@@ -1,0 +1,243 @@
+"""
+PODSUMOWANIE IMPLEMENTACJI
+==========================
+
+Algorytm Mikrotransakcji EURUSD (Claude-sonnet55)
+Lokalizacja: src/algorithms/Claude-sonnet55/EURUSD/
+
+ARCHITEKTURA
+============
+
+1. config.py
+   - Wszystkie parametry i stałe (konfigurowalne)
+   - Strefy czasowe (UTC, Warszawa)
+   - Parametry wskaźników, setupów, scoringu
+   - Flaga SAVE_NONE_SIGNALS dla testów
+
+2. indicators.py
+   - SMA, EMA, RSI (Wilder), ATR (Wilder)
+   - Bollinger Bands (z z-score)
+   - Kaufman Efficiency Ratio (trend/noise)
+   - VWAP (Volume Weighted Average Price)
+   - Wszystkie z type hints i docstringami
+
+3. signal_logic.py
+   - SessionFilter: Filtry czasów handlu (hard filters)
+     * Godziny 07:00-16:30 UTC (pomijanie piątku 19:00+, niedzieli)
+     * Blokada minut publikacji (57-58, 27-28 każdej godziny)
+     * News blackouts (konfigurowalny)
+   
+   - VolatilityFilter: ATR w zakresie, cost filter
+   
+   - DataAnomalyFilter: Anomalie świec, wolumen
+   
+   - TrendPullbackSetup (ER >= 0.30): LONG/SHORT
+     * 5M trend potwierdzenie
+     * EMA order (9 > 21 > 55)
+     * Pullback do EMA21
+     * RSI bounce (< 40 -> > 45)
+     * Świeca bycza
+   
+   - RangeReversionSetup (ER <= 0.20): LONG/SHORT
+     * EMA55 flat
+     * BB reversion
+     * RSI oversold
+     * Distance to VWAP
+     * Candle rejection
+
+4. storage.py
+   - CandleDatabase: Odczyt świec z MySQL
+   - save_signal(): Zapis z UPSERT (idempotentny)
+   - Konwersja Warszawa UTC
+   - Signal parameters do JSON
+
+5. sound.py
+   - play_signal_confirmation(): 2 piknięcia (1000 Hz)
+   - play_error_alert(): 4 piknięcia (1500 Hz)
+   - Try/except protection
+
+6. EURUSDStrategyV1.py
+   - Główna klasa z warm_up() i generate_signal()
+   - Czytanie z CLI z argparse (--loop opcja)
+   - JSON output na stdout
+   - Integracja z sound alerts
+   - Full logging
+
+7. backtest.py
+   - Symulacja wyników dla historii
+   - TP/SL/time stop
+   - Raport z win rate, profit factor, max drawdown
+
+8. tests/test_indicators.py
+   - Testy jednostkowe wskaźników
+   - Testy SessionFilter i VolatilityFilter
+   - pytest compatible
+
+9. README.md
+   - Dokumentacja użytkownika
+   - Komendy uruchamiania
+   - Format JSON
+   - Troubleshooting
+
+ZAŁOŻENIA ALGORYTMU
+===================
+
+✓ Baza danych: MySQL z tabelą `candles` (symbol, datetime, open, high, low, close, volume, utc_offset_minutes)
+✓ Czas w bazie: datetime w lokalnym (Warszawa), konwertujemy na UTC dla algorytmu
+✓ Tylko zamknięte świece: Ostatnia świeca nie starsza niż 2 minuty
+✓ Brak look-ahead: Wskaźniki używają hist[:-1] dla bieżącej świecy
+✓ Pip = 0.0001: EURUSD standard
+✓ Spread: Domyślnie 1.5 pips (ASSUMED_COST_PIPS w config)
+✓ Setup autoselect: Algoritm wybiera na podstawie ER (trend vs range vs uncertain)
+✓ Idempotentność: UPSERT na (product, algorithm_name, source_timestamp)
+✓ Cooldown: 10 minut między sygnałami (do implementacji w produkcji)
+✓ Sygnały NONE: Zapisuje jeśli SAVE_NONE_SIGNALS=True (tymczasowo)
+✓ Dźwięki: Thread-safe, nie przerywa działania algorytmu
+✓ Logging: Python logging (nie print, poza JSON output)
+
+HARD FILTERS (ZWRACAJĄ NONE)
+=============================
+
+1. Sesja:
+   - Poza godzinami handlu (07:00-16:30 UTC)
+   - Piątek po 19:00 UTC
+   - Niedziela (z wyjątkiem 17:00-23:59)
+   - Minuty publikacji (57-58, 27-28 każdej godziny)
+   - News blackouts (lista w config)
+
+2. Zmienność (ATR):
+   - ATR < 0.7 pips lub > 3.0 pips
+   - ATR ratio < 0.8 lub > 2.5 (względem mediany 200)
+   - Oczekiwany ruch < 3.0 * 1.5 pips (cost filter)
+
+3. Anomalie:
+   - Zakres świecy > 3 * ATR
+   - Relatywny wolumen < 0.6
+   - Historia < 300 świec
+   - Dane starsze niż 2 minuty
+
+SCORING
+=======
+
+Rdzenna: 60 pkt (spełnienie głównych warunków setupu)
+Bonusy:
+  - Wysokowolumen (>= 1.2 rel): +10
+  - Prime session (12:00-16:00 UTC): +10
+  - Silny trend (ER > 0.45) lub range clarity: +10
+  - Jakość świecy: +10
+  MAX: 100 pkt
+
+Sygnał jeśli score >= 70
+
+RISK MANAGEMENT
+===============
+
+SL = 1.5 × ATR
+TP = 2.0 × ATR (min 2.0 pips)
+Time stop = 20 minut
+Max hold duration (zamiast pozycji overnight)
+
+ZMIENNE ŚRODOWISKOWE
+====================
+
+MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
+
+PARAMETRY TUNINGOWE
+===================
+
+W config.py (bez "magicznych liczb" w kodzie):
+- Okresy wskaźników
+- Progi ER
+- Mnożniki SL/TP
+- Tolerancje filtrów
+- Anonse czasowe
+
+TESTOWANIE
+==========
+
+✓ Wszystkie pliki syntaktycznie poprawne
+✓ Testy jednostkowe (pytest) dla wskaźników
+✓ Brak hardkodowanych ścieżek (używamy importów względnych)
+✓ Type hints throughout
+✓ Docstringi na wszystkich funkcjach
+
+OBSŁUGIWANE SYSTEMY OPERACYJNE
+==============================
+
+Windows: winsound.Beep()
+Linux/macOS: printf "\a" (fallback)
+
+JSON OUTPUT
+===========
+
+```json
+{
+  "instrument": "EURUSD",
+  "signal": "LONG|SHORT|NONE",
+  "price": <float close>,
+  "timestamp": <ISO-8601 UTC>,
+  "setup": "TREND_PULLBACK|RANGE_REVERSION|null",
+  "score": <int 0-100>,
+  "reasons": [<lista warunków które zadecydowały>],
+  "blocked_by": [<filtery które zablokowały sygnał>],
+  "params": {
+    "atr_pips", "atr_ratio", "rsi5", "ema9", "ema21", "ema55",
+    "ema20_5m", "efficiency_ratio", "vwap_distance", "relative_volume",
+    "body_ratio", "session", ...
+  },
+  "max_hold_minutes": 20,
+  "tp_pips": <float>,
+  "sl_pips": <float>,
+  "tp_price": <float>,
+  "sl_price": <float>
+}
+```
+
+IDEMPOTENTNOŚĆ
+==============
+
+Unique key w tabeli `signals`:
+  (product, algorithm_name, source_timestamp)
+
+Jeśli ten sam sygnał dla tej samej świecy zostanie uruchomiony ponownie:
+  - MySQL: ON DUPLICATE KEY UPDATE (UPDATE zamiast INSERT)
+  - Brak duplikatu
+  - Brak powtórnego dźwięku (był inserted już raz)
+
+PRODUCTION CHECKLIST
+====================
+
+[ ] SAVE_NONE_SIGNALS = False (po testach)
+[ ] Ustawić NEWS_BLACKOUTS jeśli potrzebne
+[ ] Dostroić parametry ATR, scoring na backtescie
+[ ] Zmienne środowiskowe w .env
+[ ] Testy na produkcyjnych danych
+[ ] Monitoring sygnałów w logach
+[ ] Wykonanie transakcji po sygnałach (zewnętrzny moduł)
+
+ZNANE OGRANICZENIA
+==================
+
+1. VWAP: Uproszczony (w produkcji potrzebujesz real-time tick data)
+2. 5M aggregation: Brak pełnego drukowania 5M (uproszczony EMA20_5M)
+3. Breakout signals: Nie zaimplementowano (focus na pullback/reversion)
+4. Risk management: Brak korygowania SL w trakcie (fixed SL/TP)
+5. Slippage: Domyślnie 0 (realnie +0.1-0.3 pip)
+
+MOŻLIWE USPRAWNIENIA
+====================
+
+1. Multi-timeframe validation (1M + 5M + 15M)
+2. Position sizing (% rizyka)
+3. Trailing stop
+4. Market microstructure (order flow, spread changes)
+5. ML-based scoring (zamiast hardcoded)
+6. DCA strategy (dollar-cost averaging)
+7. Support/resistance levels
+8. Volume profile
+9. Sentiment data
+
+=====================================
+Algorytm gotowy do testów!
+=====================================
+"""
