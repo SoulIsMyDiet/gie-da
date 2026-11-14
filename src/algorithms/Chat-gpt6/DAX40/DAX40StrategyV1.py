@@ -266,16 +266,6 @@ class DAX40StrategyV1:
                     "gap_recovery": False,
                 },
             )
-        if not self.market_is_open(DATABASE_SYMBOL, now_utc):
-            return _none_result(
-                current,
-                "outside_session",
-                {
-                    "strategy_version": STRATEGY_VERSION,
-                    "segment_candles": 0,
-                    "gap_recovery": False,
-                },
-            )
 
         segment, gap_parameters = _current_segment(ordered, self.market_is_open)
         parameters: dict[str, Any] = {

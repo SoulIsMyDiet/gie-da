@@ -341,6 +341,48 @@ class StrategyTests(unittest.TestCase):
         )
         self.assertFalse(result["signal_parameters"]["gap_recovery"])
 
+    def test_last_closed_candle_is_evaluated_at_session_end(self) -> None:
+        berlin = ZoneInfo("Europe/Berlin")
+
+        def dax_session_open(_symbol: str, timestamp: datetime) -> bool:
+            local = timestamp.astimezone(berlin)
+            minute_of_day = local.hour * 60 + local.minute
+            return (
+                local.weekday() < 5
+                and 70 <= minute_of_day < 22 * 60
+            )
+
+        candles = make_candles(
+            100,
+            start=datetime(2026, 1, 12, 19, 20, tzinfo=UTC),
+        )
+        candles[-1].update(
+            open=100.5,
+            high=102.2,
+            low=100.2,
+            close=102.0,
+        )
+        strategy = DAX40StrategyV1(dax_session_open)
+        indicators = indicator_fixture(len(candles), "LONG")
+
+        with patch.object(
+            strategy_module,
+            "calculate_indicator_series",
+            return_value=indicators,
+        ):
+            result = strategy.evaluate(
+                candles,
+                now=candles[-1]["timestamp_utc"] + timedelta(
+                    minutes=1, milliseconds=1
+                ),
+            )
+
+        self.assertEqual(result["signal"], "LONG")
+        self.assertEqual(
+            result["timestamp"],
+            "2026-01-12T22:00:00+01:00",
+        )
+
     def test_forming_candle_is_rejected(self) -> None:
         candles = make_candles(100)
         result = DAX40StrategyV1(ALWAYS_OPEN).evaluate(

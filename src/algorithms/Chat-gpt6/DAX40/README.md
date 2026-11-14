@@ -13,7 +13,9 @@ DAX40 i wywołuje tę strategię oraz strategię Claude. Harmonogram nie jest
 kopiowany do tego folderu: strategia otrzymuje funkcję `is_market_open` z
 istniejącego `market_products.py`. Czasy z bazy są przeliczane przez istniejący
 adapter na świadome timestampy UTC, a wynik zwraca lokalne ISO-8601 dla
-Europe/Warsaw z właściwym offsetem CET/CEST.
+Europe/Warsaw z właściwym offsetem CET/CEST. Świeca otwarta w trakcie sesji
+jest oceniana po zamknięciu również wtedy, gdy jej zamknięcie przypada dokładnie
+na koniec sesji.
 Świece uzupełnione przez backfill służą do odbudowania historii wskaźników;
 strategia nie zapisuje dla nich sygnałów historycznych. Sygnały live zaczyna
 generować od kolejnej nowej zamkniętej świecy.
