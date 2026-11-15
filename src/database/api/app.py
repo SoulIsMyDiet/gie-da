@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -171,9 +171,65 @@ def _run_sp500_strategy(candle_open_time: datetime) -> bool:
     return _run_sp500_process(candle_open_time, "sp500_algorithm", "Claude-sonnet55")
 
 
-def _run_grok_sp500_strategy(candle_open_time: datetime) -> bool:
-    """Uruchamia strategię Grok dla otwarcia UTC i zwraca żądanie dźwięku."""
-    return _run_sp500_process(candle_open_time, "grok_sp500_algorithm", "Grok-45")
+class GrokSP500Worker:
+    """Nadzoruje osobny proces pętli Grok S&P500."""
+
+    def __init__(self) -> None:
+        """Przygotowuje blokady i wątek; nie uruchamia procesu."""
+        self._stop = Event()
+        self._lock = Lock()
+        self._process = None
+        self._thread = Thread(target=self._run, daemon=True, name="grok-sp500")
+
+    def start(self) -> None:
+        """Uruchamia wątek nadzorujący; błędy uruchomienia wątku są propagowane."""
+        self._thread.start()
+
+    def _run(self) -> None:
+        """Uruchamia proces i ponawia go po awarii."""
+        directory = Path(__file__).resolve().parent / "grok_sp500_algorithm"
+        if not directory.is_dir():
+            directory = Path(__file__).resolve().parents[2] / "algorithms" / "Grok-45" / "S&P500"
+        command = [sys.executable, "-u", str(directory / "S&P500StrategyV1.py"), "--loop"]
+        while not self._stop.is_set():
+            try:
+                with self._lock:
+                    if self._stop.is_set():
+                        return
+                    self._process = subprocess.Popen(
+                        command, stdout=subprocess.DEVNULL
+                    )
+                    process = self._process
+                process.wait()
+                if not self._stop.is_set():
+                    logger.error("Pętla Grok S&P500 zakończyła się kodem %s.", process.returncode)
+            except OSError:
+                logger.exception("Nie można uruchomić pętli Grok S&P500.")
+            finally:
+                with self._lock:
+                    self._process = None
+            self._stop.wait(5)
+
+    def stop(self) -> None:
+        """Kończy własny proces i czeka na wątek; nie dotyka innych procesów."""
+        self._stop.set()
+        with self._lock:
+            process = self._process
+            if process is not None and process.poll() is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+        if process is not None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                process.wait()
+        self._thread.join(timeout=10)
 
 
 class CandleRecord(BaseModel):
@@ -1360,6 +1416,48 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def grok_sp500_notification_cursor(self) -> int:
+        """Zwraca bieżące maksimum ID Groka ES albo 0; błędy MySQL są propagowane."""
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """SELECT COALESCE(MAX(id), 0) FROM signals
+                       WHERE product = %s AND BINARY algorithm_name = %s""",
+                    ("ES", "Grok-45/S&P500"),
+                )
+                return int(cursor.fetchone()[0])
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def grok_sp500_notification_ids(self, after_id: int, limit: int) -> tuple[list[int], bool]:
+        """Pobiera do limit ID powiadomień po after_id i flagę kolejnej strony.
+
+        Nie zmienia danych; błędy połączenia i zapytania są propagowane.
+        """
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """SELECT id FROM signals
+                       WHERE product = %s AND BINARY algorithm_name = %s
+                         AND id > %s
+                         AND JSON_EXTRACT(signal_parameters, '$.audio_notification')
+                             = CAST('true' AS JSON)
+                       ORDER BY id ASC LIMIT %s""",
+                    ("ES", "Grok-45/S&P500", after_id, limit + 1),
+                )
+                rows = cursor.fetchall()
+                return [int(row[0]) for row in rows[:limit]], len(rows) > limit
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     def fetch_signal_page(
         self, page: int
     ) -> tuple[list[tuple[str, ...]], bool]:
@@ -1466,7 +1564,7 @@ strategy_lock = Lock()
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(application: FastAPI):
     """Przygotowuje tabele przed obsługą żądań i pobiera brakujące świece."""
     repository.initialize()
     
@@ -1498,7 +1596,13 @@ async def lifespan(_: FastAPI):
         )
         app.state.strategy_ready = True
     print("[Startup] Aplikacja gotowa do obsługi żądań.")
-    yield
+    worker = GrokSP500Worker()
+    application.state.grok_sp500_worker = worker
+    worker.start()
+    try:
+        yield
+    finally:
+        worker.stop()
 
 
 app = FastAPI(title="gie-da market data API", lifespan=lifespan)
@@ -1699,19 +1803,9 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 and candle.datetime.astimezone(timezone.utc)
                     + timedelta(minutes=1) <= datetime.now(timezone.utc)
             ):
-                strategy_errors = []
                 candle_timestamp = candle.datetime.astimezone(timezone.utc)
-                for run_strategy in (_run_sp500_strategy, _run_grok_sp500_strategy):
-                    try:
-                        if run_strategy(candle_timestamp):
-                            signal_save_count += 1
-                    except SP500StrategyError as error:
-                        logger.error("Błąd strategii po zapisaniu świecy ES: %s", error)
-                        strategy_errors.append(error)
-                if strategy_errors:
-                    raise SP500StrategyError(
-                        "Co najmniej jedna strategia S&P 500 nie przetworzyła świecy."
-                    ) from strategy_errors[0]
+                if _run_sp500_strategy(candle_timestamp):
+                    signal_save_count += 1
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.grok45_v2_candles = (
                 updated_grok45_v2_candles
@@ -1737,7 +1831,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
     # Front - Sygnał dźwiękowy (3 piknięcia) gdy została wykryta luka w świecach
     if new_gap_count > 0:
         Thread(target=play_gap_alert, kwargs={"number_of_beeps": 3}, daemon=True).start()
-    
+
     return Response(
         content=f"{new_gap_count}\n{signal_save_count}",
         media_type="text/plain; charset=utf-8",
@@ -1914,6 +2008,30 @@ def candle_gap_report(
         content="\n".join(report_lines),
         media_type="text/tab-separated-values; charset=utf-8",
     )
+
+
+# Backend: odrębny kursor każdego klienta nie usuwa ani nie przejmuje powiadomień.
+@app.get("/api/signals/grok-sp500/notifications/cursor")
+def grok_sp500_notification_cursor(request: Request) -> dict[str, int]:
+    """Zwraca aktualny kursor startowy; 503 oznacza błąd odczytu bazy."""
+    try:
+        return {"cursor": request.app.state.repository.grok_sp500_notification_cursor()}
+    except mysql.connector.Error as error:
+        raise HTTPException(status_code=503, detail="Nie można odczytać kursora powiadomień Groka.") from error
+
+
+@app.get("/api/signals/grok-sp500/notifications")
+def grok_sp500_notifications(
+    request: Request,
+    after_id: int = Query(ge=0, le=18446744073709551615),
+    limit: int = Query(default=100, ge=1, le=100),
+) -> dict:
+    """Zwraca stronę ID Groka ES po after_id; 422 oznacza błędne argumenty, 503 błąd bazy."""
+    try:
+        ids, has_more = request.app.state.repository.grok_sp500_notification_ids(after_id, limit)
+    except mysql.connector.Error as error:
+        raise HTTPException(status_code=503, detail="Nie można odczytać powiadomień Groka.") from error
+    return {"ids": ids, "next_cursor": ids[-1] if ids else after_id, "has_more": has_more}
 
 
 @app.get("/api/signals/report", response_class=Response)

@@ -38,6 +38,7 @@ SHORT_RSI_MAX = 60.0
 
 PULLBACK_LOOKBACK_MIN = 3
 PULLBACK_LOOKBACK_MAX = 5
+# Maksymalna odległość zakresu świecy od historycznej EMA21 w jednostkach ATR.
 PULLBACK_MAX_DISTANCE_ATR = 0.25
 MIN_REJECTION_WICK_RATIO = 0.5
 

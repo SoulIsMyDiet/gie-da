@@ -206,7 +206,7 @@ def calculate_indicators(candles: Sequence[dict], config_module) -> dict:
     return {
         "ema9": fast[-1] if fast else None,
         "ema21": middle[-1] if middle else None,
-        "ema21_series": middle[-5:],
+        "ema21_series": middle[-config_module.PULLBACK_LOOKBACK_MAX:],
         "ema50": slow[-1] if slow else None,
         "rsi14": rsi[-1] if rsi else None,
         "atr14": atr[-1] if atr else None,

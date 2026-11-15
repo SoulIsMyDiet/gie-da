@@ -16,6 +16,10 @@ namespace {
 
 constexpr UINT candleUpdateMessage = WM_APP + 1;
 constexpr DWORD candleCloseBufferMs = 2000;
+// Sprawne API odpytujemy co sekundę; po błędzie odstęp rośnie od 2 do 30 sekund.
+constexpr DWORD notificationPollIntervalMs = 1000;
+constexpr DWORD notificationRetryInitialMs = 2000;
+constexpr DWORD notificationRetryMaximumMs = 30000;
 constexpr ULONGLONG fileTimeTicksPerSecond = 10000000ULL;
 constexpr ULONGLONG fileTimeTicksPerMinute = 60ULL * fileTimeTicksPerSecond;
 constexpr ULONGLONG windowsToUnixEpochTicks = 116444736000000000ULL;
@@ -253,7 +257,9 @@ StockPriceMonitor::~StockPriceMonitor() {
 }
 
 /**
- * Tworzy zdarzenie zatrzymania i uruchamia wątek dla wskazanego okna.
+ * Tworzy zdarzenie zatrzymania oraz wątki świec i powiadomień.
+ * @param notificationWindow Okno otrzymujące komunikaty o zmianach.
+ * @return true, jeśli oba wątki zostały uruchomione.
  */
 bool StockPriceMonitor::start(HWND notificationWindow) {
     if (notificationWindow == nullptr || workerThread_ != nullptr) {
@@ -266,18 +272,32 @@ bool StockPriceMonitor::start(HWND notificationWindow) {
         return false;
     }
 
+    notificationThread_ = CreateThread(
+        nullptr, 0, notificationThreadEntryPoint, this, 0, nullptr);
+    if (notificationThread_ == nullptr) {
+        CloseHandle(stopEvent_);
+        stopEvent_ = nullptr;
+        notificationWindow_ = nullptr;
+        return false;
+    }
+
     workerThread_ = CreateThread(
         nullptr, 0, threadEntryPoint, this, 0, nullptr);
     if (workerThread_ == nullptr) {
+        SetEvent(stopEvent_);
+        WaitForSingleObject(notificationThread_, INFINITE);
+        CloseHandle(notificationThread_);
+        notificationThread_ = nullptr;
         CloseHandle(stopEvent_);
         stopEvent_ = nullptr;
+        notificationWindow_ = nullptr;
         return false;
     }
     return true;
 }
 
 /**
- * Zatrzymuje wątek, czeka na jego zakończenie i zwalnia uchwyty.
+ * Zatrzymuje oba wątki, czeka na ich zakończenie i zwalnia uchwyty.
  */
 void StockPriceMonitor::stop() {
     if (stopEvent_ != nullptr) {
@@ -288,6 +308,11 @@ void StockPriceMonitor::stop() {
         CloseHandle(workerThread_);
         workerThread_ = nullptr;
     }
+    if (notificationThread_ != nullptr) {
+        WaitForSingleObject(notificationThread_, INFINITE);
+        CloseHandle(notificationThread_);
+        notificationThread_ = nullptr;
+    }
     if (stopEvent_ != nullptr) {
         CloseHandle(stopEvent_);
         stopEvent_ = nullptr;
@@ -296,23 +321,127 @@ void StockPriceMonitor::stop() {
 }
 
 /**
- * Zwraca świecę i status skopiowane pod blokadą współdzieloną.
+ * Zwraca świecę i status wraz z błędami powiadomień pod blokadą współdzieloną.
+ * @return Kopia aktualnego stanu monitora.
  */
 StockPriceSnapshot StockPriceMonitor::snapshot() const {
     AcquireSRWLockShared(&statusLock_);
     StockPriceSnapshot currentSnapshot{
         oneMinuteCandle_, status_, backfillStatus_};
+    if (!notificationStatus_.empty()) {
+        currentSnapshot.status += " " + notificationStatus_;
+    }
     ReleaseSRWLockShared(&statusLock_);
     return currentSnapshot;
 }
 
 /**
- * Uruchamia pętlę pobierania dla monitora przekazanego przez Windows.
+ * Uruchamia pętlę świec i zatrzymuje powiadomienia po jej zakończeniu.
+ * @param parameter Wskaźnik na monitor.
+ * @return Kod zakończenia wątku Windows.
  */
 DWORD WINAPI StockPriceMonitor::threadEntryPoint(LPVOID parameter) {
     auto* monitor = static_cast<StockPriceMonitor*>(parameter);
     monitor->run();
+    SetEvent(monitor->stopEvent_);
     return 0;
+}
+
+// Backend
+/**
+ * Uruchamia pętlę powiadomień dla monitora przekazanego przez Windows.
+ * @param parameter Wskaźnik na monitor.
+ * @return Kod zakończenia wątku Windows.
+ */
+DWORD WINAPI StockPriceMonitor::notificationThreadEntryPoint(LPVOID parameter) {
+    auto* monitor = static_cast<StockPriceMonitor*>(parameter);
+    monitor->runNotifications();
+    return 0;
+}
+
+/**
+ * Udostępnia błąd powiadomień w stanie monitora i powiadamia okno o zmianie.
+ * @param status Opis błędu albo pusty tekst po odzyskaniu sprawności.
+ */
+void StockPriceMonitor::setNotificationStatus(const std::string& status) {
+    AcquireSRWLockExclusive(&statusLock_);
+    const bool changed = notificationStatus_ != status;
+    notificationStatus_ = status;
+    ReleaseSRWLockExclusive(&statusLock_);
+    if (changed) {
+        PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0);
+    }
+}
+
+/**
+ * Serializuje pojedyncze odtwarzania, aby dźwięki monitora nie przerywały się.
+ * Sieć i oczekiwanie między powiadomieniami nie zajmują blokady dźwięku.
+ * @param signalSaved Czy odtworzyć dźwięk zapisu zamiast dźwięku luki.
+ * @return true, jeśli odtwarzanie zakończyło się powodzeniem.
+ */
+bool StockPriceMonitor::playAudio(bool signalSaved) {
+    AcquireSRWLockExclusive(&audioLock_);
+    const bool played = signalSaved
+        ? AudioSignal::playSignalSaved()
+        : AudioSignal::play();
+    ReleaseSRWLockExclusive(&audioLock_);
+    return played;
+}
+
+/**
+ * Obsługuje kursor w pamięci, strony powiadomień i ponawianie błędów.
+ * Kursor przesuwa się dopiero po odtworzeniu danego dźwięku; po restarcie
+ * jest inicjalizowany ponownie z bieżącego maksimum i historia jest pomijana.
+ */
+void StockPriceMonitor::runNotifications() {
+    std::uint64_t cursor = 0;
+    bool initialized = false;
+    DWORD retryDelayMs = notificationRetryInitialMs;
+    while (WaitForSingleObject(stopEvent_, 0) == WAIT_TIMEOUT) {
+        std::string error;
+        bool succeeded = false;
+        bool hasMore = false;
+        if (!initialized) {
+            succeeded = CandleHistoryClient::fetchGrokNotificationCursor(
+                cursor, error);
+            initialized = succeeded;
+        } else {
+            GrokNotificationPage page;
+            succeeded = CandleHistoryClient::fetchGrokNotifications(
+                cursor, page, error);
+            if (succeeded) {
+                for (const std::uint64_t id : page.ids) {
+                    if (WaitForSingleObject(stopEvent_, 0) != WAIT_TIMEOUT) {
+                        return;
+                    }
+                    if (!playAudio(true)) {
+                        error = "Nie udało się odtworzyć dźwięku powiadomienia Groka.";
+                        succeeded = false;
+                        break;
+                    }
+                    cursor = id;
+                }
+                hasMore = succeeded && page.hasMore;
+            }
+        }
+
+        if (succeeded) {
+            setNotificationStatus({});
+            retryDelayMs = notificationRetryInitialMs;
+        } else {
+            setNotificationStatus("Powiadomienia Groka: " + error);
+        }
+        const DWORD waitMs = succeeded
+            ? (hasMore ? 0 : notificationPollIntervalMs)
+            : retryDelayMs;
+        if (!succeeded) {
+            retryDelayMs = std::min(
+                notificationRetryMaximumMs, retryDelayMs * 2);
+        }
+        if (WaitForSingleObject(stopEvent_, waitMs) != WAIT_TIMEOUT) {
+            return;
+        }
+    }
 }
 
 /**
@@ -390,7 +519,7 @@ void StockPriceMonitor::run() {
             std::chrono::steady_clock::now() - backfillStartedAt)
             .count();
     const bool startupGapSoundPlayed =
-        backfillResult.detectedGapCount == 0 || AudioSignal::play();
+        backfillResult.detectedGapCount == 0 || playAudio(false);
     AcquireSRWLockExclusive(&statusLock_);
     if (!backfillResult.latestCandle.datetime.empty()) {
         oneMinuteCandle_ = std::move(backfillResult.latestCandle);
@@ -502,12 +631,12 @@ bool StockPriceMonitor::updateCandle() {
             }
         }
     }
-    if (saved && newlyDetectedGapCount > 0 && !AudioSignal::play()) {
+    if (saved && newlyDetectedGapCount > 0 && !playAudio(false)) {
         updateStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
     if (saved) {
         for (std::size_t index = 0; index < savedSignalCount; ++index) {
-            if (!AudioSignal::playSignalSaved()) {
+            if (!playAudio(true)) {
                 updateStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
                 break;
             }
@@ -669,11 +798,11 @@ void StockPriceMonitor::updateAdditionalProducts() {
         additionalStatus += ".";
     }
 
-    if (anyGapDetected && !AudioSignal::play()) {
+    if (anyGapDetected && !playAudio(false)) {
         additionalStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
     for (std::size_t index = 0; index < savedSignalCount; ++index) {
-        if (!AudioSignal::playSignalSaved()) {
+        if (!playAudio(true)) {
             additionalStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
             break;
         }

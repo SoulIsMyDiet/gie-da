@@ -68,8 +68,36 @@ struct SignalCandleData {
     double volume = 0.0;
 };
 
+/**
+ * Przechowuje zweryfikowaną stronę identyfikatorów powiadomień Groka.
+ */
+struct GrokNotificationPage {
+    std::vector<std::uint64_t> ids;
+    std::uint64_t nextCursor = 0;
+    bool hasMore = false;
+};
+
 class CandleHistoryClient {
 public:
+    /**
+     * Pobiera bieżący kursor startowy, pomijający dotychczasowe sygnały Groka.
+     * @param cursor Otrzymuje największy istniejący identyfikator.
+     * @param error Otrzymuje opis błędu żądania lub odpowiedzi.
+     * @return true, jeśli kursor został poprawnie odczytany.
+     */
+    static bool fetchGrokNotificationCursor(
+        std::uint64_t& cursor, std::string& error);
+
+    /**
+     * Pobiera i w całości sprawdza stronę nowych powiadomień Groka.
+     * @param afterId Ostatni obsłużony identyfikator.
+     * @param page Otrzymuje poprawną stronę bez zmiany przy błędzie.
+     * @param error Otrzymuje opis błędu żądania lub odpowiedzi.
+     * @return true, jeśli odpowiedź jest poprawna i spójna z kursorem.
+     */
+    static bool fetchGrokNotifications(
+        std::uint64_t afterId, GrokNotificationPage& page, std::string& error);
+
     /**
      * Zapisuje świecę w lokalnym API historii rynkowej.
      * @param symbol Symbol instrumentu, którego dotyczy świeca.

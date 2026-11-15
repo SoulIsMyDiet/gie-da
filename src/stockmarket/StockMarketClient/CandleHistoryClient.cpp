@@ -24,6 +24,11 @@ constexpr wchar_t monitoredProductsApiPath[] = L"/api/products/monitored";
 constexpr wchar_t openProductsApiPath[] = L"/api/products/open";
 constexpr wchar_t analysisCandlesApiPath[] = L"/api/candles/analysis?limit=";
 constexpr wchar_t generatedSignalApiPath[] = L"/api/signals/grok45";
+constexpr wchar_t grokNotificationCursorPath[] =
+    L"/api/signals/grok-sp500/notifications/cursor";
+constexpr wchar_t grokNotificationsPath[] =
+    L"/api/signals/grok-sp500/notifications?after_id=";
+constexpr std::size_t grokNotificationPageSize = 100;
 constexpr DWORD maxResponseSize = 64 * 1024;
 // Pozostałe żądania mają limit 3 s; zapis ES ma 70 s na analizę do 60 s i bufor.
 constexpr DWORD apiRequestTimeoutMs = 3000;
@@ -360,6 +365,215 @@ bool fetchApiResponse(
     return readResponse(request.value, responseBody, error);
 }
 
+// Backend
+/**
+ * Odczytuje ograniczony podzbiór JSON używany w odpowiedziach powiadomień.
+ * Nie modyfikuje wejścia; niezgodne wartości i przepełnienia są odrzucane.
+ */
+class NotificationJsonReader {
+public:
+    /**
+     * Przygotowuje czytnik dla treści odpowiedzi.
+     * @param text Odpowiedź JSON przechowywana przez wywołującego.
+     */
+    explicit NotificationJsonReader(std::string_view text) : text_(text) {}
+
+    /**
+     * Odczytuje oczekiwany znak po pominięciu białych znaków JSON.
+     * @param expected Oczekiwany znak.
+     * @return true, jeśli znak wystąpił w bieżącym miejscu.
+     */
+    bool consume(char expected) {
+        skipWhitespace();
+        if (position_ == text_.size() || text_[position_] != expected) {
+            return false;
+        }
+        ++position_;
+        return true;
+    }
+
+    /**
+     * Odczytuje nazwę pola z prostego łańcucha JSON.
+     * @param key Otrzymuje widok nazwy pola.
+     * @return true, jeśli nazwa jest poprawnym niekodowanym łańcuchem.
+     */
+    bool readKey(std::string_view& key) {
+        if (!consume('"')) {
+            return false;
+        }
+        const std::size_t start = position_;
+        while (position_ < text_.size() && text_[position_] != '"') {
+            const unsigned char character = text_[position_];
+            if (character < 0x20 || character == '\\') {
+                return false;
+            }
+            ++position_;
+        }
+        if (position_ == text_.size()) {
+            return false;
+        }
+        key = text_.substr(start, position_ - start);
+        ++position_;
+        return true;
+    }
+
+    /**
+     * Odczytuje nieujemną liczbę całkowitą JSON bez utraty precyzji.
+     * @param number Otrzymuje liczbę mieszczącą się w uint64.
+     * @return true, jeśli zapis i zakres liczby są prawidłowe.
+     */
+    bool readNumber(std::uint64_t& number) {
+        skipWhitespace();
+        const std::size_t start = position_;
+        while (position_ < text_.size() &&
+               text_[position_] >= '0' && text_[position_] <= '9') {
+            ++position_;
+        }
+        if (position_ == start ||
+            (position_ - start > 1 && text_[start] == '0')) {
+            return false;
+        }
+        const auto result = std::from_chars(
+            text_.data() + start, text_.data() + position_, number);
+        return result.ec == std::errc{} &&
+            result.ptr == text_.data() + position_;
+    }
+
+    /**
+     * Odczytuje wartość logiczną JSON.
+     * @param value Otrzymuje odczytaną wartość.
+     * @return true, jeśli odczytano true albo false.
+     */
+    bool readBool(bool& value) {
+        skipWhitespace();
+        if (text_.substr(position_, 4) == "true") {
+            position_ += 4;
+            value = true;
+            return true;
+        }
+        if (text_.substr(position_, 5) == "false") {
+            position_ += 5;
+            value = false;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Sprawdza, czy po zamknięciu obiektu pozostały tylko białe znaki.
+     * @return true, jeśli wykorzystano całą odpowiedź.
+     */
+    bool atEnd() {
+        skipWhitespace();
+        return position_ == text_.size();
+    }
+
+private:
+    /**
+     * Pomija wyłącznie białe znaki dopuszczone przez JSON.
+     */
+    void skipWhitespace() {
+        while (position_ < text_.size() &&
+               (text_[position_] == ' ' || text_[position_] == '\t' ||
+                text_[position_] == '\r' || text_[position_] == '\n')) {
+            ++position_;
+        }
+    }
+
+    std::string_view text_;
+    std::size_t position_ = 0;
+};
+
+/**
+ * Sprawdza odpowiedź kursora startowego bez zmiany wyniku przy błędzie.
+ * @param response Treść odpowiedzi JSON.
+ * @param cursor Otrzymuje odczytany kursor.
+ * @return true, jeśli odpowiedź zawiera dokładnie poprawny kursor.
+ */
+bool parseGrokNotificationCursor(
+    std::string_view response, std::uint64_t& cursor) {
+    NotificationJsonReader reader(response);
+    std::string_view key;
+    std::uint64_t parsedCursor = 0;
+    if (!reader.consume('{') || !reader.readKey(key) || key != "cursor" ||
+        !reader.consume(':') || !reader.readNumber(parsedCursor) ||
+        !reader.consume('}') || !reader.atEnd()) {
+        return false;
+    }
+    cursor = parsedCursor;
+    return true;
+}
+
+/**
+ * Sprawdza wszystkie pola strony i ich spójność z poprzednim kursorem.
+ * @param response Treść odpowiedzi JSON.
+ * @param afterId Ostatni wcześniej obsłużony identyfikator.
+ * @param page Otrzymuje poprawną stronę; przy błędzie pozostaje bez zmian.
+ * @return true, jeśli cała odpowiedź jest poprawna.
+ */
+bool parseGrokNotificationPage(
+    std::string_view response, std::uint64_t afterId,
+    GrokNotificationPage& page) {
+    NotificationJsonReader reader(response);
+    GrokNotificationPage parsed;
+    bool hasIds = false;
+    bool hasCursor = false;
+    bool hasMore = false;
+    if (!reader.consume('{')) {
+        return false;
+    }
+    for (std::size_t field = 0; field < 3; ++field) {
+        std::string_view key;
+        if ((field > 0 && !reader.consume(',')) ||
+            !reader.readKey(key) || !reader.consume(':')) {
+            return false;
+        }
+        if (key == "ids" && !hasIds) {
+            hasIds = true;
+            if (!reader.consume('[')) {
+                return false;
+            }
+            if (!reader.consume(']')) {
+                do {
+                    std::uint64_t id = 0;
+                    if (parsed.ids.size() >= grokNotificationPageSize ||
+                        !reader.readNumber(id) ||
+                        id <= (parsed.ids.empty() ? afterId : parsed.ids.back())) {
+                        return false;
+                    }
+                    parsed.ids.push_back(id);
+                    if (reader.consume(']')) {
+                        break;
+                    }
+                    if (!reader.consume(',')) {
+                        return false;
+                    }
+                } while (true);
+            }
+        } else if (key == "next_cursor" && !hasCursor) {
+            hasCursor = true;
+            if (!reader.readNumber(parsed.nextCursor)) {
+                return false;
+            }
+        } else if (key == "has_more" && !hasMore) {
+            hasMore = true;
+            if (!reader.readBool(parsed.hasMore)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    if (!hasIds || !hasCursor || !hasMore || !reader.consume('}') ||
+        !reader.atEnd() ||
+        parsed.nextCursor != (parsed.ids.empty() ? afterId : parsed.ids.back()) ||
+        (parsed.hasMore && parsed.ids.empty())) {
+        return false;
+    }
+    page = std::move(parsed);
+    return true;
+}
+
 /**
  * Pobiera i waliduje listę symboli zwróconą jako osobne wiersze tekstu.
  */
@@ -553,6 +767,48 @@ bool splitSignalReportRow(
 }
 
 } // namespace
+
+/**
+ * Pobiera początkowy kursor powiadomień Groka bez odtwarzania historii.
+ * @param cursor Otrzymuje największy identyfikator zapisany w chwili odczytu.
+ * @param error Otrzymuje opis błędu żądania lub nieprawidłowej odpowiedzi.
+ * @return true, jeśli kursor został poprawnie pobrany.
+ */
+bool CandleHistoryClient::fetchGrokNotificationCursor(
+    std::uint64_t& cursor, std::string& error) {
+    std::string response;
+    if (!fetchApiResponse(grokNotificationCursorPath, response, error)) {
+        return false;
+    }
+    if (!parseGrokNotificationCursor(response, cursor)) {
+        error = "Lokalne API zwróciło nieprawidłowy kursor powiadomień Groka.";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Pobiera stronę identyfikatorów i sprawdza jej spójność przed przekazaniem.
+ * @param afterId Ostatni wcześniej obsłużony identyfikator.
+ * @param page Otrzymuje poprawną stronę bez zmiany przy błędzie.
+ * @param error Otrzymuje opis błędu żądania lub nieprawidłowej odpowiedzi.
+ * @return true, jeśli strona została poprawnie pobrana i sprawdzona.
+ */
+bool CandleHistoryClient::fetchGrokNotifications(
+    std::uint64_t afterId, GrokNotificationPage& page, std::string& error) {
+    std::string response;
+    if (!fetchApiResponse(
+            std::wstring(grokNotificationsPath) + std::to_wstring(afterId) +
+                L"&limit=" + std::to_wstring(grokNotificationPageSize),
+            response, error)) {
+        return false;
+    }
+    if (!parseGrokNotificationPage(response, afterId, page)) {
+        error = "Lokalne API zwróciło nieprawidłową stronę powiadomień Groka.";
+        return false;
+    }
+    return true;
+}
 
 /**
  * Wysyła świecę i rozpoznaje potwierdzony zapis częściowy ES z odpowiedzi HTTP 503.

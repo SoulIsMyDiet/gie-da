@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import asyncio
+import json
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -21,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import (  # noqa: E402
     CandleRecord,
     SP500StrategyError,
-    _run_grok_sp500_strategy,
+    GrokSP500Worker,
     _run_sp500_strategy,
     save_candle,
 )
@@ -64,29 +66,25 @@ def _candle(open_time: datetime, symbol: str = "ES") -> CandleRecord:
     )
 
 
-def test_closed_es_candle_triggers_analysis_after_save() -> None:
-    """Nowy zapis sygnału ES jest przekazywany do dźwięku aplikacji Windows."""
+def test_closed_es_candle_triggers_only_claude_after_save() -> None:
+    """POST uruchamia Claude, lecz nie pobiera powiadomień Groka."""
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, repository = _request()
-    with patch("app._run_sp500_strategy", return_value=True) as strategy, \
-            patch("app._run_grok_sp500_strategy", return_value=True) as grok:
+    with patch("app._run_sp500_strategy", return_value=True) as strategy:
         response = save_candle(_candle(open_time), request)
     repository.save_candle.assert_called_once()
     strategy.assert_called_once_with(open_time)
-    grok.assert_called_once_with(open_time)
-    assert response.body == b"0\n2"
+    assert response.body == b"0\n1"
 
 
 def test_forming_candle_and_other_symbol_do_not_trigger_es() -> None:
     """Formowana świeca i inny instrument nie uruchamiają strategii ES."""
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     request, _ = _request()
-    with patch("app._run_sp500_strategy") as strategy, \
-            patch("app._run_grok_sp500_strategy") as grok:
+    with patch("app._run_sp500_strategy") as strategy:
         save_candle(_candle(open_time), request)
         save_candle(_candle(open_time - timedelta(minutes=2), "XAU/USD"), request)
     strategy.assert_not_called()
-    grok.assert_not_called()
 
 
 def test_unsaved_candle_does_not_trigger_es() -> None:
@@ -94,11 +92,9 @@ def test_unsaved_candle_does_not_trigger_es() -> None:
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, repository = _request()
     repository.save_candle.return_value = (0, 0, "", 0)
-    with patch("app._run_sp500_strategy") as strategy, \
-            patch("app._run_grok_sp500_strategy") as grok:
+    with patch("app._run_sp500_strategy") as strategy:
         response = save_candle(_candle(open_time), request)
     strategy.assert_not_called()
-    grok.assert_not_called()
     assert response.body == b"0\n0"
 
 
@@ -136,38 +132,113 @@ def test_unexpected_process_exit_is_error() -> None:
             _run_sp500_strategy(datetime.now(timezone.utc))
 
 
-@pytest.mark.parametrize(("exit_code", "should_beep"), [(0, True), (3, False), (4, False)])
-def test_grok_process_uses_isolated_strategy(exit_code: int, should_beep: bool) -> None:
-    """Grok używa osobnego katalogu i tych samych kodów potwierdzenia zapisu."""
-    completed = SimpleNamespace(returncode=exit_code, stderr="")
-    with patch("app.subprocess.run", return_value=completed) as process:
-        assert _run_grok_sp500_strategy(datetime.now(timezone.utc)) is should_beep
-    script = Path(process.call_args.args[0][1])
-    assert script.name == "S&P500StrategyV1.py"
-    assert script.parent.name in ("grok_sp500_algorithm", "S&P500")
-    assert "Grok-45" in str(script) or script.parent.name == "grok_sp500_algorithm"
-
-
-def test_both_strategies_are_attempted_if_one_fails() -> None:
-    """Błąd Claude nie uniemożliwia próby zapisu sygnału Groka."""
+def test_partial_error_does_not_consume_grok_notifications() -> None:
+    """Błąd Claude nie pobiera powiadomień niezależnej pętli Groka."""
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, repository = _request()
-    with patch("app._run_sp500_strategy", side_effect=SP500StrategyError("błąd")), \
-            patch("app._run_grok_sp500_strategy", return_value=True) as grok:
+    with patch("app._run_sp500_strategy", side_effect=SP500StrategyError("błąd")):
         response = save_candle(_candle(open_time), request)
     assert response.status_code == 503
-    assert response.body == b"SP500_PARTIAL\n0\n1"
-    grok.assert_called_once_with(open_time)
+    assert response.body == b"SP500_PARTIAL\n0\n0"
+    repository.grok_sp500_notification_ids.assert_not_called()
     repository.save_candle.assert_called_once()
 
 
-def test_partial_error_keeps_successful_claude_confirmation() -> None:
-    """Niepowodzenie Groka nie ukrywa potwierdzenia zapisu strategii Claude."""
-    open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
-    request, repository = _request()
-    repository.save_candle.return_value = (2, 1, "", 0)
-    with patch("app._run_sp500_strategy", return_value=True), \
-            patch("app._run_grok_sp500_strategy", side_effect=SP500StrategyError("błąd")):
-        response = save_candle(_candle(open_time), request)
-    assert response.status_code == 503
-    assert response.body == b"SP500_PARTIAL\n2\n1"
+def test_worker_restarts_after_process_exit() -> None:
+    """Nadzorca uruchamia proces pętli, bez pobierania powiadomień klienta."""
+    worker = GrokSP500Worker()
+    process = Mock()
+    process.wait.side_effect = worker._stop.set
+    with patch("app.subprocess.Popen", return_value=process) as launch:
+        worker._run()
+    assert launch.call_args.args[0][-1] == "--loop"
+    assert launch.call_args.kwargs["stdout"] == subprocess.DEVNULL
+
+
+def test_notification_repository_filters_and_paginates() -> None:
+    """Zapytanie wybiera wyłącznie Groka ES i odrębne znaczniki dźwięku."""
+    import app as module
+    repository = module.MarketDataRepository()
+    connection, cursor = Mock(), Mock()
+    connection.cursor.return_value = cursor
+    cursor.fetchall.return_value = [(11,), (14,), (18,)]
+    with patch("app.mysql.connector.connect", return_value=connection):
+        assert repository.grok_sp500_notification_ids(10, 2) == ([11, 14], True)
+    sql, params = cursor.execute.call_args.args
+    assert params == ("ES", "Grok-45/S&P500", 10, 3)
+    assert "audio_notification" in sql and "ORDER BY id ASC" in sql
+    connection.close.assert_called_once()
+
+
+def test_notification_cursor_uses_only_grok_and_es() -> None:
+    """Stan startowy pochodzi wyłącznie z ID konkretnej strategii i instrumentu."""
+    import app as module
+    repository = module.MarketDataRepository()
+    connection, cursor = Mock(), Mock()
+    connection.cursor.return_value = cursor
+    cursor.fetchone.return_value = (17,)
+    with patch("app.mysql.connector.connect", return_value=connection):
+        assert repository.grok_sp500_notification_cursor() == 17
+    assert cursor.execute.call_args.args[1] == ("ES", "Grok-45/S&P500")
+    connection.close.assert_called_once()
+
+
+def test_notification_endpoints_with_http_validation() -> None:
+    """Kursor i strony są niezależne, a błędne argumenty nie odpytują bazy."""
+    import app as module
+    repository = Mock()
+    repository.grok_sp500_notification_cursor.return_value = 10
+    repository.grok_sp500_notification_ids.return_value = ([11, 14], True)
+
+    def get(path: str, query: bytes = b"") -> tuple[int, dict]:
+        """Wykonuje żądanie ASGI bez sieci i zwraca kod oraz odpowiedź JSON."""
+        messages = []
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+        async def send(message):
+            messages.append(message)
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(),
+            "query_string": query, "headers": [], "client": ("127.0.0.1", 1),
+            "server": ("test", 80), "root_path": "",
+        }
+        asyncio.run(module.app(scope, receive, send))
+        return messages[0]["status"], json.loads(messages[-1]["body"])
+
+    with patch.object(module.app.state, "repository", repository):
+        path = "/api/signals/grok-sp500/notifications"
+        assert get(path + "/cursor") == (200, {"cursor": 10})
+        assert get(path, b"after_id=10&limit=2") == (
+            200, {"ids": [11, 14], "next_cursor": 14, "has_more": True}
+        )
+        assert get(path, b"after_id=-1")[0] == 422
+        assert get(path, b"after_id=0&limit=101")[0] == 422
+        repository.grok_sp500_notification_ids.assert_called_once_with(10, 2)
+        repository.grok_sp500_notification_ids.return_value = ([], False)
+        assert get(path, b"after_id=14") == (
+            200, {"ids": [], "next_cursor": 14, "has_more": False}
+        )
+        repository.grok_sp500_notification_ids.side_effect = module.mysql.connector.Error("baza")
+        assert get(path, b"after_id=14")[0] == 503
+
+
+def test_lifespan_starts_and_stops_worker() -> None:
+    """Start i zakończenie API obejmują uruchomienie i zamknięcie procesu pętli."""
+    import app as module
+    worker = Mock()
+
+    async def exercise():
+        """Przechodzi pełny cykl życia API z atrapą repozytorium."""
+        async with module.lifespan(module.app):
+            worker.start.assert_called_once()
+            worker.stop.assert_not_called()
+        worker.stop.assert_called_once()
+
+    with patch.object(module, "GrokSP500Worker", return_value=worker), \
+            patch.object(module.repository, "initialize"), \
+            patch.object(module, "get_monitored_symbols", return_value=()), \
+            patch.object(module.repository, "fetch_candle_history", return_value=[]), \
+            patch.object(module.eurusd_strategy, "warm_up"), \
+            patch.object(module, "_grok45_candles_from_history", return_value=[]):
+        asyncio.run(exercise())

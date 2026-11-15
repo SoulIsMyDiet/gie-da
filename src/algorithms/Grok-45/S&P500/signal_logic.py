@@ -26,13 +26,15 @@ def generate_signal(candles_df: pd.DataFrame, now: datetime | None = None) -> di
         Sygnał ma wartość LONG, SHORT albo NONE; wszystkie wartości są JSON-safe.
     Wyjątki:
         TypeError: Gdy wejście nie jest pandas.DataFrame albo czas jest naiwny.
-        ValueError: Gdy kolumny, znaczniki czasu lub zamknięte OHLCV są błędne.
+        Niepoprawne kolumny, znaczniki czasu i zamknięte OHLCV dają NONE
+        z opisem przyczyny zamiast wyjątku.
 
     Scoring ma 100 punktów: trend EMA 20, pullback 15, RSI 15, ATR 10,
     relative volume 15, świeca 10, ADX 10 i DI 5. Wszystkie osiem warunków
     musi być spełnionych, w tym ADX > próg oraz osobno DI zgodne z kierunkiem.
     Trend wymaga ceny po właściwej stronie EMA50 oraz właściwego układu
-    EMA9 i EMA21. Pullback wymaga dotknięcia EMA21 i powrotu ceny za tę EMA;
+    EMA9 i EMA21. Pullback wymaga przecięcia lub bliskości historycznej EMA21
+    przez zakres świecy i powrotu ceny za bieżącą EMA21;
     osobny filtr świecy dopuszcza kierunkowy korpus albo odpowiedni knot.
     Priorytet diagnostyczny: poprawność danych/czasu, wolumen ostatniej świecy,
     świeżość, rozgrzewka, następnie pozostałe filtry konfluencji.
@@ -49,24 +51,36 @@ def generate_signal(candles_df: pd.DataFrame, now: datetime | None = None) -> di
     required = {"open", "high", "low", "close", "volume"}
     missing = required.difference(candles_df.columns)
     if missing:
-        raise ValueError(f"Brak wymaganych kolumn: {', '.join(sorted(missing))}.")
+        return _invalid_data(result, "missing_columns",
+                             f"Brak wymaganych kolumn: {', '.join(sorted(missing))}.")
     timestamp_column = "timestamp_utc" if "timestamp_utc" in candles_df.columns else "datetime"
     if timestamp_column not in candles_df.columns:
-        raise ValueError("Wymagana jest kolumna timestamp_utc albo datetime.")
+        return _invalid_data(result, "missing_timestamp",
+                             "Wymagana jest kolumna timestamp_utc albo datetime.")
 
     rows = []
-    for index, source in candles_df.iterrows():
-        opened = _row_timestamp(source, timestamp_column, candles_df.columns)
+    for position, (index, source) in enumerate(candles_df.iterrows(), start=1):
+        try:
+            opened = _row_timestamp(source, timestamp_column, candles_df.columns)
+            closed = opened + timedelta(minutes=1)
+        except (ValueError, TypeError, OverflowError) as error:
+            return _invalid_data(result, "invalid_timestamp",
+                                 f"Niepoprawny czas w wierszu {position}: {error}")
         values = {key: source[key] for key in ("open", "high", "low", "close", "volume")}
         if pd.isna(values["volume"]):
             values["volume"] = None
-        if opened + timedelta(minutes=1) > reference:
+        if closed > reference:
             continue
-        _validate_candle(values)
+        try:
+            _validate_candle(values)
+        except ValueError as error:
+            return _invalid_data(result, "invalid_candle",
+                                 f"Niepoprawna świeca w wierszu {position}: {error}")
         rows.append((opened, values, index))
     rows.sort(key=lambda item: item[0])
     if len({item[0] for item in rows}) != len(rows):
-        raise ValueError("Historia zawiera powtórzone otwarcia świec.")
+        return _invalid_data(result, "duplicate_timestamp",
+                             "Historia zawiera powtórzone otwarcia świec.")
     if not rows:
         result["signal_parameters"]["reason"] = "Brak zamkniętych świec."
         result["signal_parameters"]["reasons"] = ["no_closed_data"]
@@ -114,6 +128,13 @@ def generate_signal(candles_df: pd.DataFrame, now: datetime | None = None) -> di
 
     candles = [item[1] for item in segment]
     indicators = calculate_indicators(candles, config)
+    if any(
+        isinstance(value, float) and not isfinite(value)
+        for item in indicators.values()
+        for value in (item if isinstance(item, list) else [item])
+    ):
+        return _invalid_data(result, "invalid_indicators",
+                             "Nie można obliczyć skończonych wartości wskaźników.")
     parameters.update(indicators)
     parameters.update(
         ema_9=indicators["ema9"],
@@ -162,6 +183,24 @@ def generate_signal(candles_df: pd.DataFrame, now: datetime | None = None) -> di
         if result["signal"] != "NONE"
         else "Nie spełniono wszystkich wymaganych filtrów."
     )
+    return result
+
+
+def _invalid_data(result: dict, code: str, reason: str) -> dict:
+    """Oznacza wynik jako NONE i jawnie opisuje nieprawidłowość danych.
+
+    Argumenty:
+        result: Dotychczasowy słownik odpowiedzi.
+        code: Stabilny kod przyczyny.
+        reason: Opis nieprawidłowości.
+    Zwraca:
+        Ten sam słownik z sygnałem NONE i przyczyną błędu.
+    Wyjątki:
+        KeyError: Gdy słownik nie zawiera wymaganych pól odpowiedzi.
+    """
+    result["signal"] = "NONE"
+    result["signal_parameters"]["reason"] = reason
+    result["signal_parameters"]["reasons"] = [code]
     return result
 
 
@@ -278,7 +317,7 @@ def _conditions(direction: str, candles: list[dict], values: dict) -> dict[str, 
 
 
 def _has_recent_pullback(candles: list[dict], values: dict, direction: str) -> bool:
-    """Sprawdza dotknięcie właściwej EMA21 w ostatnich 3–5 świecach.
+    """Sprawdza przecięcie albo bliskość historycznej EMA21 przez zakres świecy.
 
     Argumenty:
         candles: Chronologiczny segment cen.
@@ -291,7 +330,8 @@ def _has_recent_pullback(candles: list[dict], values: dict, direction: str) -> b
         KeyError: Gdy brak wymaganych cen lub wskaźników.
     """
     atr, ema21 = values["atr14"], values["ema21"]
-    if atr is None or atr <= 0 or ema21 is None:
+    if (atr is None or not isfinite(atr) or atr <= 0
+            or ema21 is None or not isfinite(ema21)):
         return False
     lookback = min(config.PULLBACK_LOOKBACK_MAX, len(candles))
     lookback = max(config.PULLBACK_LOOKBACK_MIN, lookback)
@@ -299,17 +339,16 @@ def _has_recent_pullback(candles: list[dict], values: dict, direction: str) -> b
     recent = candles[-lookback:]
     ema21_values = values["ema21_series"][-lookback:]
     last = candles[-1]
-    if direction == "LONG":
-        touched = any(
-            average is not None and float(row["low"]) <= average + distance
-            for row, average in zip(recent, ema21_values)
-        )
-        return touched and float(last["close"]) > ema21
     touched = any(
-        average is not None and float(row["high"]) >= average - distance
+        average is not None and isfinite(average)
+        and float(row["low"]) <= average + distance
+        and float(row["high"]) >= average - distance
         for row, average in zip(recent, ema21_values)
     )
-    return touched and float(last["close"]) < ema21
+    return touched and (
+        float(last["close"]) > ema21 if direction == "LONG"
+        else float(last["close"]) < ema21
+    )
 
 
 def _row_timestamp(source, timestamp_column: str, columns) -> datetime:
@@ -371,7 +410,7 @@ def _validate_candle(candle: dict) -> None:
         opening, high, low, close = (
             float(candle[key]) for key in ("open", "high", "low", "close")
         )
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
         raise ValueError("Świeca zawiera niepoprawną wartość OHLC.") from error
     if (not all(isfinite(value) and value > 0 for value in (opening, high, low, close))
             or low > min(opening, close) or high < max(opening, close)):
@@ -380,7 +419,7 @@ def _validate_candle(candle: dict) -> None:
     if volume is not None:
         try:
             numeric_volume = float(volume)
-        except (TypeError, ValueError) as error:
+        except (TypeError, ValueError, OverflowError) as error:
             raise ValueError("Wolumen musi być liczbą nieujemną albo None.") from error
         if not isfinite(numeric_volume) or numeric_volume < 0:
             raise ValueError("Wolumen musi być liczbą nieujemną albo None.")

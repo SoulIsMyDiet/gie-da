@@ -63,24 +63,28 @@ specyfiki mnożnika kontraktu futures.
 
 ## Integracja z aplikacją
 
-API po zapisaniu pojedynczej, już zamkniętej świecy ES wywołuje niezależne
-procesy strategii Claude i Grok, bez dodatkowych zapytań do zewnętrznego API.
-Tryb `--api-candle-open-epoch` nie generuje dźwięku w kontenerze: odpowiedź
-API przekazuje liczbę zapisów klientowi C++, który odtwarza dźwięk. Na przykład
-bezpośrednie wywołanie procesu z C++ wymaga przekazania ścieżki skryptu jako
-jednego argumentu, np. `python "S&P500StrategyV1.py" --candle-open-epoch 1700000040`;
-w aplikacji używany jest wariant API.
+API uruchamia osobny proces pętli Groka, który co pięć sekund sprawdza MySQL
+w godzinach sesji ES oraz przez 15 minut po jej zamknięciu. Nie pobiera danych
+z zewnętrznego API. Analizuje zamknięte świece z ostatnich 15 minut, także te
+zapisane wcześniej jako formowane lub dostarczone z opóźnieniem. Świeca
+zamknięta przed startem pętli albo nieaktualna nie daje aktywnego sygnału.
+Upływ minuty nie potwierdza, że dostawca zaktualizował wcześniej zapisaną
+świecę: ewentualna późniejsza korekta nie wyzwala ponownej analizy.
+Strategia Claude nadal jest wywoływana oddzielnie po pojedynczym zapisie.
 
-Jeśli jedna strategia zawiedzie po zapisie świecy, API odpowiada HTTP 503 z
-`SP500_PARTIAL` oraz licznikami luk i potwierdzonych dźwięków w kolejnych
-wierszach. Klient zgłasza błąd i obsługuje potwierdzone liczniki. API i
-klienta C++ należy zaktualizować razem.
+Znaczniki przetwarzania pętli są przechowywane w pliku SQLite, również gdy
+zapis NONE jest wyłączony. Docker Compose umieszcza go w wolumenie
+`grok_sp500_state`; zmienna `GROK_SP500_STATE_PATH` pozwala zmienić ścieżkę.
+Usunięcie wolumenu usuwa te znaczniki. Zapis sygnału i znacznik SQLite nie są
+jedną transakcją; unikalny klucz MySQL chroni przed duplikatem rekordu, ale
+nie gwarantuje dokładnie jednokrotnego obliczenia, zwłaszcza przy replikach.
 
-Nie ma pętli ani automatycznego nadrabiania analiz: zapis świecy formowanej
-nie uruchamia później analizy samoczynnie, podobnie jak zbiorczy backfill.
-Powtórne wywołanie nie gwarantuje dokładnie jednokrotnego obliczenia, chociaż
-unikalny klucz chroni przed podwójnym zapisem. Utrata odpowiedzi HTTP po
-zatwierdzeniu zapisu może uniemożliwić dostarczenie dźwięku.
+Potwierdzenia dźwięku z pętli są udostępniane klientowi Windows przez API,
+oddzielnie od odpowiedzi na zapis świecy. API i klient C++ należy zaktualizować
+razem. Powiadomienia z czasu, gdy klient nie działa, nie są odtwarzane po jego
+ponownym uruchomieniu. Dostarczenie dźwięku nie jest gwarantowane w razie
+awarii lub równoległych zapisów zatwierdzanych w innej kolejności niż ich ID.
+Polecenie lokalne odtwarza dźwięk bez kolejnego powiadomienia klienta.
 
 Strategia wymaga walidacji na rzeczywistych danych ES przed użyciem w handlu;
 nie przeprowadza backtestu ani nie gwarantuje zysku.

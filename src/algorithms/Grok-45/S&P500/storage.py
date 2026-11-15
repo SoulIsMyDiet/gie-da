@@ -1,15 +1,39 @@
 """Backend: odczyt świec ES i atomowy zapis sygnałów strategii."""
 
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import pandas as pd
 from mysql.connector import Error as MySQLError
 import mysql.connector
 
 import config
+
+logger = logging.getLogger(__name__)
+
+
+class InvalidSignalPrice(ValueError):
+    """Oznacza, że wynik nie ma ceny umożliwiającej zapis w tabeli signals."""
+
+
+def validated_price(result: dict) -> Decimal:
+    """Zwraca dodatnią, skończoną cenę wyniku; brak lub błędna cena zgłasza ValueError."""
+    value = result.get("price")
+    try:
+        if value is None or isinstance(value, bool):
+            raise ValueError("Brak prawidłowej ceny.")
+        price = Decimal(str(value))
+        if not price.is_finite() or price <= 0:
+            raise ValueError("Cena musi być dodatnia i skończona.")
+        return price
+    except (InvalidOperation, ValueError, TypeError) as error:
+        logger.error("Nie można zapisać wyniku świecy %s: brak prawidłowej ceny; powód: %s.",
+                     result.get("candle_open_epoch"),
+                     result.get("signal_parameters", {}).get("reason"))
+        raise InvalidSignalPrice("Brak prawidłowej ceny wyniku strategii.") from error
 
 
 class SP500Storage:
@@ -35,6 +59,43 @@ class SP500Storage:
         """Otwiera i zwraca połączenie MySQL; przekazuje błędy sterownika."""
         return mysql.connector.connect(**self.settings)
 
+    def recent_closed_candles(self, now: datetime, minutes: int = 15) -> list[datetime]:
+        """Zwraca otwarcia zamkniętych świec ES z ostatnich minut w kolejności UTC.
+
+        now musi mieć strefę, a minutes być dodatnie. Błędy bazy są przekazywane
+        dalej; zakres dat lokalnych ogranicza skan indeksu mimo przeliczenia DST.
+        """
+        now = _utc(now)
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 1:
+            raise ValueError("Okno odczytu musi być dodatnią liczbą minut.")
+        lower = now - timedelta(minutes=minutes + 1)
+        upper = now - timedelta(minutes=1)
+        connection = self._connect()
+        cursor = None
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """SELECT `datetime`, utc_offset_minutes FROM candles
+                   WHERE symbol = %s AND `datetime` BETWEEN %s AND %s
+                     AND utc_offset_minutes BETWEEN 60 AND 120
+                     AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE)
+                         BETWEEN %s AND %s
+                   ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE)""",
+                (config.DB_SYMBOL, lower.replace(tzinfo=None),
+                 (upper + timedelta(hours=2)).replace(tzinfo=None),
+                 lower.replace(tzinfo=None), upper.replace(tzinfo=None)),
+            )
+            return [
+                (stamp - timedelta(minutes=int(offset))).replace(tzinfo=timezone.utc)
+                for stamp, offset in cursor.fetchall()
+            ]
+        finally:
+            try:
+                if cursor is not None:
+                    cursor.close()
+            finally:
+                connection.close()
+
     def get_processed_signal(self, opened: datetime) -> dict | None:
         """Zwraca wynik dla otwarcia UTC albo None; błędy bazy i JSON propaguje.
 
@@ -59,6 +120,8 @@ class SP500Storage:
             result = json.loads(value) if isinstance(value, (str, bytes, bytearray)) else value
             if not isinstance(result, dict):
                 raise ValueError("Zapisane parametry nie są obiektem JSON.")
+            result = dict(result)
+            result.pop("audio_notification", None)
             if "signal_parameters" not in result:
                 result_fields = {
                     "instrument", "algorithm_name", "price", "timestamp",
@@ -119,13 +182,14 @@ class SP500Storage:
             finally:
                 connection.close()
 
-    def save_signal(self, result: dict, candles_count: int) -> bool:
+    def save_signal(self, result: dict, candles_count: int, audio_notification: bool = False) -> bool:
         """Zapisuje wynik i potencjał w jednej transakcji; zwraca False dla duplikatu/NONE.
 
         Argumenty: result to pełny wynik generate_signal, candles_count to liczba świec.
         Wyjątki: ValueError dla błędnego wyniku, pozostałe błędy bazy są propagowane.
         Wyłączony zapis NONE jest jedynym miejscem stosowania tej tymczasowej flagi.
         """
+        price = validated_price(result)
         signal = result["signal"].upper()
         if signal not in ("LONG", "SHORT", "NONE"):
             raise ValueError("Nieznany rodzaj sygnału.")
@@ -140,6 +204,7 @@ class SP500Storage:
         local = closed.astimezone(config.WARSAW)
         parameters = dict(result["signal_parameters"])
         parameters.update({key: value for key, value in result.items() if key != "signal_parameters"})
+        parameters["audio_notification"] = bool(audio_notification)
         payload = json.dumps(parameters, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         connection = self._connect()
         cursor = None
@@ -151,7 +216,7 @@ class SP500Storage:
                     """INSERT INTO signals (`datetime`, product, price, `signal`, algorithm_name,
                        candles_count, signal_parameters, source_timestamp)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (local.replace(tzinfo=None), config.DB_SYMBOL, Decimal(str(result["price"])),
+                    (local.replace(tzinfo=None), config.DB_SYMBOL, price,
                      signal.lower(), config.STRATEGY_NAME, candles_count, payload, int(opened.timestamp())),
                 )
             except MySQLError as error:

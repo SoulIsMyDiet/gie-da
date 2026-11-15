@@ -9,7 +9,9 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt \
-    && useradd --create-home appuser
+    && useradd --create-home appuser \
+    && mkdir -p /var/lib/grok-sp500 \
+    && chown appuser:appuser /var/lib/grok-sp500
 
 COPY database/api/app.py ./app.py
 COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.py
@@ -22,6 +24,7 @@ COPY algorithms/Chat-gpt6/DAX40/ ./chat_dax_algorithm/
 COPY algorithms/Claude-sonnet55/S&P500/ ./sp500_algorithm/
 COPY algorithms/Grok-45/S&P500/ ./grok_sp500_algorithm/
 USER appuser
+ENV HOME=/home/appuser
 
 EXPOSE 8000
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

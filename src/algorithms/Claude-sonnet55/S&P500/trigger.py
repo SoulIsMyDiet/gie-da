@@ -88,7 +88,15 @@ def analyze_candle(
             return _stale_saved_result(previous, opened, now), False
         return previous, False
     candles, state = storage.load_context(opened)
-    if not candles or as_utc(candles[-1]["timestamp_utc"]) != opened:
+    if not candles:
+        logger.debug("Oczekiwanie na świecę %s w bazie.", opened.isoformat())
+        return _blocked_candle_result(opened, now, "missing_candle"), False
+    try:
+        last_opened = as_utc(candles[-1].get("timestamp_utc") if isinstance(candles[-1], dict) else None)
+    except ValueError:
+        # Walidator strategii opisuje błędne dane; nie zastępujemy ich starszą świecą.
+        return generate_signal(candles, now=now, **state), False
+    if last_opened != opened:
         logger.debug("Oczekiwanie na świecę %s w bazie.", opened.isoformat())
         return _blocked_candle_result(opened, now, "missing_candle"), False
     result = generate_signal(candles, now=now, **state)
@@ -103,7 +111,10 @@ def analyze_candle(
         result["blocked_by"] = [reason for reason in result["blocked_by"] if reason != "data_gap"]
         result.update(signal="NONE", setup=None, score=0, tp_price=None, sl_price=None,
                       tp_points=None, sl_points=None)
-    if previous is not None or not in_session or outside_now or "outside_session" in result.get("blocked_by", []):
+    # Wyniki z niepełnych lub błędnych danych nie mają ceny i czasu wymaganego przez zapis.
+    if (result.get("price") is None or result.get("timestamp") is None
+            or previous is not None or not in_session or outside_now
+            or "outside_session" in result.get("blocked_by", [])):
         return result, False
     return result, storage.save_signal(result, len(candles))
 

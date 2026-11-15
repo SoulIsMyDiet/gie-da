@@ -165,6 +165,24 @@ def test_latest_outside_window_uses_saved_price_even_if_history_changed():
     storage.save_signal.assert_not_called()
 
 
+@pytest.mark.parametrize(("price", "timestamp"), [
+    (None, None),
+    (None, "2026-11-16T16:01:00+01:00"),
+    (6000.0, None),
+])
+def test_incomplete_generated_result_is_not_saved(price, timestamp):
+    """Brak ceny lub czasu w wyniku blokuje zapis bez zmiany diagnostyki generatora."""
+    storage = _storage(None)
+    expected = trigger.generate_signal([], now=CLOSED)
+    expected.update(price=price, timestamp=timestamp, blocked_by=["invalid_data"])
+    with patch("trigger.generate_signal", return_value=expected):
+        result, saved = trigger.analyze_candle(storage, OPENED, CLOSED)
+    assert result is expected
+    assert result["blocked_by"] == ["invalid_data"]
+    assert not saved
+    storage.save_signal.assert_not_called()
+
+
 def test_unprocessed_stale_candle_is_evaluated_normally():
     """Brak zapisu nadal powoduje ocenę faktycznej świecy i jej aktualnej ceny."""
     storage = _storage(None)

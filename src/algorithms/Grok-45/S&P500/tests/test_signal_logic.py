@@ -1,6 +1,7 @@
 """Backend: deterministyczne testy wskaźników i sygnałów Grok-45/S&P500."""
 
 import json
+import math
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from indicators import adx_series, atr_series, calculate_indicators, ema_series, rsi_series
-from signal_logic import generate_signal
+from signal_logic import _has_recent_pullback, generate_signal
 
 UTC = timezone.utc
 
@@ -109,14 +110,18 @@ def test_dst_repeated_hour_requires_an_explicit_offset():
     result = generate_signal(frame, now=datetime(2026, 10, 25, 1, 21, tzinfo=UTC))
     assert result["candle_open_epoch"] == int(datetime(2026, 10, 25, 1, 19, tzinfo=UTC).timestamp())
     frame = frame.drop(columns=["utc_offset_minutes"])
-    with pytest.raises(ValueError, match="utc_offset_minutes"):
-        generate_signal(frame, now=datetime(2026, 10, 25, 1, 21, tzinfo=UTC))
+    invalid = generate_signal(frame, now=datetime(2026, 10, 25, 1, 21, tzinfo=UTC))
+    assert invalid["signal"] == "NONE"
+    assert invalid["signal_parameters"]["reasons"] == ["invalid_timestamp"]
+    assert "utc_offset_minutes" in invalid["signal_parameters"]["reason"]
     invalid_spring_time = datetime(2026, 3, 29, 2, 30, tzinfo=config.WARSAW)
     spring_frame = as_frame([dict(rows[-1], datetime=invalid_spring_time)])
     spring_frame = spring_frame.drop(columns=["timestamp_utc"])
     spring_frame["datetime"] = pd.Series([invalid_spring_time], dtype=object)
-    with pytest.raises(ValueError, match="poprawny offset"):
-        generate_signal(spring_frame, now=datetime(2026, 3, 29, 1, 31, tzinfo=UTC))
+    invalid = generate_signal(spring_frame, now=datetime(2026, 3, 29, 1, 31, tzinfo=UTC))
+    assert invalid["signal"] == "NONE"
+    assert invalid["signal_parameters"]["reasons"] == ["invalid_timestamp"]
+    assert "poprawny offset" in invalid["signal_parameters"]["reason"]
 
 
 def test_empty_forming_stale_and_zero_volume_return_none_json_safe():
@@ -312,3 +317,263 @@ def test_pullback_accepts_opposite_body_with_rejection_wick(direction, expected)
         blocked = generate_signal(candles, now=now)
         assert blocked["signal"] == "NONE"
         assert not blocked["signal_parameters"]["conditions"]["atr"]
+
+
+@pytest.mark.parametrize(("direction", "side"), [("up", "LONG"), ("down", "SHORT")])
+def test_real_indicators_require_range_near_historical_ema(direction, side):
+    """Rzeczywiste EMA i ATR odrzucają odległy zakres oraz akceptują przecięcie.
+
+    Argumenty:
+        direction: Kierunek historii świec.
+        side: Kierunek badanego pullbacku.
+    Zwraca:
+        None; sprawdza wyniki obliczeń i filtra.
+    Wyjątki:
+        AssertionError: Gdy filtr nie odpowiada zakresowi świecy.
+    """
+    rows = make_history(100, direction)
+    values = calculate_indicators(rows, config)
+    assert not _has_recent_pullback(rows, values, side)
+
+    position = -3
+    historical_ema = values["ema21_series"][position]
+    if side == "LONG":
+        rows[position]["low"] = historical_ema - 0.1
+    else:
+        rows[position]["high"] = historical_ema + 0.1
+    values = calculate_indicators(rows, config)
+    assert rows[position]["low"] < historical_ema < rows[position]["high"]
+    assert _has_recent_pullback(rows, values, side)
+    result = generate_signal(as_frame(rows), now=rows[-1]["timestamp_utc"] + timedelta(minutes=1))
+    assert result["signal_parameters"]["conditions"]["pullback"]
+
+
+@pytest.mark.parametrize(("side", "low", "high", "close", "expected"), [
+    ("LONG", 101.0, 102.0, 101.5, False),
+    ("LONG", 98.0, 99.0, 101.0, False),
+    ("LONG", 100.2, 101.0, 101.0, True),
+    ("LONG", 99.0, 101.0, 101.0, True),
+    ("SHORT", 98.0, 99.0, 99.0, False),
+    ("SHORT", 101.0, 102.0, 99.0, False),
+    ("SHORT", 99.0, 99.8, 99.0, True),
+    ("SHORT", 99.0, 101.0, 99.0, True),
+])
+def test_pullback_range_distance_is_symmetric(side, low, high, close, expected):
+    """Sprawdza oba brzegi zakresu i przecięcie EMA niezależnie od kierunku.
+
+    Argumenty:
+        side, low, high, close, expected: Kierunek, zakres, ostatnia cena i wynik.
+    Zwraca:
+        None po sprawdzeniu warunku.
+    Wyjątki:
+        AssertionError: Gdy wynik warunku jest inny od oczekiwanego.
+    """
+    candles = [{"low": low, "high": high, "close": close}] * 5
+    values = {"atr14": 1.0, "ema21": 100.0, "ema21_series": [100.0] * 5}
+    assert _has_recent_pullback(candles, values, side) is expected
+
+
+def test_pullback_uses_historical_ema_and_configured_window_and_distance(monkeypatch):
+    """Weryfikuje dawną EMA, długość okna i odległość wyrażoną w ATR.
+
+    Argumenty:
+        monkeypatch: Narzędzie do tymczasowej zmiany konfiguracji.
+    Zwraca:
+        None po sprawdzeniu różnych parametrów.
+    Wyjątki:
+        AssertionError: Gdy filtr ignoruje historię lub konfigurację.
+    """
+    monkeypatch.setattr(config, "PULLBACK_LOOKBACK_MAX", 8)
+    rows = make_history(100)
+    values = calculate_indicators(rows, config)
+    assert len(values["ema21_series"]) == 8
+    assert not _has_recent_pullback(rows, values, "LONG")
+    historical_ema = values["ema21_series"][0]
+    rows[-8]["low"] = historical_ema - 0.1
+    values = calculate_indicators(rows, config)
+    assert _has_recent_pullback(rows, values, "LONG")
+    monkeypatch.setattr(config, "PULLBACK_LOOKBACK_MAX", 5)
+    assert not _has_recent_pullback(rows, values, "LONG")
+
+    candles = [{"low": 100.4, "high": 101.0, "close": 101.0}] * 5
+    controlled = {"atr14": 1.0, "ema21": 100.0, "ema21_series": [100.0] * 5}
+    assert not _has_recent_pullback(candles, controlled, "LONG")
+    monkeypatch.setattr(config, "PULLBACK_MAX_DISTANCE_ATR", 0.5)
+    assert _has_recent_pullback(candles, controlled, "LONG")
+    monkeypatch.setattr(config, "PULLBACK_MAX_DISTANCE_ATR", 0.0)
+    candles[0] = {"low": 99.0, "high": 101.0, "close": 101.0}
+    assert _has_recent_pullback(candles, controlled, "LONG")
+
+
+@pytest.mark.parametrize("column", ["open", "high", "low", "close", "volume"])
+def test_missing_required_column_returns_none(column):
+    """Brak każdej wymaganej kolumny jest jawny i nie daje ceny zastępczej.
+
+    Argumenty:
+        column: Nazwa usuwanej kolumny.
+    Zwraca:
+        None po sprawdzeniu odpowiedzi.
+    Wyjątki:
+        AssertionError: Gdy odpowiedź nie wskazuje błędu.
+    """
+    rows = make_history()
+    result = generate_signal(as_frame(rows).drop(columns=[column]),
+                             now=rows[-1]["timestamp_utc"] + timedelta(minutes=1))
+    assert result["signal"] == "NONE"
+    assert result["price"] is None and result["timestamp"] is None
+    assert result["signal_parameters"]["reasons"] == ["missing_columns"]
+    assert column in result["signal_parameters"]["reason"]
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("column", ["open", "high", "low", "close"])
+@pytest.mark.parametrize("bad_value", [None, float("nan"), float("inf"), float("-inf"), "błąd"])
+@pytest.mark.parametrize("position", [-1, -30])
+def test_invalid_ohlc_returns_none_without_price(column, bad_value, position):
+    """Błędna ostatnia lub historyczna zamknięta świeca blokuje sygnał.
+
+    Argumenty:
+        column: Nazwa pola OHLC.
+        bad_value: Niepoprawna wartość.
+        position: Pozycja błędnej świecy w historii.
+    Zwraca:
+        None po sprawdzeniu diagnostyki i serializacji.
+    Wyjątki:
+        AssertionError: Gdy błąd nie blokuje sygnału.
+    """
+    rows = make_history()
+    rows[position][column] = bad_value
+    result = generate_signal(as_frame(rows), now=rows[-1]["timestamp_utc"] + timedelta(minutes=1))
+    assert result["signal"] == "NONE"
+    assert result["price"] is None and result["timestamp"] is None
+    assert result["signal_parameters"]["reasons"] == ["invalid_candle"]
+    assert "wierszu" in result["signal_parameters"]["reason"]
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("change", ["missing", "null", "malformed", "duplicate"])
+def test_invalid_or_missing_time_is_explicit_none(change):
+    """Brak, błędna wartość i duplikat czasu nie powodują aktywnego sygnału.
+
+    Argumenty:
+        change: Rodzaj uszkodzenia czasu.
+    Zwraca:
+        None po sprawdzeniu diagnostyki.
+    Wyjątki:
+        AssertionError: Gdy wynik nie wskazuje błędu czasu.
+    """
+    rows = make_history()
+    now = rows[-1]["timestamp_utc"] + timedelta(minutes=1)
+    if change == "null":
+        rows[-1]["timestamp_utc"] = None
+    elif change == "malformed":
+        rows[-1]["timestamp_utc"] = "błędna data"
+    elif change == "duplicate":
+        rows[-1]["timestamp_utc"] = rows[-2]["timestamp_utc"]
+    frame = as_frame(rows)
+    if change == "missing":
+        frame = frame.drop(columns=["timestamp_utc"])
+    result = generate_signal(frame, now=now)
+    expected = {"missing": "missing_timestamp", "null": "invalid_timestamp",
+                "malformed": "invalid_timestamp", "duplicate": "duplicate_timestamp"}
+    assert result["signal"] == "NONE"
+    assert result["price"] is None and result["timestamp"] is None
+    assert result["signal_parameters"]["reasons"] == [expected[change]]
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("change", ["range", "volume"])
+def test_invalid_candle_structure_and_volume_are_reported(change):
+    """Sprzeczny zakres i nieskończony wolumen są jawnie odrzucane.
+
+    Argumenty:
+        change: Rodzaj nieprawidłowości.
+    Zwraca:
+        None po sprawdzeniu odpowiedzi.
+    Wyjątki:
+        AssertionError: Gdy świeca nie została odrzucona.
+    """
+    rows = make_history()
+    if change == "range":
+        rows[-1]["high"] = rows[-1]["low"] - 1
+    else:
+        rows[-1]["volume"] = float("inf")
+    result = generate_signal(as_frame(rows), now=rows[-1]["timestamp_utc"] + timedelta(minutes=1))
+    assert result["signal"] == "NONE"
+    assert result["price"] is None and result["timestamp"] is None
+    assert result["signal_parameters"]["reasons"] == ["invalid_candle"]
+    json.dumps(result, allow_nan=False)
+
+
+def test_ema_history_does_not_depend_on_future_candles():
+    """Wartości EMA w oknie pullbacku nie zależą od późniejszych świec.
+
+    Argumenty:
+        Brak.
+    Zwraca:
+        None po porównaniu fragmentów szeregów EMA.
+    Wyjątki:
+        AssertionError: Gdy późniejsze ceny zmienią historyczną EMA.
+    """
+    rows = make_history(100)
+    full = calculate_indicators(rows, config)["ema21_series"]
+    for offset in range(1, 5):
+        prefix = calculate_indicators(rows[:-offset], config)["ema21_series"]
+        assert prefix[-1] == pytest.approx(full[-offset - 1])
+
+
+def test_nonfinite_calculated_indicators_return_none():
+    """Przepełnienie obliczeń nie trafia do JSON ani do aktywnego sygnału.
+
+    Argumenty:
+        Brak.
+    Zwraca:
+        None po sprawdzeniu diagnostyki i zachowania prawidłowej ceny.
+    Wyjątki:
+        AssertionError: Gdy obliczenia prowadzą do aktywnego sygnału.
+    """
+    rows = make_history()
+    for row in rows:
+        row.update(open=1e307, high=1e307, low=1e307, close=1e307)
+    result = generate_signal(as_frame(rows), now=rows[-1]["timestamp_utc"] + timedelta(minutes=1))
+    assert result["signal"] == "NONE"
+    assert result["price"] == 1e307 and result["timestamp"] is not None
+    assert result["signal_parameters"]["reasons"] == ["invalid_indicators"]
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize(("sign", "expected"), [(1, "LONG"), (-1, "SHORT")])
+def test_full_signal_with_real_indicators_and_pullback(sign, expected):
+    """Generuje oba kierunki na świecach z rzeczywistymi wskaźnikami bez makiet.
+
+    Argumenty:
+        sign: Znak pozwalający odbić historię cen.
+        expected: Oczekiwany kierunek sygnału.
+    Zwraca:
+        None po sprawdzeniu wszystkich filtrów i braku wpływu przyszłości.
+    Wyjątki:
+        AssertionError: Gdy rzeczywiste dane nie dają oczekiwanego sygnału.
+    """
+    start = datetime(2026, 11, 16, 15, 0, tzinfo=UTC)
+    rows = []
+    for index in range(100):
+        close = 100 + sign * (0.05 * index + 0.4 * math.sin(0.35 * index + 1.5))
+        opening = 100 + sign * (
+            0.05 * (index - 0.5) + 0.4 * math.sin(0.35 * (index - 0.5) + 1.5)
+        )
+        rows.append({
+            "timestamp_utc": start + timedelta(minutes=index),
+            "open": opening,
+            "high": max(opening, close) + 0.25,
+            "low": min(opening, close) - 0.25,
+            "close": close,
+            "volume": 300 if index == 99 else 100,
+        })
+    now = rows[-1]["timestamp_utc"] + timedelta(minutes=1)
+    result = generate_signal(as_frame(rows), now=now)
+    assert result["signal"] == expected
+    assert all(result["signal_parameters"]["conditions"].values())
+    assert result["signal_parameters"]["score"] == 100
+    future = dict(rows[-1], timestamp_utc=now, close=float("nan"))
+    assert generate_signal(as_frame(rows + [future]), now=now) == result
+    json.dumps(result, allow_nan=False)

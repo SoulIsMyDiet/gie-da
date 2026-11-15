@@ -61,6 +61,47 @@ def test_previously_saved_candle_is_not_analyzed():
     generate.assert_not_called()
 
 
+@pytest.mark.parametrize(("price", "timestamp"), [
+    (None, None), (None, "2026-11-16T16:01:00+01:00"), (100.0, None),
+])
+def test_invalid_generator_result_is_not_saved(price, timestamp):
+    """Wynik bez ceny albo czasu pozostaje niezmieniony i nie trafia do bazy."""
+    opened = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
+    now = opened + timedelta(minutes=1)
+    storage = Mock()
+    storage.get_processed_signal.return_value = None
+    storage.load_context.return_value = ([{"timestamp_utc": opened}], {})
+    invalid = {"signal": "NONE", "price": price, "timestamp": timestamp,
+               "blocked_by": ["invalid_candle"]}
+    with patch("trigger.generate_signal", return_value=invalid):
+        result, saved = trigger.analyze_candle(storage, opened, now)
+    assert result == invalid
+    assert not saved
+    storage.save_signal.assert_not_called()
+
+
+@pytest.mark.parametrize("row", [
+    {"close": 100.0},
+    {"timestamp_utc": "nieprawidłowy", "close": 100.0},
+    {"timestamp_utc": datetime(2026, 11, 16, 15, 0), "close": 100.0},
+])
+def test_invalid_last_timestamp_is_reported_by_generator_without_save(row):
+    """Nieprawidłowy czas ostatniej świecy przekazujemy walidatorowi strategii."""
+    opened = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
+    now = opened + timedelta(minutes=1)
+    storage = Mock()
+    storage.get_processed_signal.return_value = None
+    storage.load_context.return_value = ([row], {})
+    invalid = {"signal": "NONE", "price": None, "timestamp": None,
+               "blocked_by": ["invalid_candle"]}
+    with patch("trigger.generate_signal", return_value=invalid) as generate:
+        result, saved = trigger.analyze_candle(storage, opened, now)
+    assert result == invalid
+    assert not saved
+    generate.assert_called_once_with([row], now=now)
+    storage.save_signal.assert_not_called()
+
+
 @pytest.mark.parametrize(("opened", "now", "reason", "previous_candles"), [
     (datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc),
      datetime(2026, 11, 16, 15, 0, 30, tzinfo=timezone.utc), "forming_candle", []),
