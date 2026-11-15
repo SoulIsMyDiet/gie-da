@@ -77,14 +77,18 @@ public:
      * @param newlyDetectedGapCount Otrzymuje liczbę nowo wykrytych luk.
      * @param savedSignalCount Otrzymuje liczbę nowych rekordów sygnałów.
      * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
-     * @return true, jeśli API potwierdzi zapis; w przeciwnym razie false.
+     * @param candleSavedDespiteError Opcjonalnie otrzymuje true, gdy świeca
+     *        została zapisana, ale dalsza analiza zakończyła się błędem.
+     * @return true po pełnym zapisie; false również wtedy, gdy zapis świecy
+     *         potwierdzono, ale dalsza analiza zwróciła poprawnie oznaczone 503.
      */
     static bool saveCandle(
         const std::string& symbol,
         const CandleData& candle,
         std::size_t& newlyDetectedGapCount,
         std::size_t& savedSignalCount,
-        std::string& error);
+        std::string& error,
+        bool* candleSavedDespiteError = nullptr);
 
     /**
      * Pobiera listę instrumentów aktywnych w konfiguracji lokalnego API.

@@ -21,10 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import (  # noqa: E402
     CandleRecord,
     SP500StrategyError,
+    _run_grok_sp500_strategy,
     _run_sp500_strategy,
     save_candle,
 )
-from fastapi import HTTPException, Request  # noqa: E402
+from fastapi import Request  # noqa: E402
 
 
 def _request() -> tuple[Request, Mock]:
@@ -67,21 +68,25 @@ def test_closed_es_candle_triggers_analysis_after_save() -> None:
     """Nowy zapis sygnału ES jest przekazywany do dźwięku aplikacji Windows."""
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, repository = _request()
-    with patch("app._run_sp500_strategy", return_value=True) as strategy:
+    with patch("app._run_sp500_strategy", return_value=True) as strategy, \
+            patch("app._run_grok_sp500_strategy", return_value=True) as grok:
         response = save_candle(_candle(open_time), request)
     repository.save_candle.assert_called_once()
     strategy.assert_called_once_with(open_time)
-    assert response.body == b"0\n1"
+    grok.assert_called_once_with(open_time)
+    assert response.body == b"0\n2"
 
 
 def test_forming_candle_and_other_symbol_do_not_trigger_es() -> None:
     """Formowana świeca i inny instrument nie uruchamiają strategii ES."""
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     request, _ = _request()
-    with patch("app._run_sp500_strategy") as strategy:
+    with patch("app._run_sp500_strategy") as strategy, \
+            patch("app._run_grok_sp500_strategy") as grok:
         save_candle(_candle(open_time), request)
         save_candle(_candle(open_time - timedelta(minutes=2), "XAU/USD"), request)
     strategy.assert_not_called()
+    grok.assert_not_called()
 
 
 def test_unsaved_candle_does_not_trigger_es() -> None:
@@ -89,9 +94,11 @@ def test_unsaved_candle_does_not_trigger_es() -> None:
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, repository = _request()
     repository.save_candle.return_value = (0, 0, "", 0)
-    with patch("app._run_sp500_strategy") as strategy:
+    with patch("app._run_sp500_strategy") as strategy, \
+            patch("app._run_grok_sp500_strategy") as grok:
         response = save_candle(_candle(open_time), request)
     strategy.assert_not_called()
+    grok.assert_not_called()
     assert response.body == b"0\n0"
 
 
@@ -113,10 +120,9 @@ def test_process_failure_is_not_reported_as_success() -> None:
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, repository = _request()
     with patch("app.subprocess.run", side_effect=subprocess.TimeoutExpired("python", 30)):
-        with pytest.raises(HTTPException) as error:
-            save_candle(_candle(open_time), request)
-    assert error.value.status_code == 503
-    assert "świeca została zapisana" in error.value.detail
+        response = save_candle(_candle(open_time), request)
+    assert response.status_code == 503
+    assert response.body == b"SP500_PARTIAL\n0\n0"
     repository.save_candle.assert_called_once()
 
 
@@ -128,3 +134,40 @@ def test_unexpected_process_exit_is_error() -> None:
     ):
         with pytest.raises(SP500StrategyError):
             _run_sp500_strategy(datetime.now(timezone.utc))
+
+
+@pytest.mark.parametrize(("exit_code", "should_beep"), [(0, True), (3, False), (4, False)])
+def test_grok_process_uses_isolated_strategy(exit_code: int, should_beep: bool) -> None:
+    """Grok używa osobnego katalogu i tych samych kodów potwierdzenia zapisu."""
+    completed = SimpleNamespace(returncode=exit_code, stderr="")
+    with patch("app.subprocess.run", return_value=completed) as process:
+        assert _run_grok_sp500_strategy(datetime.now(timezone.utc)) is should_beep
+    script = Path(process.call_args.args[0][1])
+    assert script.name == "S&P500StrategyV1.py"
+    assert script.parent.name in ("grok_sp500_algorithm", "S&P500")
+    assert "Grok-45" in str(script) or script.parent.name == "grok_sp500_algorithm"
+
+
+def test_both_strategies_are_attempted_if_one_fails() -> None:
+    """Błąd Claude nie uniemożliwia próby zapisu sygnału Groka."""
+    open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
+    request, repository = _request()
+    with patch("app._run_sp500_strategy", side_effect=SP500StrategyError("błąd")), \
+            patch("app._run_grok_sp500_strategy", return_value=True) as grok:
+        response = save_candle(_candle(open_time), request)
+    assert response.status_code == 503
+    assert response.body == b"SP500_PARTIAL\n0\n1"
+    grok.assert_called_once_with(open_time)
+    repository.save_candle.assert_called_once()
+
+
+def test_partial_error_keeps_successful_claude_confirmation() -> None:
+    """Niepowodzenie Groka nie ukrywa potwierdzenia zapisu strategii Claude."""
+    open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
+    request, repository = _request()
+    repository.save_candle.return_value = (2, 1, "", 0)
+    with patch("app._run_sp500_strategy", return_value=True), \
+            patch("app._run_grok_sp500_strategy", side_effect=SP500StrategyError("błąd")):
+        response = save_candle(_candle(open_time), request)
+    assert response.status_code == 503
+    assert response.body == b"SP500_PARTIAL\n2\n1"

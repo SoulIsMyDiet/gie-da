@@ -124,18 +124,15 @@ class SP500StrategyError(RuntimeError):
     """Sygnalizuje błąd procesu strategii po zapisaniu świecy w bazie."""
 
 
-def _run_sp500_strategy(candle_open_time: datetime) -> bool:
-    """Analizuje zapisaną świecę ES w osobnym procesie; zwraca żądanie dźwięku.
-
-    Izolacja procesu chroni płaskie importy strategii przed kolizją z modułami
-    innych algorytmów. Błąd procesu lub przekroczenie czasu przerywa żądanie.
-    """
-    algorithm_directory = Path(__file__).resolve().parent / "sp500_algorithm"
+def _run_sp500_process(candle_open_time: datetime, container_directory: str,
+                       author: str) -> bool:
+    """Uruchamia strategię autora dla świecy UTC; błąd procesu zgłasza SP500StrategyError."""
+    algorithm_directory = Path(__file__).resolve().parent / container_directory
     if not algorithm_directory.is_dir():
         algorithm_directory = (
             Path(__file__).resolve().parents[2]
             / "algorithms"
-            / "Claude-sonnet55"
+            / author
             / "S&P500"
         )
     command = [
@@ -154,18 +151,29 @@ def _run_sp500_strategy(candle_open_time: datetime) -> bool:
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise SP500StrategyError(
-            "Nie udało się uruchomić strategii S&P 500."
+            f"Nie udało się uruchomić strategii S&P 500 ({author})."
         ) from error
     if completed.returncode == 0:
         return True
     if completed.returncode in (3, 4):
         return False
     logger.error(
-        "Strategia S&P 500 zakończyła się błędem %s: %s",
+        "Strategia S&P 500 (%s) zakończyła się błędem %s: %s",
+        author,
         completed.returncode,
         completed.stderr.strip(),
     )
-    raise SP500StrategyError("Strategia S&P 500 zakończyła się błędem.")
+    raise SP500StrategyError(f"Strategia S&P 500 ({author}) zakończyła się błędem.")
+
+
+def _run_sp500_strategy(candle_open_time: datetime) -> bool:
+    """Uruchamia strategię Claude dla otwarcia UTC i zwraca żądanie dźwięku."""
+    return _run_sp500_process(candle_open_time, "sp500_algorithm", "Claude-sonnet55")
+
+
+def _run_grok_sp500_strategy(candle_open_time: datetime) -> bool:
+    """Uruchamia strategię Grok dla otwarcia UTC i zwraca żądanie dźwięku."""
+    return _run_sp500_process(candle_open_time, "grok_sp500_algorithm", "Grok-45")
 
 
 class CandleRecord(BaseModel):
@@ -1691,8 +1699,19 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 and candle.datetime.astimezone(timezone.utc)
                     + timedelta(minutes=1) <= datetime.now(timezone.utc)
             ):
-                if _run_sp500_strategy(candle.datetime.astimezone(timezone.utc)):
-                    signal_save_count += 1
+                strategy_errors = []
+                candle_timestamp = candle.datetime.astimezone(timezone.utc)
+                for run_strategy in (_run_sp500_strategy, _run_grok_sp500_strategy):
+                    try:
+                        if run_strategy(candle_timestamp):
+                            signal_save_count += 1
+                    except SP500StrategyError as error:
+                        logger.error("Błąd strategii po zapisaniu świecy ES: %s", error)
+                        strategy_errors.append(error)
+                if strategy_errors:
+                    raise SP500StrategyError(
+                        "Co najmniej jedna strategia S&P 500 nie przetworzyła świecy."
+                    ) from strategy_errors[0]
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.grok45_v2_candles = (
                 updated_grok45_v2_candles
@@ -1708,10 +1727,12 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
             detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
         ) from error
     except SP500StrategyError as error:
-        raise HTTPException(
+        logger.error("Błąd strategii S&P 500 po zapisaniu świecy: %s", error)
+        return Response(
             status_code=503,
-            detail="Nie udało się uruchomić strategii S&P 500; świeca została zapisana.",
-        ) from error
+            content=f"SP500_PARTIAL\n{new_gap_count}\n{signal_save_count}",
+            media_type="text/plain; charset=utf-8",
+        )
     
     # Front - Sygnał dźwiękowy (3 piknięcia) gdy została wykryta luka w świecach
     if new_gap_count > 0:

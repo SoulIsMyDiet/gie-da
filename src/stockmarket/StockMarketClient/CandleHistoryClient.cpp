@@ -25,6 +25,9 @@ constexpr wchar_t openProductsApiPath[] = L"/api/products/open";
 constexpr wchar_t analysisCandlesApiPath[] = L"/api/candles/analysis?limit=";
 constexpr wchar_t generatedSignalApiPath[] = L"/api/signals/grok45";
 constexpr DWORD maxResponseSize = 64 * 1024;
+// Pozostałe żądania mają limit 3 s; zapis ES ma 70 s na analizę do 60 s i bufor.
+constexpr DWORD apiRequestTimeoutMs = 3000;
+constexpr DWORD singleCandleReceiveTimeoutMs = 70000;
 constexpr std::size_t pageSize = 20;
 constexpr std::size_t signalPageSize = 15;
 
@@ -221,14 +224,24 @@ bool readResponse(HINTERNET request, std::string& response, std::string& error) 
 }
 
 /**
- * Wysyła żądanie JSON do lokalnego API i sprawdza jego kod odpowiedzi.
+ * Wysyła żądanie JSON i odczytuje odpowiedź o oczekiwanym lub jawnie dozwolonym statusie.
+ * @param path Ścieżka lokalnego endpointu.
+ * @param requestBody Treść żądania w formacie JSON.
+ * @param expectedStatus Oczekiwany kod HTTP.
+ * @param responseBody Otrzymuje treść odpowiedzi.
+ * @param error Otrzymuje opis błędu transportu lub nieoczekiwanego kodu HTTP.
+ * @param responseStatus Opcjonalnie otrzymuje kod HTTP odczytany z odpowiedzi.
+ * @param allowServiceUnavailable Czy wolno odczytać treść odpowiedzi HTTP 503.
+ * @return true, jeśli odpowiedź ma oczekiwany lub jawnie dozwolony status.
  */
 bool sendApiRequest(
     const wchar_t* path,
     const std::string& requestBody,
     DWORD expectedStatus,
     std::string& responseBody,
-    std::string& error) {
+    std::string& error,
+    DWORD* responseStatus = nullptr,
+    bool allowServiceUnavailable = false) {
     InternetHandle session{WinHttpOpen(
         L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
@@ -236,7 +249,16 @@ bool sendApiRequest(
         error = "Nie udało się rozpocząć żądania do lokalnego API.";
         return false;
     }
-    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
+    const DWORD receiveTimeoutMs =
+        std::wstring_view(path) == singleCandleApiPath
+        ? singleCandleReceiveTimeoutMs
+        : apiRequestTimeoutMs;
+    WinHttpSetTimeouts(
+        session.value,
+        apiRequestTimeoutMs,
+        apiRequestTimeoutMs,
+        apiRequestTimeoutMs,
+        receiveTimeoutMs);
 
     InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
     if (connection.value == nullptr) {
@@ -273,7 +295,12 @@ bool sendApiRequest(
         error = "Nie udało się odczytać odpowiedzi lokalnego API.";
         return false;
     }
-    if (statusCode != expectedStatus) {
+    if (responseStatus != nullptr) {
+        *responseStatus = statusCode;
+    }
+    const bool serviceUnavailableAllowed =
+        statusCode == 503 && allowServiceUnavailable;
+    if (statusCode != expectedStatus && !serviceUnavailableAllowed) {
         error = "Lokalne API zwróciło HTTP " +
                 std::to_string(statusCode) + " podczas zapisu świec.";
         return false;
@@ -528,16 +555,29 @@ bool splitSignalReportRow(
 } // namespace
 
 /**
- * Wysyła świecę do lokalnego API i sprawdza odpowiedź serwera.
+ * Wysyła świecę i rozpoznaje potwierdzony zapis częściowy ES z odpowiedzi HTTP 503.
+ * @param symbol Symbol instrumentu, którego dotyczy świeca.
+ * @param candle Dane OHLCV i czas otwarcia świecy.
+ * @param newlyDetectedGapCount Otrzymuje liczbę wykrytych luk.
+ * @param savedSignalCount Otrzymuje liczbę zapisanych sygnałów wymagających dźwięku.
+ * @param error Otrzymuje opis błędu lub nieukończonej analizy strategii.
+ * @param candleSavedDespiteError Opcjonalnie otrzymuje informację o poprawnie
+ *        potwierdzonym zapisie świecy, mimo błędu dalszej analizy.
+ * @return true po pełnym sukcesie; false po błędzie, również przy potwierdzonym
+ *         zapisie częściowym, którego liczniki pozostają wtedy dostępne.
  */
 bool CandleHistoryClient::saveCandle(
     const std::string& symbol,
     const CandleData& candle,
     std::size_t& newlyDetectedGapCount,
     std::size_t& savedSignalCount,
-    std::string& error) {
+    std::string& error,
+    bool* candleSavedDespiteError) {
     newlyDetectedGapCount = 0;
     savedSignalCount = 0;
+    if (candleSavedDespiteError != nullptr) {
+        *candleSavedDespiteError = false;
+    }
     std::string utcDatetime;
     if (!formatUtcDatetime(candle.datetime, utcDatetime)) {
         error = "Twelve Data zwróciło czas świecy w nieobsługiwanym formacie.";
@@ -546,10 +586,75 @@ bool CandleHistoryClient::saveCandle(
     const std::string requestBody =
         createRequestBody(symbol, candle, utcDatetime);
     std::string responseBody;
+    DWORD responseStatus = 0;
     if (!sendApiRequest(
-            singleCandleApiPath, requestBody, 200, responseBody, error)) {
+            singleCandleApiPath,
+            requestBody,
+            200,
+            responseBody,
+            error,
+            &responseStatus,
+            symbol == "ES")) {
         return false;
     }
+    if (responseStatus == 503) {
+        constexpr std::string_view partialResponseMarker = "SP500_PARTIAL\n";
+        const std::string_view partialResponse(responseBody);
+        if (symbol != "ES" ||
+            partialResponse.substr(0, partialResponseMarker.size()) !=
+                partialResponseMarker) {
+            error = "Lokalne API zwróciło nieprawidłową odpowiedź HTTP 503.";
+            return false;
+        }
+
+        const std::size_t gapLineEnd =
+            partialResponse.find('\n', partialResponseMarker.size());
+        if (gapLineEnd == std::string_view::npos ||
+            gapLineEnd + 1 == partialResponse.size()) {
+            error = "Lokalne API zwróciło niepełną odpowiedź o zapisie częściowym.";
+            return false;
+        }
+
+        const std::string_view gapText = partialResponse.substr(
+            partialResponseMarker.size(),
+            gapLineEnd - partialResponseMarker.size());
+        const std::string_view signalText =
+            partialResponse.substr(gapLineEnd + 1);
+        auto parseCount = [](std::string_view text, std::size_t& count) {
+            if (text.empty()) {
+                return false;
+            }
+            for (const unsigned char character : text) {
+                if (character < '0' || character > '9') {
+                    return false;
+                }
+            }
+            std::size_t parsedCount = 0;
+            const auto result = std::from_chars(
+                text.data(), text.data() + text.size(), parsedCount);
+            if (result.ec != std::errc{} ||
+                result.ptr != text.data() + text.size()) {
+                return false;
+            }
+            count = parsedCount;
+            return true;
+        };
+        std::size_t parsedGapCount = 0;
+        std::size_t parsedSignalCount = 0;
+        if (!parseCount(gapText, parsedGapCount) ||
+            !parseCount(signalText, parsedSignalCount)) {
+            error = "Lokalne API zwróciło nieprawidłowe liczniki zapisu częściowego.";
+            return false;
+        }
+        newlyDetectedGapCount = parsedGapCount;
+        savedSignalCount = parsedSignalCount;
+        if (candleSavedDespiteError != nullptr) {
+            *candleSavedDespiteError = true;
+        }
+        error = "co najmniej jedna strategia nie zakończyła analizy (HTTP 503)";
+        return false;
+    }
+
     const std::size_t countLineEnd = responseBody.find('\n');
     if (countLineEnd == std::string::npos) {
         error = "Lokalne API nie zwróciło statusu zapisu sygnału.";
@@ -576,8 +681,10 @@ bool CandleHistoryClient::saveCandle(
             return false;
         }
     }
+    std::size_t parsedGapCount = 0;
+    std::size_t parsedSignalCount = 0;
     try {
-        newlyDetectedGapCount =
+        parsedGapCount =
             static_cast<std::size_t>(std::stoull(std::string(countText)));
     } catch (const std::out_of_range&) {
         error = "Lokalne API zwróciło zbyt dużą liczbę wykrytych luk.";
@@ -587,7 +694,7 @@ bool CandleHistoryClient::saveCandle(
         return false;
     }
     try {
-        savedSignalCount =
+        parsedSignalCount =
             static_cast<std::size_t>(std::stoull(std::string(signalText)));
     } catch (const std::out_of_range&) {
         error = "Lokalne API zwróciło zbyt dużą liczbę zapisanych sygnałów.";
@@ -596,6 +703,8 @@ bool CandleHistoryClient::saveCandle(
         error = "Lokalne API zwróciło nieprawidłową liczbę zapisanych sygnałów.";
         return false;
     }
+    newlyDetectedGapCount = parsedGapCount;
+    savedSignalCount = parsedSignalCount;
     return true;
 }
 

@@ -20,6 +20,7 @@ COPY algorithms/Grok-45/EURUSD/EURUSDStrategyV2.py ./grok_algorithm/
 COPY algorithms/Claude-sonnet55/DAX40/ ./dax_algorithm/
 COPY algorithms/Chat-gpt6/DAX40/ ./chat_dax_algorithm/
 COPY algorithms/Claude-sonnet55/S&P500/ ./sp500_algorithm/
+COPY algorithms/Grok-45/S&P500/ ./grok_sp500_algorithm/
 USER appuser
 
 EXPOSE 8000

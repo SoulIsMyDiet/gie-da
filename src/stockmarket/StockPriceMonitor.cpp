@@ -524,7 +524,9 @@ bool StockPriceMonitor::updateCandle() {
 }
 
 /**
- * Pobiera tylko produkty z otwartą sesją, aby nie zużywać zapytań poza handlem.
+ * Pobiera świece aktywnych produktów i odtwarza dźwięki dla zapisów sygnałów.
+ * Liczniki z potwierdzonego zapisu częściowego są obsługiwane również wtedy,
+ * gdy analiza co najmniej jednej strategii zwróci błąd HTTP 503.
  */
 void StockPriceMonitor::updateAdditionalProducts() {
     std::vector<std::string> configuredSymbols;
@@ -620,22 +622,37 @@ void StockPriceMonitor::updateAdditionalProducts() {
 
         std::size_t detectedGapCount = 0;
         std::size_t signalSaveCount = 0;
-        if (!CandleHistoryClient::saveCandle(
-                symbol, candle, detectedGapCount, signalSaveCount, error)) {
+        bool candleSavedDespiteError = false;
+        const bool saveSucceeded = CandleHistoryClient::saveCandle(
+            symbol,
+            candle,
+            detectedGapCount,
+            signalSaveCount,
+            error,
+            &candleSavedDespiteError);
+        savedSignalCount += signalSaveCount;
+        anyGapDetected = anyGapDetected || detectedGapCount > 0;
+        if (!saveSucceeded && !candleSavedDespiteError) {
             if (!additionalStatus.empty()) {
                 additionalStatus += " | ";
             }
             additionalStatus += symbol + ": błąd zapisu świecy: " + error;
             continue;
         }
-        savedSignalCount += signalSaveCount;
-        anyGapDetected = anyGapDetected || detectedGapCount > 0;
         if (!additionalStatus.empty()) {
             additionalStatus += " | ";
         }
-        additionalStatus += symbol + ": świeca została zapisana";
+        additionalStatus += symbol + ": ";
+        if (candleSavedDespiteError) {
+            additionalStatus += "świeca zapisana, ale " + error;
+        } else {
+            additionalStatus += "świeca została zapisana";
+        }
         if (detectedGapCount > 0) {
-            additionalStatus += ", wykryto " +
+            additionalStatus += candleSavedDespiteError
+                ? "; wykryto "
+                : ", wykryto ";
+            additionalStatus +=
                 std::to_string(detectedGapCount) + " brakujących świec";
             CandleBackfillResult backfillResult;
             std::string backfillError;
