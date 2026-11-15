@@ -124,6 +124,43 @@ class SP500StrategyError(RuntimeError):
     """Sygnalizuje błąd procesu strategii po zapisaniu świecy w bazie."""
 
 
+class XAUUSDStrategyError(RuntimeError):
+    """Sygnalizuje błąd analizy XAUUSD po zapisaniu świecy."""
+
+
+def _run_xauusd_strategy(candle_open_time: datetime) -> bool:
+    """Uruchamia osobny proces dla świecy UTC; zwraca żądanie dźwięku.
+
+    Błąd uruchomienia, przekroczenie czasu i nieznany kod wyjścia zgłaszają
+    XAUUSDStrategyError, aby nie ukryć niepowodzenia analizy.
+    """
+    algorithm_directory = Path(__file__).resolve().parent / "xauusd_algorithm"
+    if not algorithm_directory.is_dir():
+        algorithm_directory = (
+            Path(__file__).resolve().parents[2] / "algorithms" / "Chat-gpt6" / "XAUUSD"
+        )
+    command = [
+        sys.executable, str(algorithm_directory / "XAUUSDStrategyV1.py"),
+        "--api-candle-open-epoch", str(int(candle_open_time.timestamp())),
+    ]
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True,
+            timeout=SP500_PROCESS_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise XAUUSDStrategyError("Nie udało się uruchomić strategii XAUUSD.") from error
+    if completed.returncode == 0:
+        return True
+    if completed.returncode in (3, 4):
+        return False
+    logger.error(
+        "Strategia XAUUSD zakończyła się błędem %s: %s",
+        completed.returncode, completed.stderr.strip(),
+    )
+    raise XAUUSDStrategyError("Strategia XAUUSD zakończyła się błędem.")
+
+
 def _run_sp500_process(candle_open_time: datetime, container_directory: str,
                        author: str) -> bool:
     """Uruchamia strategię autora dla świecy UTC; błąd procesu zgłasza SP500StrategyError."""
@@ -448,7 +485,9 @@ class MarketDataRepository:
                     INSERT IGNORE INTO signal_potention (signal_id)
                     SELECT id FROM signals
                     WHERE `signal` IN ('short', 'long')
-                    """
+                      AND NOT (product = %s AND algorithm_name = %s)
+                    """,
+                    ("XAU/USD", "Chat-gpt6/XAUUSDStrategyV1"),
                 )
                 self.signal_potential_calculator.update_pending(cursor)
                 connection.commit()
@@ -1645,6 +1684,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
     ):
         return Response(content="0\n0", media_type="text/plain; charset=utf-8")
 
+    xauusd_error = False
     try:
         with strategy_lock:
             if not request.app.state.strategy_ready:
@@ -1806,6 +1846,19 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 candle_timestamp = candle.datetime.astimezone(timezone.utc)
                 if _run_sp500_strategy(candle_timestamp):
                     signal_save_count += 1
+            if (
+                candle.symbol == "XAU/USD"
+                and saved_candle_count
+                and candle.datetime.astimezone(timezone.utc)
+                    + timedelta(minutes=1) <= datetime.now(timezone.utc)
+            ):
+                try:
+                    if _run_xauusd_strategy(candle.datetime.astimezone(timezone.utc)):
+                        signal_save_count += 1
+                except Exception:
+                    # Backend: także nieoczekiwany błąd procesu nie cofa zapisanej świecy.
+                    logger.exception("Błąd strategii XAUUSD po zapisaniu świecy.")
+                    xauusd_error = True
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.grok45_v2_candles = (
                 updated_grok45_v2_candles
@@ -1835,6 +1888,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
     return Response(
         content=f"{new_gap_count}\n{signal_save_count}",
         media_type="text/plain; charset=utf-8",
+        headers={"X-XAUUSD-Strategy-Error": "1"} if xauusd_error else None,
     )
 
 
