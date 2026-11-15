@@ -29,6 +29,29 @@ def _valid_candle(row: dict) -> bool:
         return False
 
 
+def _candle_open(row: dict) -> datetime:
+    """Zwraca minutowy czas otwarcia UTC; błędny znacznik zgłasza jako ValueError."""
+    try:
+        raw = row["timestamp_utc"]
+        stamp = as_utc(raw)
+        if raw.utcoffset() != timedelta(0) or stamp.second or stamp.microsecond:
+            raise ValueError("Znacznik świecy musi wskazywać pełną minutę UTC.")
+        return stamp
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Historia zawiera nieprawidłowy znacznik czasu świecy M1 UTC.") from error
+
+
+def _m5_trend(close: float | None, ema: float | None, slope: float | None) -> str | None:
+    """Zwraca kierunek M5 lub NEUTRAL; przy brakującym wskaźniku zwraca None."""
+    if close is None or ema is None or slope is None:
+        return None
+    if close > ema and slope > 0:
+        return "UP"
+    if close < ema and slope < 0:
+        return "DOWN"
+    return "NEUTRAL"
+
+
 def _blackout(closed: datetime) -> bool:
     """Sprawdza blokady ET i UTC; blokada końcowa obejmuje także chwilę zamknięcia."""
     local = closed.astimezone(config.NEW_YORK)
@@ -58,12 +81,12 @@ def _score_details(setup: str, direction: str, params: dict, clock: time) -> tup
         bonuses.append(f"wolumen względny ≥ {config.BONUS_VOLUME:g}")
     if any(_in_window(clock, window) for window in config.LIQUID_WINDOWS):
         bonuses.append("okno podwyższonej płynności")
-    m5_close, m5_ema = params["m5_close"], params["m5_ema20"]
-    aligned = m5_close is not None and m5_ema is not None and ((direction == "LONG" and m5_close > m5_ema) or (direction == "SHORT" and m5_close < m5_ema))
+    trend = _m5_trend(params["m5_close"], params["m5_ema20"], params["m5_ema20_slope"])
+    aligned = (direction == "LONG" and trend == "UP") or (direction == "SHORT" and trend == "DOWN")
     if setup == "TREND_PULLBACK" and params["er"] is not None and params["er"] > config.BONUS_ER:
         bonuses.append(f"ER > {config.BONUS_ER:g}")
     elif setup != "TREND_PULLBACK" and aligned:
-        bonuses.append("zamknięcie M5 po zgodnej stronie EMA20 M5")
+        bonuses.append("zamknięcie świecy M5 i nachylenie EMA20 zgodne z kierunkiem")
     if params["body_ratio"] >= config.BONUS_BODY:
         bonuses.append(f"udział korpusu ≥ {config.BONUS_BODY:g}")
     reasons.extend(f"Bonus: {bonus} (+{config.BONUS_SCORE} pkt)" for bonus in bonuses)
@@ -138,7 +161,7 @@ def generate_signal(candles: list[dict], last_signal_time: datetime | None = Non
                     orb_directions_today: Collection[str] | None = None, now: datetime | None = None) -> dict:
     """Zwraca decyzję dla zamknięcia ostatniej świecy; now to świadomy czas UTC analizy.
 
-    Niepoprawne lub powtórzone świece i nieświadome znaczniki czasu zgłaszają ValueError.
+    Niepoprawne lub powtórzone zamknięte świece i błędne znaczniki czasu zgłaszają ValueError.
     Pusty zbiór lub brak zamkniętych świec zwraca NONE; now pominięte oznacza bieżący czas UTC.
     Dla celowej analizy historycznej należy przekazać now jako czas zamknięcia świecy;
     starsze dane oceniane poza oknem dodatkowo otrzymują outside_session.
@@ -150,15 +173,18 @@ def generate_signal(candles: list[dict], last_signal_time: datetime | None = Non
               "tp_points": None, "sl_points": None, "max_hold_minutes": config.MAX_HOLD_MINUTES,
               "params": {}, "reasons": [], "blocked_by": []}
     reference = as_utc(now if now is not None else datetime.now(timezone.utc))
-    if any(not _valid_candle(x) for x in candles):
+    # Każdy znacznik musi pozwolić ustalić, czy świeca jest już zamknięta.
+    stamped_rows = [(row, _candle_open(row)) for row in candles]
+    closed_rows = [(row, stamp) for row, stamp in stamped_rows
+                   if reference - stamp >= timedelta(minutes=1)]
+    if any(not _valid_candle(row) for row, _ in closed_rows):
         raise ValueError("Historia zawiera nieprawidłową świecę M1 UTC.")
-    rows = sorted((row for row in candles
-                   if as_utc(row["timestamp_utc"]) + timedelta(minutes=1) <= reference),
-                  key=lambda x: as_utc(x["timestamp_utc"]))
+    closed_rows.sort(key=lambda item: item[1])
+    rows = [row for row, _ in closed_rows]
     if not rows:
         result["blocked_by"].extend(["no_data", "warmup"])
         return result
-    stamps = [as_utc(x["timestamp_utc"]) for x in rows]
+    stamps = [stamp for _, stamp in closed_rows]
     if len(set(stamps)) != len(stamps):
         raise ValueError("Historia zawiera zduplikowane otwarcia świec.")
     opened, current = stamps[-1], rows[-1]
@@ -226,10 +252,7 @@ def generate_signal(candles: list[dict], last_signal_time: datetime | None = Non
                   high_impact_day=day in config.HIGH_IMPACT_DAYS)
     atr_value = params["atr"]
     m5_close, m5_ema, m5_slope = params["m5_close"], params["m5_ema20"], params["m5_ema20_slope"]
-    trend = None
-    if m5_close is not None and m5_ema is not None and m5_slope is not None:
-        trend = ("UP" if m5_close > m5_ema and m5_slope > 0 else
-                 "DOWN" if m5_close < m5_ema and m5_slope < 0 else "NEUTRAL")
+    trend = _m5_trend(m5_close, m5_ema, m5_slope)
     # Ujednolicone nazwy do dokumentu JSON, obok pól używanych wewnętrznie.
     params.update(atr14_points=atr_value,
                   atr14_bps=atr_value / price * 10000 if atr_value is not None else None,
@@ -259,6 +282,12 @@ def generate_signal(candles: list[dict], last_signal_time: datetime | None = Non
         applicable.append((config.WARMUP_REVERSION, True))
     if applicable and not any(len(segment) >= minimum and ready for minimum, ready in applicable):
         blocked.append("warmup")
+    elif not applicable and "outside_session" not in blocked:
+        # Przed lub między oknami porównujemy historię z najkrótszą rozgrzewką.
+        if len(segment) < min(config.WARMUP_ORB, config.WARMUP_PULLBACK, config.WARMUP_REVERSION):
+            blocked.append("warmup")
+        else:
+            blocked.append("no_setup")
     candidates = _candidates(segment, params, clock, orb_directions_today)
     if len({item[1] for item in candidates}) > 1:
         blocked.append("conflicting_setups")

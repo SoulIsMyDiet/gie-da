@@ -318,6 +318,7 @@ def test_single_run_outside_session_analyzes_old_candle_without_saving():
     now = datetime(2026, 11, 15, 15, 0, tzinfo=timezone.utc)
     storage = Mock()
     storage.latest_closed_open.return_value = stamp
+    storage.get_processed_signal.return_value = None
     storage.load_context.return_value = ([{
         "timestamp_utc": stamp, "open": 100.0, "high": 101.0,
         "low": 99.0, "close": 100.0, "volume": 10.0,
@@ -327,12 +328,13 @@ def test_single_run_outside_session_analyzes_old_candle_without_saving():
     assert result["signal"] == "NONE"
     assert "outside_session" in result["blocked_by"]
     assert not saved
-    storage.get_processed_signal.assert_not_called()
+    storage.get_processed_signal.assert_called_once_with(stamp)
+    storage.load_context.assert_called_once_with(stamp)
     storage.save_signal.assert_not_called()
 
 
 def test_single_run_rechecks_stale_saved_long_without_resaving():
-    """Stary zapisany LONG nie jest pokazywany jako aktualny w późniejszym oknie."""
+    """Stary zapisany LONG jest nieaktywny, bez przeliczania zmienionej historii."""
     opened = datetime(2026, 11, 13, 15, 0, tzinfo=timezone.utc)
     now = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
     storage = Mock()
@@ -348,24 +350,39 @@ def test_single_run_rechecks_stale_saved_long_without_resaving():
     assert result["candle_open_epoch"] == int(opened.timestamp())
     assert not saved
     storage.get_processed_signal.assert_called_once_with(opened)
-    storage.load_context.assert_called_once_with(opened)
+    storage.load_context.assert_not_called()
     storage.save_signal.assert_not_called()
 
 
 def test_api_keeps_saved_stale_result_without_recalculating():
-    """API nadal zwraca wcześniej zapisany wynik nawet dla starej świecy."""
+    """API zwraca nieaktywną kopię dawnego wyniku bez przeliczania historii."""
     opened = datetime(2026, 11, 13, 15, 0, tzinfo=timezone.utc)
     now = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
-    previous = {"signal": "LONG", "blocked_by": []}
+    previous = {
+        "signal": "LONG", "blocked_by": ["daily_limit"], "price": 100.0,
+        "params": {"data_age_minutes": 0.0, "atr": 2.0},
+        "setup": "TREND_PULLBACK", "score": 80, "reasons": ["historyczny sygnał"],
+        "tp_price": 105.0, "sl_price": 98.0, "tp_points": 5.0, "sl_points": 2.0,
+    }
     storage = Mock()
     storage.get_processed_signal.return_value = previous
-    with patch("trigger.generate_signal") as generate:
+    with patch("trigger.generate_signal", wraps=trigger.generate_signal) as generate:
         result, saved = trigger.analyze_candle(storage, opened, now)
-    assert result == previous
+    assert result["signal"] == "NONE"
+    assert result["blocked_by"] == ["daily_limit", "stale_data"]
+    assert result["params"]["data_age_minutes"] == (now - opened - timedelta(minutes=1)).total_seconds() / 60
+    assert result["params"]["atr"] == 2.0
+    assert result["price"] == previous["price"]
+    assert result["candle_open_epoch"] == int(opened.timestamp())
+    assert result["timestamp_epoch"] == int((opened + timedelta(minutes=1)).timestamp())
+    assert result["setup"] is None and result["score"] == 0 and result["reasons"] == []
+    assert all(result[field] is None for field in ("tp_price", "sl_price", "tp_points", "sl_points"))
+    assert previous["signal"] == "LONG" and previous["params"]["data_age_minutes"] == 0.0
+    assert previous["blocked_by"] == ["daily_limit"]
     assert not saved
     storage.load_context.assert_not_called()
     storage.save_signal.assert_not_called()
-    generate.assert_not_called()
+    generate.assert_called_once_with([], now=now)
 
 
 def test_single_run_outside_session_removes_gap_block_but_keeps_counts():

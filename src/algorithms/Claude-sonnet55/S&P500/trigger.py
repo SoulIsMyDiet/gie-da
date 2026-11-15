@@ -1,6 +1,7 @@
 """Backend: wyzwalanie analizy po zapisie świecy lub w ręcznej pętli."""
 
 import argparse
+from copy import deepcopy
 import json
 import logging
 import os
@@ -18,6 +19,27 @@ from sound import play_signal_confirmation
 from storage import SP500Storage
 
 logger = logging.getLogger(__name__)
+
+
+def _stale_saved_result(previous: dict, opened: datetime, now: datetime) -> dict:
+    """Tworzy nieaktywną kopię zapisanego JSON dla świecy opened i czasu analizy now.
+
+    Zachowuje historyczną cenę, znaczniki czasu i parametry. Poza sesją usuwa
+    blokadę luki, lecz zachowuje jej liczniki; nie zmienia zapisanego wyniku
+    ani nie przechwytuje błędów danych.
+    """
+    result = _blocked_candle_result(opened, now, "stale_data")
+    result.update(deepcopy(previous))
+    result["params"]["data_age_minutes"] = (now - (opened + timedelta(minutes=1))).total_seconds() / 60
+    if "stale_data" not in result["blocked_by"]:
+        result["blocked_by"].append("stale_data")
+    if not is_signal_window(now.replace(second=0, microsecond=0)) and "outside_session" not in result["blocked_by"]:
+        result["blocked_by"].append("outside_session")
+    if "outside_session" in result["blocked_by"]:
+        result["blocked_by"] = [reason for reason in result["blocked_by"] if reason != "data_gap"]
+    result.update(signal="NONE", setup=None, score=0, tp_price=None, sl_price=None,
+                  tp_points=None, sl_points=None, reasons=[])
+    return result
 
 
 def _blocked_candle_result(opened: datetime, now: datetime, reason: str) -> dict:
@@ -57,10 +79,13 @@ def analyze_candle(
         return _blocked_candle_result(opened, now, "outside_session"), False
     current_minute = now.replace(second=0, microsecond=0)
     outside_now = allow_outside and not is_signal_window(current_minute)
-    previous = None if outside_now else storage.get_processed_signal(opened)
     stale = now - (opened + timedelta(minutes=1)) > timedelta(minutes=config.MAX_STALE_MINUTES)
-    if previous is not None and not (allow_outside and stale):
+    previous = (storage.get_processed_signal(opened)
+                if not outside_now or (stale and in_session) else None)
+    if previous is not None:
         logger.debug("Świeca %s była już przeanalizowana.", opened.isoformat())
+        if stale:
+            return _stale_saved_result(previous, opened, now), False
         return previous, False
     candles, state = storage.load_context(opened)
     if not candles or as_utc(candles[-1]["timestamp_utc"]) != opened:

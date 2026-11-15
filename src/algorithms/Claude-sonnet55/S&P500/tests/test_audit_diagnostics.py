@@ -214,12 +214,15 @@ def test_first_breakout_after_opening_range(monkeypatch: pytest.MonkeyPatch, dir
     assert result["signal"] == "NONE"
 
 
-def test_warmup_only_in_an_applicable_setup_window() -> None:
-    """Poza oknem setupu brak rozgrzania nie jest sam w sobie przyczyną blokady."""
+def test_warmup_before_and_in_an_applicable_setup_window() -> None:
+    """Przed oknem i w jego trakcie niewystarczająca historia oznacza rozgrzewkę."""
     closed = datetime(2026, 11, 16, 14, 42, tzinfo=UTC)
     result = signal_logic.generate_signal(_history(closed, 1), now=closed)
-    assert "warmup" not in result["blocked_by"]
+    assert "warmup" in result["blocked_by"]
     assert "no_setup" not in result["blocked_by"]
+    result = signal_logic.generate_signal(_history(closed, config.WARMUP_ORB), now=closed)
+    assert "warmup" not in result["blocked_by"]
+    assert "no_setup" in result["blocked_by"]
     closed = datetime(2026, 11, 16, 15, 10, tzinfo=UTC)
     result = signal_logic.generate_signal(_history(closed, 1), now=closed)
     assert "warmup" in result["blocked_by"]

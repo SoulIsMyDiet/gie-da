@@ -76,8 +76,9 @@ SL/TP, a jego wyliczenie `100zl_deal` nie uwzględnia specyfikacji futures.
 wykryje braku świecy po 20 sekundach, nie przeanalizuje automatycznie świecy
 zapisanej jako formowana po jej późniejszym zamknięciu ani świecy uzupełnionej
 w backfillu. Błąd strategii po zapisie świecy wymaga osobnego wznowienia;
-ponowny zapis identycznej świecy, który nic nie zmienia, nie uruchamia analizy. Ręczny tryb
-`--loop` odczytuje bazę co
+ponowny zapis pojedynczej zamkniętej świecy może ponowić próbę analizy.
+Jeśli wynik jest już w bazie, unikalny klucz nie dopuszcza drugiego rekordu.
+Ręczny tryb `--loop` odczytuje bazę co
 sekundę, czeka maksymalnie 20 sekund po zamknięciu i pomija brakującą minutę.
 Stan ostatnio obsłużonej minuty jest utrwalany w pliku z `config.py`;
 przed analizą pojedynczej świecy pętla sprawdza też, czy jej wynik jest już
