@@ -40,13 +40,15 @@ def simulate_trade(candles: list[dict], index: int, signal: dict, params: TradeP
     previous, last = opened, candles[index]
     segment = segment_id(opened)
     session_close = as_utc(cash_close(entry_time.astimezone(config.NEW_YORK).date()))
-    outcome, exit_price = "koniec_danych_lub_segmentu", entry
+    outcome, exit_price = "nierozstrzygnieta", entry
+    deadline = min(session_close, entry_time + timedelta(minutes=params.max_hold_minutes))
     for row in candles[index + 1:]:
         current = as_utc(row["timestamp_utc"])
-        if (current != previous + timedelta(minutes=1) or not is_trading_minute(current)
-                or segment_id(current) != segment or current >= session_close
-                or current >= entry_time + timedelta(minutes=params.max_hold_minutes)
-                ):
+        next_open = previous + timedelta(minutes=1)
+        if next_open >= deadline or not is_trading_minute(next_open) or segment_id(next_open) != segment:
+            outcome = "limit_czasu"
+            break
+        if current != next_open:
             break
         last, previous = row, current
         stop_hit = float(row["low"]) <= entry - stop if direction == 1 else float(row["high"]) >= entry + stop
@@ -62,13 +64,18 @@ def simulate_trade(candles: list[dict], index: int, signal: dict, params: TradeP
             outcome, exit_price = "take_profit", entry + direction * target
             break
         exit_price = float(row["close"])
-        outcome = "limit_czasu"
+    if outcome == "nierozstrzygnieta":
+        next_open = previous + timedelta(minutes=1)
+        if next_open >= deadline or not is_trading_minute(next_open) or segment_id(next_open) != segment:
+            outcome = "limit_czasu"
     exit_time = as_utc(last["timestamp_utc"]) + timedelta(minutes=1)
-    points = direction * (exit_price - entry) - params.cost_points - params.slippage_points
-    return {"signal": signal["signal"], "setup": signal["setup"], "entry": entry, "exit": exit_price,
-            "entry_time": entry_time.isoformat(), "exit_time": exit_time.isoformat(),
-            "hold_minutes": (exit_time - entry_time).total_seconds() / 60,
-            "outcome": outcome, "pnl_points": round(points, 6), "pnl_value": round(points * params.point_value, 6),
+    resolved = outcome != "nierozstrzygnieta"
+    points = direction * (exit_price - entry) - params.cost_points - params.slippage_points if resolved else None
+    return {"signal": signal["signal"], "setup": signal["setup"], "entry": entry, "exit": exit_price if resolved else None,
+            "entry_time": entry_time.isoformat(), "exit_time": exit_time.isoformat() if resolved else None,
+            "hold_minutes": (exit_time - entry_time).total_seconds() / 60 if resolved else None,
+            "outcome": outcome, "pnl_points": round(points, 6) if points is not None else None,
+            "pnl_value": round(points * params.point_value, 6) if points is not None else None,
             "warsaw_hour": entry_time.astimezone(config.WARSAW).hour}
 
 
@@ -84,17 +91,19 @@ def report(trades: list[dict], signal_count: int) -> dict:
                 "expectancy_points": sum(values) / len(values) if values else 0,
                 "profit_factor": sum(wins) / abs(sum(losses)) if losses else None,
                 "pnl_points": sum(values)}
+    resolved = [trade for trade in trades if trade["pnl_points"] is not None]
     equity = peak = drawdown = 0.0
-    for trade in sorted(trades, key=lambda x: x["exit_time"]):
+    for trade in sorted(resolved, key=lambda x: x["exit_time"]):
         equity += trade["pnl_points"]
         peak = max(peak, equity)
         drawdown = max(drawdown, peak - equity)
-    setups = sorted({x["setup"] for x in trades})
-    hours = sorted({x["warsaw_hour"] for x in trades})
-    return {"instrument": config.DB_SYMBOL, "total_signals": signal_count, **metrics(trades),
+    setups = sorted({x["setup"] for x in resolved})
+    hours = sorted({x["warsaw_hour"] for x in resolved})
+    return {"instrument": config.DB_SYMBOL, "total_signals": signal_count,
+            "unresolved_trades": len(trades) - len(resolved), **metrics(resolved),
             "maximum_drawdown_points": drawdown,
-            "by_setup": {x: metrics([t for t in trades if t["setup"] == x]) for x in setups},
-            "by_warsaw_hour": {str(x): metrics([t for t in trades if t["warsaw_hour"] == x]) for x in hours},
+            "by_setup": {x: metrics([t for t in resolved if t["setup"] == x]) for x in setups},
+            "by_warsaw_hour": {str(x): metrics([t for t in resolved if t["warsaw_hour"] == x]) for x in hours},
             "journal": trades}
 
 

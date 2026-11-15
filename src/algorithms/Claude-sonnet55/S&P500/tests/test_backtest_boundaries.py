@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backtest import TradeParameters, run_backtest, simulate_trade
+from backtest import TradeParameters, report, run_backtest, simulate_trade
 
 
 def _row(stamp, close=6000.0, high=6001.0, low=5999.0):
@@ -85,3 +85,47 @@ def test_backtest_supplies_only_past_rows_and_historical_now():
         run_backtest(rows)
     assert [length for length, _, _ in observations] == [1, 2, 3, 4]
     assert all(now == last + timedelta(minutes=1) for _, now, last in observations)
+
+
+def test_missing_candle_or_end_of_history_is_unresolved():
+    """Nieznany przebieg nie jest zamieniany na fikcyjne zamknięcie transakcji."""
+    stamp = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
+    entry = _row(stamp)
+    after_gap = _row(stamp + timedelta(minutes=2), high=6003.0)
+    for rows in ([entry], [entry, after_gap]):
+        trade = simulate_trade(rows, 0, _signal(), TradeParameters())
+        assert trade["outcome"] == "nierozstrzygnieta"
+        assert trade["exit"] is None
+        assert trade["pnl_points"] is None
+        result = report([trade], 1)
+        assert result["total_signals"] == 1
+        assert result["unresolved_trades"] == 1
+        assert result["trades"] == 0
+        assert result["journal"] == [trade]
+
+
+def test_last_available_candle_closes_exactly_at_time_limit():
+    """Świeca kończąca się w chwili limitu wystarcza do rozliczenia pozycji."""
+    stamp = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
+    rows = [_row(stamp + timedelta(minutes=i)) for i in range(21)]
+    trade = simulate_trade(rows, 0, _signal(), TradeParameters())
+    assert trade["outcome"] == "limit_czasu"
+    assert trade["hold_minutes"] == 20
+    assert trade["pnl_points"] == -0.6
+
+
+def test_report_excludes_only_unresolved_trades():
+    """Metryki i obsunięcie uwzględniają wyłącznie rozstrzygnięte pozycje."""
+    stamp = datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc)
+    unresolved = simulate_trade([_row(stamp)], 0, _signal(), TradeParameters())
+    resolved = simulate_trade(
+        [_row(stamp), _row(stamp + timedelta(minutes=1), low=5997.0)],
+        0, _signal(), TradeParameters(),
+    )
+    result = report([unresolved, resolved], 2)
+    assert result["total_signals"] == 2
+    assert result["unresolved_trades"] == 1
+    assert result["trades"] == 1
+    assert result["expectancy_points"] == -2.6
+    assert result["maximum_drawdown_points"] == 2.6
+    assert result["by_setup"]["TREND_PULLBACK"]["trades"] == 1

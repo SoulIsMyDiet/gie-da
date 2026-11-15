@@ -2,11 +2,25 @@
 
 import json
 import os
+from heapq import heappush, heapreplace
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 
 import config
 from schedule import as_utc
+
+
+# Backend: granice wynikają z podpisanej kolumny SMALLINT, nie ze strefy Warszawy.
+_MIN_OFFSET_MINUTES = -32768
+_MAX_OFFSET_MINUTES = 32767
+_MICROSECONDS_PER_MINUTE = 60_000_000
+_CANDLE_PAGE_SIZE = 1024
+
+
+def _microseconds(value: datetime) -> int:
+    """Zamienia datetime bez strefy na liczbę mikrosekund bez użycia epoki."""
+    return (((value.toordinal() * 24 + value.hour) * 60 + value.minute) * 60
+            + value.second) * 1_000_000 + value.microsecond
 
 
 class SP500Storage:
@@ -33,25 +47,80 @@ class SP500Storage:
         connection = self._connect()
         cursor = None
         try:
-            cursor = connection.cursor()
-            cursor.execute(
-                """SELECT `datetime`, utc_offset_minutes FROM candles
-                   WHERE symbol = %s
-                     AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) <= %s
-                   ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC
-                   LIMIT 1""",
-                (config.DB_SYMBOL, cutoff.replace(tzinfo=None)),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return row[0].replace(
-                tzinfo=timezone(timedelta(minutes=int(row[1])))
-            ).astimezone(timezone.utc)
+            connection.start_transaction(consistent_snapshot=True, isolation_level="REPEATABLE READ", readonly=True)
+            cursor = connection.cursor(dictionary=True)
+            rows = self._select_candles(cursor, cutoff, 1)
+            return self._candle_utc(rows[0]) if rows else None
         finally:
-            if cursor is not None:
-                cursor.close()
-            connection.close()
+            try:
+                if cursor is not None:
+                    cursor.close()
+            finally:
+                connection.close()
+
+    @staticmethod
+    def _candle_utc(row: dict) -> datetime:
+        """Zwraca czas świecy w UTC; nieprawidłowe przesunięcie lub data zgłasza ValueError."""
+        try:
+            offset = timezone(timedelta(minutes=int(row["utc_offset_minutes"])))
+            return row["datetime"].replace(tzinfo=offset).astimezone(timezone.utc)
+        except (ValueError, OverflowError) as error:
+            raise ValueError("Nieprawidłowa data lub przesunięcie UTC świecy.") from error
+
+    @staticmethod
+    def _select_candles(cursor, cutoff: datetime, limit: int) -> list[dict]:
+        """Czyta najwyżej limit świec do cutoff włącznie, od najstarszej do najnowszej.
+
+        Stronicuje malejąco po kluczu indeksu i porządkuje wybrane wiersze po UTC.
+        Nie zakłada odstępów świec ani konkretnych przesunięć strefy. Błędy bazy
+        oraz nieprawidłowe dane są przekazywane wywołującemu.
+        """
+        cutoff_naive = cutoff.replace(tzinfo=None)
+        cutoff_us = _microseconds(cutoff_naive)
+        try:
+            upper = cutoff_naive + timedelta(minutes=_MAX_OFFSET_MINUTES)
+        except OverflowError:
+            upper = datetime.max
+        candidates = []
+        last_key = None
+        while True:
+            if last_key is None:
+                cursor.execute(
+                    """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
+                       FROM candles WHERE symbol = %s AND `datetime` <= %s
+                       ORDER BY `datetime` DESC, utc_offset_minutes DESC LIMIT %s""",
+                    (config.DB_SYMBOL, upper, _CANDLE_PAGE_SIZE))
+            else:
+                cursor.execute(
+                    """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
+                       FROM candles WHERE symbol = %s AND `datetime` <= %s
+                       AND (`datetime` < %s OR (`datetime` = %s AND utc_offset_minutes < %s))
+                       ORDER BY `datetime` DESC, utc_offset_minutes DESC LIMIT %s""",
+                    (config.DB_SYMBOL, upper, last_key[0], last_key[0], last_key[1], _CANDLE_PAGE_SIZE))
+            rows = cursor.fetchall()
+            if not rows:
+                break
+            for row in rows:
+                wall = row["datetime"]
+                offset = int(row["utc_offset_minutes"])
+                if not _MIN_OFFSET_MINUTES <= offset <= _MAX_OFFSET_MINUTES:
+                    raise ValueError("Przesunięcie UTC świecy wykracza poza zakres SMALLINT.")
+                utc_us = _microseconds(wall) - offset * _MICROSECONDS_PER_MINUTE
+                if utc_us <= cutoff_us:
+                    entry = (utc_us, wall, offset, row)
+                    if len(candidates) < limit:
+                        heappush(candidates, entry)
+                    elif entry[:3] > candidates[0][:3]:
+                        heapreplace(candidates, entry)
+            last_row = rows[-1]
+            last_key = (last_row["datetime"], int(last_row["utc_offset_minutes"]))
+            # Nawet najmniejsze SMALLINT nie przesunie niewczytanej świecy dalej w UTC.
+            if (len(rows) < _CANDLE_PAGE_SIZE or
+                    (len(candidates) == limit and
+                     _microseconds(last_key[0]) - _MIN_OFFSET_MINUTES * _MICROSECONDS_PER_MINUTE
+                     < candidates[0][0])):
+                break
+        return [entry[3] for entry in sorted(candidates)]
 
     def latest_processed_open(self) -> datetime | None:
         """Odczytuje otwarcie ostatniej zapisanej świecy strategii lub None."""
@@ -103,30 +172,26 @@ class SP500Storage:
     def load_context(self, cutoff: datetime, limit: int = config.HISTORY_LIMIT) -> tuple[list[dict], dict]:
         """Wczytuje świece do otwarcia cutoff włącznie i wyłącznie wcześniejszy stan sygnałów."""
         cutoff = as_utc(cutoff)
-        if limit < 1:
-            raise ValueError("Limit historii musi być dodatni.")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("Limit historii musi być dodatnią liczbą całkowitą.")
         connection = self._connect()
         cursor = None
         try:
+            connection.start_transaction(consistent_snapshot=True, isolation_level="REPEATABLE READ", readonly=True)
             cursor = connection.cursor(dictionary=True)
-            cursor.execute(
-                """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
-                   FROM candles WHERE symbol = %s
-                   AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) <= %s
-                   ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC LIMIT %s""",
-                (config.DB_SYMBOL, cutoff.replace(tzinfo=None), limit))
             candles = []
-            for row in reversed(cursor.fetchall()):
-                stamp = row["datetime"].replace(
-                    tzinfo=timezone(timedelta(minutes=int(row["utc_offset_minutes"])))).astimezone(timezone.utc)
+            for row in self._select_candles(cursor, cutoff, limit):
+                stamp = self._candle_utc(row)
                 candles.append({"timestamp_utc": stamp, **{key: float(row[key]) for key in ("open", "high", "low", "close")},
                                 "volume": float(row["volume"]) if row["volume"] is not None else None})
             state = self._load_state(cursor, cutoff)
             return candles, state
         finally:
-            if cursor is not None:
-                cursor.close()
-            connection.close()
+            try:
+                if cursor is not None:
+                    cursor.close()
+            finally:
+                connection.close()
 
     @staticmethod
     def _load_state(cursor, cutoff: datetime) -> dict:

@@ -1,6 +1,7 @@
 ﻿"""Backend: ocena trzech setupów ES, ich filtrów i powodów blokady."""
 
-from datetime import datetime, timedelta, timezone
+from collections.abc import Collection
+from datetime import datetime, time, timedelta, timezone
 from math import isfinite
 
 import config
@@ -29,13 +30,13 @@ def _valid_candle(row: dict) -> bool:
 
 
 def _blackout(closed: datetime) -> bool:
-    """Sprawdza stałe okna ET, publikacje ±2 minuty i indywidualne blackouty UTC."""
+    """Sprawdza blokady ET i UTC; blokada końcowa obejmuje także chwilę zamknięcia."""
     local = closed.astimezone(config.NEW_YORK)
     clock = local.time().replace(tzinfo=None)
     if any(_in_window(clock, window) for window in config.FIXED_BLACKOUTS):
         return True
     close_time = cash_close(local.date()).astimezone(timezone.utc)
-    if close_time - timedelta(minutes=config.CLOSING_BLACKOUT_MINUTES) <= closed < close_time:
+    if close_time - timedelta(minutes=config.CLOSING_BLACKOUT_MINUTES) <= closed <= close_time:
         return True
     for event in config.EVENT_TIMES:
         event_time = datetime.combine(local.date(), event, config.NEW_YORK)
@@ -44,20 +45,34 @@ def _blackout(closed: datetime) -> bool:
     return any(as_utc(start) <= closed < as_utc(end) for start, end in config.NEWS_BLACKOUTS)
 
 
-def _score(setup: str, direction: str, params: dict, clock) -> int:
-    """Zwraca ocenę kandydata z premiami za wolumen, płynność, trend i korpus."""
-    result = config.CORE_SCORE
+def _score_details(setup: str, direction: str, params: dict, clock: time) -> tuple[int, list[str]]:
+    """Zwraca ocenę i opisy jej składników dla spełnionego setupu, kierunku, wskaźników i czasu ET."""
+    core_descriptions = {
+        "OPENING_RANGE_BREAKOUT": "pierwsze wybicie zakresu otwarcia, wolumen, korpus, VWAP i zgodne M5",
+        "TREND_PULLBACK": "trend EMA i M5, dotknięcie EMA21, RSI oraz kierunkowa świeca względem VWAP",
+        "VWAP_REVERSION": "niski ER i nachylenie EMA55, powrót w pasmo, RSI, odległość od VWAP i knot",
+    }
+    reasons = [f"Rdzeń {setup} {direction}: {core_descriptions[setup]} (+{config.CORE_SCORE} pkt)"]
+    bonuses = []
     if params["relative_volume"] is not None and params["relative_volume"] >= config.BONUS_VOLUME:
-        result += config.BONUS_SCORE
+        bonuses.append(f"wolumen względny ≥ {config.BONUS_VOLUME:g}")
     if any(_in_window(clock, window) for window in config.LIQUID_WINDOWS):
-        result += config.BONUS_SCORE
+        bonuses.append("okno podwyższonej płynności")
     m5_close, m5_ema = params["m5_close"], params["m5_ema20"]
     aligned = m5_close is not None and m5_ema is not None and ((direction == "LONG" and m5_close > m5_ema) or (direction == "SHORT" and m5_close < m5_ema))
-    if (setup == "TREND_PULLBACK" and params["er"] is not None and params["er"] > config.BONUS_ER) or (setup != "TREND_PULLBACK" and aligned):
-        result += config.BONUS_SCORE
+    if setup == "TREND_PULLBACK" and params["er"] is not None and params["er"] > config.BONUS_ER:
+        bonuses.append(f"ER > {config.BONUS_ER:g}")
+    elif setup != "TREND_PULLBACK" and aligned:
+        bonuses.append("zamknięcie M5 po zgodnej stronie EMA20 M5")
     if params["body_ratio"] >= config.BONUS_BODY:
-        result += config.BONUS_SCORE
-    return result
+        bonuses.append(f"udział korpusu ≥ {config.BONUS_BODY:g}")
+    reasons.extend(f"Bonus: {bonus} (+{config.BONUS_SCORE} pkt)" for bonus in bonuses)
+    return config.CORE_SCORE + len(bonuses) * config.BONUS_SCORE, reasons
+
+
+def _score(setup: str, direction: str, params: dict, clock: time) -> int:
+    """Zwraca ocenę spełnionego setupu dla kierunku, wskaźników i czasu ET."""
+    return _score_details(setup, direction, params, clock)[0]
 
 
 def _candidates(segment: list[dict], params: dict, clock, orb_directions_today) -> list[tuple[str, str, int]]:
@@ -119,12 +134,14 @@ def _candidates(segment: list[dict], params: dict, clock, orb_directions_today) 
     return [(setup, direction, _score(setup, direction, params, clock)) for setup, direction in found]
 
 
-def generate_signal(candles: list[dict], last_signal_time=None, signals_today: int = 0,
-                    orb_directions_today=None, now: datetime | None = None) -> dict:
+def generate_signal(candles: list[dict], last_signal_time: datetime | None = None, signals_today: int = 0,
+                    orb_directions_today: Collection[str] | None = None, now: datetime | None = None) -> dict:
     """Zwraca decyzję dla zamknięcia ostatniej świecy; now to świadomy czas UTC analizy.
 
     Niepoprawne lub powtórzone świece i nieświadome znaczniki czasu zgłaszają ValueError.
     Pusty zbiór lub brak zamkniętych świec zwraca NONE; now pominięte oznacza bieżący czas UTC.
+    Dla celowej analizy historycznej należy przekazać now jako czas zamknięcia świecy;
+    starsze dane oceniane poza oknem dodatkowo otrzymują outside_session.
     """
     result = {"instrument": config.INSTRUMENT, "algorithm_name": config.STRATEGY_NAME,
               "price": None, "timestamp": None, "timestamp_epoch": None,
@@ -144,8 +161,6 @@ def generate_signal(candles: list[dict], last_signal_time=None, signals_today: i
     stamps = [as_utc(x["timestamp_utc"]) for x in rows]
     if len(set(stamps)) != len(stamps):
         raise ValueError("Historia zawiera zduplikowane otwarcia świec.")
-    if any(not is_trading_minute(stamp) for stamp in stamps):
-        raise ValueError("Historia zawiera świecę poza harmonogramem dostaw ES.")
     opened, current = stamps[-1], rows[-1]
     closed = opened + timedelta(minutes=1)
     age = (reference - closed).total_seconds() / 60
@@ -156,12 +171,24 @@ def generate_signal(candles: list[dict], last_signal_time=None, signals_today: i
                   timestamp_epoch=int(closed.timestamp()), candle_open_time=opened.astimezone(config.WARSAW).isoformat(),
                   candle_open_epoch=int(opened.timestamp()))
     blocked = result["blocked_by"]
-    if not is_signal_window(closed):
+    stale = age > config.MAX_STALE_MINUTES
+    # Czas otwarcia decyduje o dostawie, zamknięcia o oknie sygnałowym.
+    # Zegar analizy ma znaczenie tylko dla przeterminowanych danych, nie dla
+    # prawidłowej świecy zamkniętej tuż przed końcem okna.
+    if (not is_trading_minute(opened) or not is_signal_window(closed)
+            or (stale and not is_signal_window(reference))):
         blocked.append("outside_session")
-    if age < 0 or age > config.MAX_STALE_MINUTES:
+    if stale:
         blocked.append("stale_data")
     if _blackout(closed):
         blocked.append("news_blackout")
+    if not is_trading_minute(opened):
+        return result
+    # Dane spoza harmonogramu nie należą do żadnego segmentu i nie mogą
+    # wpływać na wskaźniki ani na sprawdzanie brakujących minut.
+    scheduled = [(row, stamp) for row, stamp in zip(rows, stamps) if is_trading_minute(stamp)]
+    rows = [row for row, _ in scheduled]
+    stamps = [stamp for _, stamp in scheduled]
     if last_signal_time is not None and closed - as_utc(last_signal_time) < timedelta(minutes=config.COOLDOWN_MINUTES):
         blocked.append("cooldown")
     if signals_today >= config.MAX_SIGNALS_PER_DAY:
@@ -176,12 +203,16 @@ def generate_signal(candles: list[dict], last_signal_time=None, signals_today: i
             longest = max(longest, consecutive)
         else:
             consecutive = 0
-    if missing_count > config.MAX_MISSING_IN_60 or longest > config.MAX_MISSING_CONSECUTIVE:
+    # Poza oknem zachowujemy liczniki luk, ale nie dodajemy kolejnej blokady.
+    if "outside_session" not in blocked and (
+            missing_count > config.MAX_MISSING_IN_60 or longest > config.MAX_MISSING_CONSECUTIVE):
         blocked.append("data_gap")
     current_segment = segment_id(opened)
     segment = [row for row, stamp in zip(rows, stamps) if segment_id(stamp) == current_segment]
     session = [row for row, stamp in zip(rows, stamps) if stamp.astimezone(config.NEW_YORK).date() == day]
     params = calculate_indicators(segment, session, closed)
+    # Zakres tworzy 15 otwarć 09:30–09:44. O 09:45 ostatni close należy
+    # do własnego zakresu high/low, więc ścisłe wybicie jest wtedy niemożliwe.
     opening = [row for row in session if config.OPENING_START <= as_utc(row["timestamp_utc"]).astimezone(config.NEW_YORK).time().replace(tzinfo=None) < config.OPENING_END]
     top = max((float(x["high"]) for x in opening), default=None)
     bottom = min((float(x["low"]) for x in opening), default=None)
@@ -226,19 +257,23 @@ def generate_signal(candles: list[dict], last_signal_time=None, signals_today: i
         applicable.append((config.WARMUP_PULLBACK, True))
     if _in_window(clock, config.REVERSION_WINDOW):
         applicable.append((config.WARMUP_REVERSION, True))
-    if not applicable or not any(len(segment) >= minimum and ready for minimum, ready in applicable):
+    if applicable and not any(len(segment) >= minimum and ready for minimum, ready in applicable):
         blocked.append("warmup")
     candidates = _candidates(segment, params, clock, orb_directions_today)
     if len({item[1] for item in candidates}) > 1:
         blocked.append("conflicting_setups")
         return result
     if not candidates:
+        if not applicable or "warmup" in blocked:
+            return result
         if params["er"] is not None and config.REVERSION_MAX_ER < params["er"] < config.PULLBACK_MIN_ER:
             blocked.append("regime_unclear")
         else:
             blocked.append("no_setup")
         return result
     setup, direction, score = max(candidates, key=lambda item: item[2])
+    result["reasons"].append(setup)
+    result["reasons"].extend(_score_details(setup, direction, params, clock)[1])
     tp = min(config.TP_ATR * atr, abs(params["vwap"] - price)) if setup == "VWAP_REVERSION" else max(config.MIN_TP, config.TP_ATR * atr)
     sl = config.SL_ATR * atr
     sign = 1 if direction == "LONG" else -1
@@ -250,5 +285,4 @@ def generate_signal(candles: list[dict], last_signal_time=None, signals_today: i
         blocked.append("target_too_small")
     if not blocked:
         result["signal"] = direction
-        result["reasons"].append(setup)
     return result

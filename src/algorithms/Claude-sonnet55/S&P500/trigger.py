@@ -11,12 +11,31 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import config
+from mysql.connector import Error as MySQLError
 from schedule import as_utc, is_signal_window, is_trading_minute
 from signal_logic import generate_signal
 from sound import play_signal_confirmation
 from storage import SP500Storage
 
 logger = logging.getLogger(__name__)
+
+
+def _blocked_candle_result(opened: datetime, now: datetime, reason: str) -> dict:
+    """Zwraca pełny wynik NONE dla świecy opened i przyczyny reason bez liczenia wskaźników.
+
+    now to świadomy czas analizy. Czasy w wyniku opisują wskazaną świecę,
+    a nie zastępcze dane; niepoprawny czas zgłasza ValueError.
+    """
+    result = generate_signal([], now=now)
+    closed = opened + timedelta(minutes=1)
+    result.update(
+        candle_open_time=opened.astimezone(config.WARSAW).isoformat(),
+        candle_open_epoch=int(opened.timestamp()),
+        timestamp=closed.astimezone(config.WARSAW).isoformat(),
+        timestamp_epoch=int(closed.timestamp()),
+        blocked_by=[reason],
+    )
+    return result
 
 
 def analyze_candle(
@@ -32,20 +51,34 @@ def analyze_candle(
         raise ValueError("Otwarcie świecy M1 musi przypadać na pełną minutę.")
     if opened + timedelta(minutes=1) > now:
         logger.info("Świeca %s nie jest jeszcze zamknięta.", opened.isoformat())
-        return {"signal": "NONE", "blocked_by": ["forming_candle"]}, False
+        return _blocked_candle_result(opened, now, "forming_candle"), False
     in_session = is_trading_minute(opened) and is_signal_window(opened + timedelta(minutes=1))
     if not in_session and not allow_outside:
-        return {"signal": "NONE", "blocked_by": ["outside_session"]}, False
-    previous = storage.get_processed_signal(opened)
-    if previous is not None:
+        return _blocked_candle_result(opened, now, "outside_session"), False
+    current_minute = now.replace(second=0, microsecond=0)
+    outside_now = allow_outside and not is_signal_window(current_minute)
+    previous = None if outside_now else storage.get_processed_signal(opened)
+    stale = now - (opened + timedelta(minutes=1)) > timedelta(minutes=config.MAX_STALE_MINUTES)
+    if previous is not None and not (allow_outside and stale):
         logger.debug("Świeca %s była już przeanalizowana.", opened.isoformat())
         return previous, False
     candles, state = storage.load_context(opened)
     if not candles or as_utc(candles[-1]["timestamp_utc"]) != opened:
         logger.debug("Oczekiwanie na świecę %s w bazie.", opened.isoformat())
-        return {"signal": "NONE", "blocked_by": ["missing_candle"]}, False
+        return _blocked_candle_result(opened, now, "missing_candle"), False
     result = generate_signal(candles, now=now, **state)
-    if not in_session:
+    # Koniec okna obejmuje całą minutę, również przy opóźnionych danych.
+    if (in_session and is_signal_window(current_minute) and not is_signal_window(now)
+            and "stale_data" in result["blocked_by"]
+            and "outside_session" in result["blocked_by"]):
+        result["blocked_by"].remove("outside_session")
+    if outside_now:
+        if "outside_session" not in result["blocked_by"]:
+            result["blocked_by"].append("outside_session")
+        result["blocked_by"] = [reason for reason in result["blocked_by"] if reason != "data_gap"]
+        result.update(signal="NONE", setup=None, score=0, tp_price=None, sl_price=None,
+                      tp_points=None, sl_points=None)
+    if previous is not None or not in_session or outside_now or "outside_session" in result.get("blocked_by", []):
         return result, False
     return result, storage.save_signal(result, len(candles))
 
@@ -61,7 +94,10 @@ def run_latest(storage: SP500Storage, now: datetime | None = None) -> tuple[dict
     opened = storage.latest_closed_open(now)
     if opened is None:
         logger.warning("Brak zamkniętych świec ES w bazie.")
-        return generate_signal([], now=now), False
+        result = generate_signal([], now=now)
+        if not is_signal_window(now.replace(second=0, microsecond=0)):
+            result["blocked_by"].append("outside_session")
+        return result, False
     return analyze_candle(storage, opened, now, allow_outside=True)
 
 
@@ -102,23 +138,17 @@ def _emit(result: dict) -> None:
 
 
 def run_loop(storage: SP500Storage, checkpoint_path: Path) -> None:
-    """Czeka na każdą minutę do wyznaczonego limitu, utrwalając stan po jej obsłudze."""
+    """Obsługuje minuty po stanie z pliku; błędy MySQL ponawia bez zmiany stanu.
+
+    Checkpoint ogranicza powtórki po restarcie, ale awaria po zapisie sygnału
+    i przed zapisem pliku może spowodować ponowną próbę analizy.
+    Bez checkpointu pętla zaczyna od ostatniej zamkniętej minuty; zapis w signals
+    sprawdza indywidualnie. Niezapisane wyniki NONE nie mają wtedy pamięci.
+    """
     checkpoint = load_checkpoint(checkpoint_path)
-    stored = storage.latest_processed_open()
-    if stored is not None and (checkpoint is None or stored > checkpoint):
-        checkpoint = stored
     latest = latest_closed_open(datetime.now(timezone.utc))
-    earliest_live_checkpoint = latest - timedelta(minutes=1)
-    if checkpoint is not None and checkpoint < earliest_live_checkpoint:
-        logger.warning(
-            "Po restarcie pominięto przeterminowane minuty od %s do %s.",
-            (checkpoint + timedelta(minutes=1)).isoformat(),
-            earliest_live_checkpoint.isoformat(),
-        )
-        checkpoint = earliest_live_checkpoint
-        save_checkpoint(checkpoint_path, checkpoint)
-    elif checkpoint is None:
-        checkpoint = earliest_live_checkpoint
+    if checkpoint is None:
+        checkpoint = latest - timedelta(minutes=1)
 
     while True:
         now = datetime.now(timezone.utc)
@@ -129,23 +159,27 @@ def run_loop(storage: SP500Storage, checkpoint_path: Path) -> None:
         closed = opened + timedelta(minutes=1)
         if not is_trading_minute(opened) or not is_signal_window(closed):
             checkpoint = opened
-            save_checkpoint(checkpoint_path, checkpoint)
             continue
         deadline = closed + timedelta(seconds=config.WAIT_FOR_CANDLE_SECONDS)
-        if now > deadline:
-            logger.warning("Pominięto minutę %s: upłynął czas oczekiwania na świecę.", opened.isoformat())
-            checkpoint = opened
-            save_checkpoint(checkpoint_path, checkpoint)
-            continue
-        result, saved = analyze_candle(storage, opened, now)
-        if "missing_candle" in result.get("blocked_by", []):
+        try:
+            result, saved = analyze_candle(storage, opened, now)
+        except MySQLError:
+            logger.exception("Błąd bazy dla minuty %s; ponawianie odczytu.", opened.isoformat())
             time.sleep(config.POLL_INTERVAL_SECONDS)
             continue
+        if "missing_candle" in result.get("blocked_by", []):
+            if now < deadline:
+                time.sleep(config.POLL_INTERVAL_SECONDS)
+                continue
+            logger.warning("Pominięto minutę %s: brak świecy po czasie oczekiwania.", opened.isoformat())
+            save_checkpoint(checkpoint_path, opened)
+            checkpoint = opened
+            continue
+        save_checkpoint(checkpoint_path, opened)
+        checkpoint = opened
         if saved and config.BEEP_ENABLED:
             play_signal_confirmation()
         _emit(result)
-        checkpoint = opened
-        save_checkpoint(checkpoint_path, checkpoint)
 
 
 def main() -> int:
@@ -174,7 +208,7 @@ def main() -> int:
     except KeyboardInterrupt:
         logger.info("Przerwano działanie strategii.")
         return 1 if args.api_candle_open_epoch is not None else 0
-    except (OSError, ValueError, RuntimeError) as error:
+    except (OSError, ValueError, RuntimeError, MySQLError) as error:
         logger.exception("Błąd działania strategii: %s", error)
         return 1
 

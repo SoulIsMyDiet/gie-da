@@ -271,10 +271,10 @@ def test_early_close_blackout_tracks_session_close():
         assert not signal_logic._blackout(datetime(2026, 11, 16, 17, 54, tzinfo=UTC))
         assert signal_logic._blackout(datetime(2026, 11, 16, 17, 55, tzinfo=UTC))
         assert signal_logic._blackout(datetime(2026, 11, 16, 17, 59, tzinfo=UTC))
-        assert not signal_logic._blackout(datetime(2026, 11, 16, 18, 0, tzinfo=UTC))
+        assert signal_logic._blackout(datetime(2026, 11, 16, 18, 0, tzinfo=UTC))
         assert not signal_logic._blackout(datetime(2026, 11, 16, 20, 55, tzinfo=UTC))
     assert signal_logic._blackout(datetime(2026, 11, 16, 20, 55, tzinfo=UTC))
-    assert not signal_logic._blackout(datetime(2026, 11, 16, 21, 0, tzinfo=UTC))
+    assert signal_logic._blackout(datetime(2026, 11, 16, 21, 0, tzinfo=UTC))
 
 
 def test_high_impact_day_is_informational_and_params_have_aliases():

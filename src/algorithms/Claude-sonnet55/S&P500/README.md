@@ -45,6 +45,9 @@ EMA20 M5 potrzebuje odpowiednio długiej historii kompletnych kubełków. Świec
 przed 09:30 w tym samym segmencie mogą rozgrzewać wskaźniki, ale VWAP i zakres
 otwarcia liczone są od 09:30 ET. Brak wartości lub zerowy wolumen nie jest
 zastępowany wymyślonymi danymi.
+Pierwsze wybicie ORB może zostać potwierdzone po zamknięciu świecy o 09:46 ET:
+świeca zamknięta o 09:45 należy jeszcze do zakresu otwarcia i nie może
+zamknąć się poza własnym maksimum lub minimum.
 
 W `NEWS_BLACKOUTS` można dodać świadome strefy przedziały dat, np. przed FOMC
 13:55–14:45 ET. Należy też uzupełniać zdarzenia CPI, NFP, PCE i wystąpienia
@@ -70,12 +73,32 @@ w tej samej transakcji. Raport potencjału nie jest backtestem: nie symuluje
 SL/TP, a jego wyliczenie `100zl_deal` nie uwzględnia specyfikacji futures.
 
 **Ograniczenie wybranego wyzwalania API:** bez osobnej pętli aplikacja nie
-wykryje braku świecy po 20 sekundach i nie przeanalizuje automatycznie świecy
-uzupełnionej później w backfillu. Ręczny tryb `--loop` odczytuje bazę co
+wykryje braku świecy po 20 sekundach, nie przeanalizuje automatycznie świecy
+zapisanej jako formowana po jej późniejszym zamknięciu ani świecy uzupełnionej
+w backfillu. Błąd strategii po zapisie świecy wymaga osobnego wznowienia;
+ponowny zapis identycznej świecy, który nic nie zmienia, nie uruchamia analizy. Ręczny tryb
+`--loop` odczytuje bazę co
 sekundę, czeka maksymalnie 20 sekund po zamknięciu i pomija brakującą minutę.
-Stan ostatnio obsłużonej minuty jest utrwalany w pliku z `config.py` oraz
-porównywany z bazą. Nie uruchamiaj go równolegle z automatyczną integracją
-API, jeśli nie chcesz wykonywać zbędnej podwójnej analizy.
+Stan ostatnio obsłużonej minuty jest utrwalany w pliku z `config.py`;
+przed analizą pojedynczej świecy pętla sprawdza też, czy jej wynik jest już
+zapisany w bazie. Bez pliku stanu zaczyna od najnowszej zamkniętej minuty.
+Nie uruchamiaj jej równolegle z automatyczną integracją
+API, jeśli nie chcesz wykonywać zbędnej podwójnej analizy. Unikalny klucz
+gwarantuje najwyżej jeden **zapis**, nie jednokrotne wykonanie obliczeń przez
+równoległe procesy. Przy `SAVE_NONE_SIGNALS = False` baza nie zawiera śladu
+analizy NONE; plik stanu pętli nie obejmuje wywołań przez API.
+Po błędzie MySQL ręczna pętla zapisuje komunikat i ponawia odczyt bez
+przesuwania stanu. Po odzyskaniu połączenia sprawdza też dostępność świecy,
+której czas oczekiwania już upłynął; brakującą minutę pomija.
+Niepoprawny plik stanu, nieprawidłowe dane i błędy zapisu pliku kończą program
+z komunikatem zamiast zgadywania stanu. Dla świecy formowanej lub nieobecnej
+wynik diagnostyczny zawiera jej nominalne czasy, ale `price` wynosi `null`.
+
+Odczyt historii wykorzystuje indeks `(symbol, datetime, utc_offset_minutes)`
+i porządkuje wyniki według UTC, również przy cofnięciu zegara. Ponieważ zakres
+kolumny offsetu dopuszcza wartości większe niż faktyczne przesunięcia Warszawy,
+odczyt może wymagać przejrzenia ponad 22 dni danych albo całej dostępnej
+historii, gdy świec jest za mało.
 
 ## Uruchamianie
 
@@ -116,8 +139,10 @@ python backtest.py --end-epoch 1794841200 --limit 10000 --cost 0.6
 Symulacja analizuje świece chronologicznie bez podglądu przyszłości, rozstrzyga
 jednoczesne osiągnięcie TP i SL na korzyść SL i odejmuje koszt transakcji.
 Pozycja trwa najwyżej 20 minut i nie przekracza segmentu ani końca sesji
-kasowej. Przy nieciągłości danych kończy się na ostatniej dostępnej cenie,
-ponieważ dalszego przebiegu nie da się wiarygodnie odtworzyć. Raport zawiera
+kasowej. Przy luce lub końcu historii przed rozstrzygnięciem transakcja jest
+oznaczana `nierozstrzygnieta` w dzienniku i wykluczana z metryk. Pole
+`unresolved_trades` podaje liczbę takich transakcji; ich wynik i cena wyjścia
+są `null`, ponieważ nie można wiarygodnie odtworzyć dalszego przebiegu. Raport zawiera
 liczbę sygnałów, win rate, średnią wygraną i stratę, expectancy, profit
 factor, maksymalne obsunięcie oraz wyniki według setupu i godziny Warszawy.
 To symulacja, bez rzeczywistych bid/ask i modelu płynności.

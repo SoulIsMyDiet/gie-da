@@ -240,6 +240,16 @@ def test_none_does_not_create_potential():
     connection.commit.assert_called_once()
 
 
+def test_none_disabled_does_not_open_connection():
+    """Wyłączenie tymczasowego zapisu NONE nie wymaga pozostałych zmian."""
+    result = generate_signal(history(), now=history()[-1]["timestamp_utc"] + timedelta(minutes=1))
+    assert result["signal"] == "NONE"
+    with patch.object(config, "SAVE_NONE_SIGNALS", False), \
+            patch.object(SP500Storage, "_connect") as connect:
+        assert not SP500Storage({}).save_signal(result, 120)
+    connect.assert_not_called()
+
+
 @pytest.mark.parametrize("error_number", [1062, 1452])
 def test_potential_failure_rolls_back_signal_and_propagates(error_number):
     """Każdy błąd drugiego INSERT, nawet duplikat, cofa sygnał i jest zgłaszany."""
