@@ -78,7 +78,7 @@ from sound import play_signal_confirmation, play_error_alert
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(name)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    datefmt="%Y-%m-%d %H:%M:%S&P500",
 )
 logger = logging.getLogger(__name__)
 #sam skrypt napisany za pomoca calude sonnet 5.5 w przciwienstwie do reszty kodu napisanego prze chat gpt6 luna

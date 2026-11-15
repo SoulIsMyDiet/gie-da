@@ -668,7 +668,7 @@ class MarketDataRepository:
         )
         latest_saved_time = latest_saved_candle.datetime.astimezone(
             timezone.utc
-        ).strftime("%Y-%m-%d %H:%M:%S")
+        ).strftime("%Y-%m-%d %H:%M:%S&P500")
         return (
             newly_detected_gap_count,
             len(open_market_candles),
@@ -1079,7 +1079,7 @@ class MarketDataRepository:
         return (
             True,
             [
-                missing_time.strftime("%Y-%m-%d %H:%M:%S")
+                missing_time.strftime("%Y-%m-%d %H:%M:%S&P500")
                 for missing_time in latest_missing_times
             ],
             total_missing_count,
@@ -1170,7 +1170,7 @@ class MarketDataRepository:
                 return [
                     (
                         symbol,
-                        candle_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+                        candle_datetime.strftime("%Y-%m-%d %H:%M:%S&P500"),
                         open_price,
                         high_price,
                         low_price,
@@ -1278,11 +1278,11 @@ class MarketDataRepository:
                 return [
                     (
                         symbol,
-                        candle_datetime_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                        candle_datetime_utc.strftime("%Y-%m-%d %H:%M:%S&P500"),
                         status,
-                        detected_at_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                        detected_at_utc.strftime("%Y-%m-%d %H:%M:%S&P500"),
                         (
-                            filled_at_utc.strftime("%Y-%m-%d %H:%M:%S")
+                            filled_at_utc.strftime("%Y-%m-%d %H:%M:%S&P500")
                             if filled_at_utc is not None
                             else None
                         ),
@@ -1334,7 +1334,7 @@ class MarketDataRepository:
                 return [
                     (
                         str(signal_id),
-                        signal_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+                        signal_datetime.strftime("%Y-%m-%d %H:%M:%S&P500"),
                         product,
                         price,
                         signal_direction,
