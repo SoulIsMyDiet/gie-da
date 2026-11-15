@@ -4,7 +4,9 @@
 import copy
 import importlib.util
 import json
+import logging
 import os
+import subprocess
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -114,6 +116,56 @@ from chat_gpt6_dax40.storage import DAX40SignalStorage  # noqa: E402
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
 GROK45_ANALYSIS_WINDOW = 100
+SP500_PROCESS_TIMEOUT_SECONDS = 30
+logger = logging.getLogger(__name__)
+
+
+class SP500StrategyError(RuntimeError):
+    """Sygnalizuje błąd procesu strategii po zapisaniu świecy w bazie."""
+
+
+def _run_sp500_strategy(candle_open_time: datetime) -> bool:
+    """Analizuje zapisaną świecę ES w osobnym procesie; zwraca żądanie dźwięku.
+
+    Izolacja procesu chroni płaskie importy strategii przed kolizją z modułami
+    innych algorytmów. Błąd procesu lub przekroczenie czasu przerywa żądanie.
+    """
+    algorithm_directory = Path(__file__).resolve().parent / "sp500_algorithm"
+    if not algorithm_directory.is_dir():
+        algorithm_directory = (
+            Path(__file__).resolve().parents[2]
+            / "algorithms"
+            / "Claude-sonnet55"
+            / "S&P500"
+        )
+    command = [
+        sys.executable,
+        str(algorithm_directory / "S&P500StrategyV1.py"),
+        "--api-candle-open-epoch",
+        str(int(candle_open_time.timestamp())),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=SP500_PROCESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise SP500StrategyError(
+            "Nie udało się uruchomić strategii S&P 500."
+        ) from error
+    if completed.returncode == 0:
+        return True
+    if completed.returncode in (3, 4):
+        return False
+    logger.error(
+        "Strategia S&P 500 zakończyła się błędem %s: %s",
+        completed.returncode,
+        completed.stderr.strip(),
+    )
+    raise SP500StrategyError("Strategia S&P 500 zakończyła się błędem.")
 
 
 class CandleRecord(BaseModel):
@@ -1550,7 +1602,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     grok45_v2_signal = _generate_grok45_v2_signal(
                         updated_grok45_v2_candles
                     )
-            new_gap_count, _, _, signal_save_count = (
+            new_gap_count, saved_candle_count, _, signal_save_count = (
                 request.app.state.repository.save_candle(
                     candle, signal, grok45_v2_signal
                 )
@@ -1633,6 +1685,14 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                             request.app.state.chat_dax40_last_processed_timestamp = (
                                 candle_timestamp
                             )
+            if (
+                candle.symbol == "ES"
+                and saved_candle_count
+                and candle.datetime.astimezone(timezone.utc)
+                    + timedelta(minutes=1) <= datetime.now(timezone.utc)
+            ):
+                if _run_sp500_strategy(candle.datetime.astimezone(timezone.utc)):
+                    signal_save_count += 1
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.grok45_v2_candles = (
                 updated_grok45_v2_candles
@@ -1646,6 +1706,11 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
         raise HTTPException(
             status_code=409,
             detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
+        ) from error
+    except SP500StrategyError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się uruchomić strategii S&P 500; świeca została zapisana.",
         ) from error
     
     # Front - Sygnał dźwiękowy (3 piknięcia) gdy została wykryta luka w świecach
