@@ -23,14 +23,7 @@ def market_open(instant: datetime) -> bool:
     """Zwraca stan rynku w świadomej chwili; nieświadomy czas powoduje ValueError."""
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise ValueError("Czas rynku musi zawierać strefę czasową.")
-    if not is_market_open(CONFIG.market_symbol, instant):
-        return False
-    local = instant.astimezone(NEW_YORK)
-    if local.weekday() < 4 and local.hour == 17:
-        return False
-    if local.weekday() == 6 and local.hour < 18:
-        return False
-    return True
+    return is_market_open(CONFIG.market_symbol, instant)
 
 
 def session_start(instant: datetime) -> datetime:

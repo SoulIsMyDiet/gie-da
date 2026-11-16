@@ -20,12 +20,9 @@ przypada odpowiednio w poniedziałek o 00:00 albo w niedzielę o 23:00.
 Konwersja używa `zoneinfo`, bez stałego przesunięcia. Sesyjny VWAP rozpoczyna
 się o 18:00 ET.
 
-Istniejący profil pobierania `gold_spot` nie zawiera dziennej przerwy i
-dopuszcza otwarcie w niedzielę o 17:00 ET. Nie zmieniano tego mechanizmu:
-zapisane w `candle_gaps` informacje mogą oznaczać niektóre zaplanowane minuty
-jako brakujące, lecz strategia stosuje powyższy własny filtr. Trzy kolejne
-nieoczekiwane brakujące minuty rozpoczynają nowy okres rozgrzewki; pojedynczy
-brak ani regularna przerwa nie resetują wskaźników.
+Profil `gold_spot` jest wspólnym źródłem kalendarza dla pobierania i strategii.
+Trzy kolejne nieoczekiwane brakujące minuty rozpoczynają nowy okres rozgrzewki;
+pojedynczy brak ani regularna przerwa nie resetują wskaźników.
 
 ## Ograniczenia
 

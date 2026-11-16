@@ -102,14 +102,22 @@ def _evaluate_direction(direction: str, candle: dict[str, Any], previous: dict[s
               m1["rsi"] > prior_m1["rsi"]) if long else (
               CONFIG.short_rsi_minimum <= m1["rsi"] <= CONFIG.short_rsi_maximum and
               m1["rsi"] < prior_m1["rsi"])
+    # Backend: sygnał pullbacku powstaje przy nowym przecięciu EMA9 po korekcie,
+    # a nie na każdej kolejnej świecy, która nadal zamyka się po stronie trendu.
     pullback = trend and (previous["low"] <= prior_m1[f"ema_{CONFIG.ema_fast}"] +
-                          CONFIG.pullback_distance_atr * prior_m1["atr"] and price > fast
+                          CONFIG.pullback_distance_atr * prior_m1["atr"] and
+                          previous["close"] <= prior_m1[f"ema_{CONFIG.ema_fast}"] and price > fast
                           if long else
                           previous["high"] >= prior_m1[f"ema_{CONFIG.ema_fast}"] -
-                          CONFIG.pullback_distance_atr * prior_m1["atr"] and price < fast)
-    breakout = ((price > high + CONFIG.breakout_buffer_atr * m1["atr"] and fast > slow)
+                          CONFIG.pullback_distance_atr * prior_m1["atr"] and
+                          previous["close"] >= prior_m1[f"ema_{CONFIG.ema_fast}"] and price < fast)
+    breakout = ((price > high + CONFIG.breakout_buffer_atr * m1["atr"] and
+                 price > m1["bb_upper"] and
+                 previous["close"] <= prior_m1["bb_upper"] and fast > slow)
                 if long else
-                (price < low - CONFIG.breakout_buffer_atr * m1["atr"] and fast < slow))
+                (price < low - CONFIG.breakout_buffer_atr * m1["atr"] and
+                 price < m1["bb_lower"] and
+                 previous["close"] >= prior_m1["bb_lower"] and fast < slow))
     setups = [name for name, match in (("TREND_PULLBACK", pullback),
                                       ("MOMENTUM_BREAKOUT", breakout)) if match]
     components = {
@@ -120,7 +128,8 @@ def _evaluate_direction(direction: str, candle: dict[str, Any], previous: dict[s
         "vwap": CONFIG.weight_vwap if (price > vwap if long else price < vwap) else 0,
         "setup": CONFIG.weight_setup if setups else 0,
     }
-    checks = {"m5_not_opposed": m5_not_opposed, "rsi_momentum": rsi_ok,
+    checks = {"m5_not_opposed": m5_not_opposed, "m5_alignment": m5_aligned,
+              "rsi_momentum": rsi_ok,
               "setup_present": bool(setups), "minimum_score": sum(components.values()) >= CONFIG.minimum_score}
     return {"setups": setups, "checks": checks, "score_components": components,
             "setup_checks": {"trend_pullback": pullback, "momentum_breakout": breakout,
@@ -238,6 +247,10 @@ def _generate_signal(candles: list[dict], now: datetime | None = None) -> dict:
                           "stop_loss": last["close"] - sign * CONFIG.stop_loss_atr * m1["atr"],
                           "take_profit": last["close"] + sign * CONFIG.take_profit_atr * m1["atr"],
                           "max_hold_minutes": CONFIG.max_hold_minutes}
+        params["risk"]["risk_reward_ratio"] = (
+            abs(params["risk"]["take_profit"] - last["close"]) /
+            abs(last["close"] - params["risk"]["stop_loss"])
+        )
         if params["risk"]["stop_loss"] <= 0 or params["risk"]["take_profit"] <= 0:
             result["signal"] = "NONE"
             params["reasons"].append("Niepoprawny, niedodatni poziom ryzyka.")

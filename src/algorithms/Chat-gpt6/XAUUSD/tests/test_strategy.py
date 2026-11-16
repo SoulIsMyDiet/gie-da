@@ -83,10 +83,25 @@ def test_real_signals_and_risk(direction, expected):
         result["price"] - direction * 1.5 * params["indicators"]["m1"]["atr"])
     assert params["risk"]["take_profit"] == pytest.approx(
         result["price"] + direction * 2 * params["indicators"]["m1"]["atr"])
+    assert params["risk"]["risk_reward_ratio"] == pytest.approx(2 / 1.5)
     assert params["risk"]["max_hold_minutes"] == 20
     assert result["candle_open_epoch"] == int(rows[-1]["timestamp_utc"].timestamp())
     assert datetime.fromisoformat(result["timestamp"]) == rows[-1]["timestamp_utc"] + timedelta(minutes=1)
     json.dumps(result, allow_nan=False)
+
+
+def test_trend_pullback_does_not_repeat_without_new_ema_crossing():
+    """Kontynuacja ruchu po sygnale nie generuje drugiego pullbacku bez nowej korekty."""
+    rows = candles()
+    first = logic.generate_signal(rows, START + timedelta(minutes=len(rows)))
+    assert first["signal"] == "LONG"
+    last = rows[-1]
+    close = last["close"] + 0.02
+    rows.append({"timestamp_utc": last["timestamp_utc"] + timedelta(minutes=1),
+                 "open": last["close"], "high": close + 0.08,
+                 "low": close - 0.08, "close": close, "volume": 100.0})
+    continued = logic.generate_signal(rows, START + timedelta(minutes=len(rows)))
+    assert "TREND_PULLBACK" not in continued["signal_parameters"]["candidates"]["LONG"]["setups"]
 
 
 def test_no_lookahead_on_last_m1_and_m5():
@@ -135,6 +150,9 @@ def test_breakout_and_rsi_hard_gate(direction, expected):
     result = logic.generate_signal(rows, START + timedelta(minutes=690))
     assert result["signal"] == expected
     assert "MOMENTUM_BREAKOUT" in result["signal_parameters"]["candidates"][expected]["setups"]
+    bands = result["signal_parameters"]["indicators"]["m1"]
+    assert (result["price"] > bands["bb_upper"] if direction > 0 else
+            result["price"] < bands["bb_lower"])
     rows[-1]["close"] += direction * 0.3
     rows[-1]["high"] = max(rows[-1]["high"], rows[-1]["close"] + 0.01)
     rows[-1]["low"] = min(rows[-1]["low"], rows[-1]["close"] - 0.01)
@@ -143,16 +161,51 @@ def test_breakout_and_rsi_hard_gate(direction, expected):
     assert not result["signal_parameters"]["candidates"][expected]["checks"]["rsi_momentum"]
 
 
+def test_breakout_does_not_repeat_before_price_returns_inside_bollinger():
+    """Nowe maksimum bez powrotu do pasma nie uzbraja ponownie breakout LONG."""
+    rows = candles()
+    rows[-1]["close"] += 0.5
+    rows[-1]["high"] = max(rows[-1]["open"], rows[-1]["close"] + 0.01)
+    rows[-1]["low"] = min(rows[-1]["open"], rows[-1]["close"] - 0.01)
+    first = logic.generate_signal(rows, START + timedelta(minutes=len(rows)))
+    assert "MOMENTUM_BREAKOUT" in first["signal_parameters"]["candidates"]["LONG"]["setups"]
+    previous = rows[-1]
+    close = previous["close"] + 0.15
+    opened = previous["close"]
+    rows.append({"timestamp_utc": previous["timestamp_utc"] + timedelta(minutes=1),
+                 "open": opened, "high": max(opened, close + 0.01),
+                 "low": min(opened, close - 0.01), "close": close, "volume": 100.0})
+    continued = logic.generate_signal(rows, START + timedelta(minutes=len(rows)))
+    assert "MOMENTUM_BREAKOUT" not in continued["signal_parameters"]["candidates"]["LONG"]["setups"]
+
+
 def test_m5_opposition_blocks_even_high_score():
     """Samo przekroczenie progu punktowego nie zastępuje wymaganego kierunku M5."""
     row = {"close": 105, "low": 100, "high": 106}
-    previous = {"low": 99, "high": 104}
-    m1 = {"ema_9": 103, "ema_21": 102, "ema_50": 101, "rsi": 60, "atr": 1}
-    prior = {"ema_9": 102, "rsi": 55, "atr": 1}
+    previous = {"low": 99, "high": 104, "close": 101}
+    m1 = {"ema_9": 103, "ema_21": 102, "ema_50": 101, "rsi": 60,
+          "atr": 1, "bb_upper": 106, "bb_lower": 95}
+    prior = {"ema_9": 102, "rsi": 55, "atr": 1, "bb_upper": 106, "bb_lower": 95}
     m5 = {"ema_9": 100, "ema_21": 101, "ema_50": 102}
     candidate = logic._evaluate_direction("LONG", row, previous, m1, prior, m5, 100, 104, 98)
     assert candidate["score"] >= config.CONFIG.minimum_score
     assert not candidate["checks"]["m5_not_opposed"]
+    assert not candidate["checks"]["m5_alignment"]
+    assert not candidate["eligible"]
+
+
+def test_m5_misalignment_blocks_high_score_even_when_not_opposed():
+    """Niepełne uporządkowanie EMA M5 blokuje kandydata mimo wysokiej punktacji."""
+    row = {"close": 105, "low": 100, "high": 106}
+    previous = {"low": 99, "high": 104, "close": 101}
+    m1 = {"ema_9": 103, "ema_21": 102, "ema_50": 101, "rsi": 60,
+          "atr": 1, "bb_upper": 106, "bb_lower": 95}
+    prior = {"ema_9": 102, "rsi": 55, "atr": 1, "bb_upper": 106, "bb_lower": 95}
+    m5 = {"ema_9": 100, "ema_21": 101, "ema_50": 99}
+    candidate = logic._evaluate_direction("LONG", row, previous, m1, prior, m5, 100, 104, 98)
+    assert candidate["score"] >= config.CONFIG.minimum_score
+    assert candidate["checks"]["m5_not_opposed"]
+    assert not candidate["checks"]["m5_alignment"]
     assert not candidate["eligible"]
 
 
@@ -200,6 +253,8 @@ def test_dst_and_market_profile_overlay(monkeypatch):
     """Weryfikuje kalendarz ET/PL, DST oraz użycie bazowego market_products."""
     assert not schedule.market_open(datetime(2026, 3, 9, 21, 0, tzinfo=UTC))
     assert schedule.market_open(datetime(2026, 3, 9, 22, 0, tzinfo=UTC))
+    assert not schedule.market_open(datetime(2026, 1, 5, 22, 0, tzinfo=UTC))
+    assert schedule.market_open(datetime(2026, 1, 5, 23, 0, tzinfo=UTC))
     assert not schedule.market_open(datetime(2026, 3, 8, 21, 0, tzinfo=UTC))
     assert schedule.market_open(datetime(2026, 3, 8, 22, 0, tzinfo=UTC))
     assert schedule.session_start(datetime(2026, 3, 8, 22, 0, tzinfo=UTC)).hour == 22

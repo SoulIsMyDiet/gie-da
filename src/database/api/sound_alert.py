@@ -3,10 +3,9 @@ Backend
 Moduł do generowania sygnałów dźwiękowych przy wykryciu luk w świecach.
 """
 
-import os
 import platform
 import sys
-from pathlib import Path
+import time
 
 
 def play_gap_alert(number_of_beeps: int = 3, frequency: int = 1000, duration_ms: int = 200) -> None:
@@ -26,8 +25,10 @@ def play_gap_alert(number_of_beeps: int = 3, frequency: int = 1000, duration_ms:
             for _ in range(number_of_beeps):
                 winsound.Beep(frequency, duration_ms)
         elif system in ("Linux", "Darwin"):
-            # Na Linuxie i macOS użyj komendy beep lub echo z \x07
-            os.system(f'printf "\\a" && sleep 0.2')
+            for _ in range(number_of_beeps):
+                sys.stdout.write("\\a")
+                sys.stdout.flush()
+                time.sleep(duration_ms / 1000)
         else:
             print(f"Ostrzeżenie: System {system} nie wspierany dla sygnału dźwiękowego.", file=sys.stderr)
     except Exception as error:

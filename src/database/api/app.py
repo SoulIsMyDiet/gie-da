@@ -1855,6 +1855,11 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 try:
                     if _run_xauusd_strategy(candle.datetime.astimezone(timezone.utc)):
                         signal_save_count += 1
+                        Thread(
+                            target=play_gap_alert,
+                            kwargs={"number_of_beeps": 2, "duration_ms": 100},
+                            daemon=True,
+                        ).start()
                 except Exception:
                     # Backend: także nieoczekiwany błąd procesu nie cofa zapisanej świecy.
                     logger.exception("Błąd strategii XAUUSD po zapisaniu świecy.")

@@ -37,19 +37,27 @@ def request_and_candle(opened, symbol="XAU/USD", saved=1):
     return request, candle, repository
 
 
-@pytest.mark.parametrize("beep,expected", [(True, b"2\n4"), (False, b"2\n3")])
+@pytest.mark.parametrize("beep,expected", [(True, b"0\n4"), (False, b"0\n3")])
 def test_closed_candle_runs_after_save_and_adds_only_new_beep(beep, expected):
     """Dźwięk dolicza się tylko po nowym zapisie, zachowując istniejący licznik."""
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, candle, repository = request_and_candle(opened)
+    repository.save_candle.return_value = (0, 1, "", 3)
     def run(value):
         repository.save_candle.assert_called_once()
         assert value == opened
         return beep
     with patch.object(app, "_run_xauusd_strategy", side_effect=run), \
-            patch.object(app, "Thread"):
+            patch.object(app, "Thread") as thread:
         response = app.save_candle(candle, request)
     assert response.body == expected
+    if beep:
+        thread.assert_called_once()
+        assert thread.call_args.kwargs["kwargs"] == {
+            "number_of_beeps": 2, "duration_ms": 100,
+        }
+    else:
+        thread.assert_not_called()
 
 
 @pytest.mark.parametrize("saved,minutes,symbol", [(0, 2, "XAU/USD"), (1, 0, "XAU/USD"), (1, 2, "EURUSD/USD")])
