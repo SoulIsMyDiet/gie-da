@@ -24,6 +24,9 @@ def modules(monkeypatch):
     config = SimpleNamespace(
         DB_SYMBOL="XAU/USD", STRATEGY_NAME="Chat-gpt6/XAUUSDStrategyV1",
         HISTORY_LIMIT=2500, SAVE_NONE_SIGNALS=True, BEEP_ENABLED=True,
+        CONFIG=SimpleNamespace(
+            ema_fast=9, ema_middle=21, atr_period=14, rsi_period=14,
+        ),
     )
     generator = Mock()
     package = ModuleType("xau_test")
@@ -48,7 +51,20 @@ def result(signal="LONG"):
         "timestamp": "2026-01-05T11:01:00+01:00",
         "candle_open_time": "2026-01-05T11:00:00+01:00",
         "candle_open_epoch": int(OPENED.timestamp()), "signal": signal,
-        "signal_parameters": {"reason": "test", "timestamp": "nieprawidłowy"},
+        "signal_parameters": {
+            "reasons": ["test", "szczegółowy opis pomocniczy"],
+            "indicators": {
+                "m1": {
+                    "ema_9": 2500.1,
+                    "ema_21": 2499.8,
+                    "atr": 1.4,
+                    "rsi": 52.3,
+                    "bb_lower": 2498.0,
+                    "bb_upper": 2502.0,
+                    "bb_middle": 2500.0,
+                }
+            },
+        },
     }
 
 
@@ -61,8 +77,8 @@ def connection_for(module):
     return storage, connection, cursor
 
 
-def test_storage_writes_complete_json_and_no_assumed_spread(modules):
-    """Zapis używa czasu Warszawy, unikalnej epoki i nie dopisuje potencjału."""
+def test_storage_writes_compact_json_and_no_assumed_spread(modules):
+    """Zapis ogranicza JSON do sygnału i ośmiu podstawowych parametrów."""
     module, _, _, _ = modules
     storage, connection, cursor = connection_for(module)
     assert storage.save_signal(result(), 31)
@@ -74,13 +90,45 @@ def test_storage_writes_complete_json_and_no_assumed_spread(modules):
         "long", "Chat-gpt6/XAUUSDStrategyV1", 31,
     )
     payload = json.loads(values[6])
-    assert payload["timestamp"] == result()["timestamp"]
-    assert payload["reason"] == "test"
-    assert payload["signal_parameters"] == result()["signal_parameters"]
+    assert payload == {
+        "price": 2500.5,
+        "signal": "LONG",
+        "timestamp": int(OPENED.timestamp()),
+        "instrument": "XAU/USD",
+        "parameters": {
+            "ema9": 2500.1,
+            "atr14": 1.4,
+            "ema21": 2499.8,
+            "rsi14": 52.3,
+            "reason": "test",
+            "bb_lower": 2498.0,
+            "bb_upper": 2502.0,
+            "bb_middle": 2500.0,
+        },
+    }
     assert values[7] == int(OPENED.timestamp())
     connection.commit.assert_called_once()
     connection.rollback.assert_not_called()
     connection.close.assert_called_once()
+
+
+def test_get_processed_signal_accepts_compact_json(modules):
+    """Odczyt kompaktowego JSON odtwarza epokę wymaganą przez trigger."""
+    module, _, _, _ = modules
+    storage, _, cursor = connection_for(module)
+    compact_payload = {
+        "price": 2500.5,
+        "signal": "NONE",
+        "timestamp": int(OPENED.timestamp()),
+        "instrument": "XAU/USD",
+        "parameters": {"reason": "Brak setupu."},
+    }
+    cursor.fetchone.return_value = (json.dumps(compact_payload),)
+
+    stored = storage.get_processed_signal(OPENED)
+
+    assert stored["candle_open_epoch"] == int(OPENED.timestamp())
+    assert stored["parameters"] == compact_payload["parameters"]
 
 
 @pytest.mark.parametrize("errno,duplicate", [(1062, True), (1205, False)])
@@ -211,7 +259,10 @@ def test_real_generator_trigger_and_storage_together(monkeypatch):
     output, saved = trigger.analyze_candle(storage, OPENED, OPENED + timedelta(minutes=1))
     assert saved and output["signal"] == "NONE"
     assert output["candle_open_epoch"] == int(OPENED.timestamp())
-    assert json.loads(cursor.execute.call_args.args[1][6])["signal_parameters"] == output["signal_parameters"]
+    payload = json.loads(cursor.execute.call_args.args[1][6])
+    assert set(payload) == {"price", "signal", "timestamp", "instrument", "parameters"}
+    assert payload["timestamp"] == int(OPENED.timestamp())
+    assert payload["signal"] == output["signal"]
     connection.commit.assert_called_once()
 
 

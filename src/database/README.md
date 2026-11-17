@@ -50,6 +50,11 @@ Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego AP
 
 Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każdej nowej zamkniętej świecy EUR/USD API uruchamia strategię `Chat-gpt6/EURUSD/EURUSDStrategyV1`; wygenerowany sygnał zapisuje w tej samej transakcji bazodanowej co świecę, a jego pakiet JSON trafia do `signal_parameters`. Po potwierdzonym zapisie aplikacja desktopowa odtwarza dwa piknięcia. Integracja z agentem AI nie jest jeszcze podłączona.
 
+Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
+`signal`, epokę `timestamp`, `instrument` oraz `parameters` z EMA9, ATR14,
+EMA21, RSI14, krótkim powodem i pasmami Bollingera. Pełne dane diagnostyczne
+algorytmu nie są zapisywane, a istniejące rekordy pozostają bez zmian.
+
 Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączone,
 ponieważ dotychczasowe symbole nie zapewniały danych dla oczekiwanych indeksów.
 API nie zwraca tych instrumentów jako monitorowanych ani otwartych i odrzuca

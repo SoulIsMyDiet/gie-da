@@ -21,6 +21,58 @@ def utc_time(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _compact_signal_payload(result: dict, price: Decimal, opened_epoch: int) -> dict:
+    """Buduje mały JSON do kolumny signal_parameters z podstawowymi wskaźnikami.
+
+    result zawiera pełny wynik algorytmu, price jest zweryfikowaną ceną, a
+    opened_epoch epoką UTC otwarcia świecy. Brak wymaganych wskaźników lub
+    powodów zgłasza ValueError zamiast zapisywać niekompletny wynik.
+    """
+    details = result.get("signal_parameters")
+    indicators = details.get("indicators") if isinstance(details, dict) else None
+    m1_indicators = (
+        indicators.get("m1") if isinstance(indicators, dict) else None
+    )
+    reasons = details.get("reasons") if isinstance(details, dict) else None
+    if not isinstance(m1_indicators, dict):
+        raise ValueError("Wynik XAU/USD nie zawiera wskaźników M1.")
+    if not isinstance(reasons, list) or not all(
+        isinstance(reason, str) for reason in reasons
+    ):
+        raise ValueError("Wynik XAU/USD nie zawiera poprawnych powodów sygnału.")
+
+    signal = result["signal"].upper()
+    reason = next((item.strip() for item in reasons if item.strip()), "")
+    if not reason:
+        reason = (
+            f"Warunki {signal} zostały spełnione."
+            if signal in ("LONG", "SHORT")
+            else "Brak kwalifikującego się setupu."
+        )
+
+    configuration = config.CONFIG
+    return {
+        "price": float(price),
+        "signal": signal,
+        "timestamp": opened_epoch,
+        "instrument": config.DB_SYMBOL,
+        "parameters": {
+            f"ema{configuration.ema_fast}": m1_indicators.get(
+                f"ema_{configuration.ema_fast}"
+            ),
+            f"atr{configuration.atr_period}": m1_indicators.get("atr"),
+            f"ema{configuration.ema_middle}": m1_indicators.get(
+                f"ema_{configuration.ema_middle}"
+            ),
+            f"rsi{configuration.rsi_period}": m1_indicators.get("rsi"),
+            "reason": reason,
+            "bb_lower": m1_indicators.get("bb_lower"),
+            "bb_upper": m1_indicators.get("bb_upper"),
+            "bb_middle": m1_indicators.get("bb_middle"),
+        },
+    }
+
+
 class XAUUSDStorage:
     """Udostępnia świece i sygnały XAUUSD w MySQL; błędy bazy są propagowane."""
 
@@ -55,8 +107,15 @@ class XAUUSDStorage:
             if row is None:
                 return None
             result = json.loads(row[0]) if isinstance(row[0], (str, bytes, bytearray)) else row[0]
-            if not isinstance(result, dict) or not isinstance(result.get("signal_parameters"), dict):
+            if not isinstance(result, dict) or not (
+                isinstance(result.get("signal_parameters"), dict)
+                or isinstance(result.get("parameters"), dict)
+            ):
                 raise ValueError("Zapisany wynik strategii nie jest kompletnym obiektem JSON.")
+            epoch = result.get("candle_open_epoch", result.get("timestamp"))
+            if isinstance(epoch, bool) or not isinstance(epoch, int):
+                raise ValueError("Zapisany wynik strategii nie zawiera epoki świecy.")
+            result.setdefault("candle_open_epoch", epoch)
             return result
         finally:
             try:
@@ -133,7 +192,7 @@ class XAUUSDStorage:
         if (opened.second or opened.microsecond or closed != opened + timedelta(minutes=1)
                 or isinstance(epoch, bool) or not isinstance(epoch, int) or epoch != int(opened.timestamp())):
             raise ValueError("Czas lub epoka wyniku nie odpowiada zamkniętej świecy M1.")
-        payload = {**result["signal_parameters"], **result}
+        payload = _compact_signal_payload(result, price, epoch)
         serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         connection = self._connect()
         cursor = None
