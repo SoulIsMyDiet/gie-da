@@ -32,6 +32,9 @@ constexpr std::size_t grokNotificationPageSize = 100;
 constexpr wchar_t usdmxnNotificationsPath[] =
     L"/api/signals/usdmxn/notifications?limit=100";
 constexpr std::size_t usdmxnNotificationPageSize = 100;
+constexpr wchar_t usdjpyNotificationsPath[] =
+    L"/api/signals/usdjpy/notifications?limit=100";
+constexpr std::size_t usdjpyNotificationPageSize = 100;
 constexpr DWORD maxResponseSize = 64 * 1024;
 // Pozostałe żądania mają limit 3 s; zapis ES ma 70 s na analizę do 60 s i bufor.
 constexpr DWORD apiRequestTimeoutMs = 3000;
@@ -634,6 +637,62 @@ bool parseUsdmxnNotificationAck(std::string_view response) {
 }
 
 /**
+ * Sprawdza listę oczekujących identyfikatorów USD/JPY.
+ * @param response Treść odpowiedzi JSON.
+ * @param notificationIds Otrzymuje identyfikatory w rosnącej kolejności.
+ * @return true, jeśli odpowiedź jest poprawna i nie przekracza limitu strony.
+ */
+bool parseUsdjpyNotificationIds(
+    std::string_view response,
+    std::vector<std::uint64_t>& notificationIds) {
+    NotificationJsonReader reader(response);
+    std::vector<std::uint64_t> parsed;
+    std::string_view key;
+    if (!reader.consume('{') || !reader.readKey(key) || key != "ids" ||
+        !reader.consume(':') || !reader.consume('[')) {
+        return false;
+    }
+    if (!reader.consume(']')) {
+        do {
+            std::uint64_t id = 0;
+            if (parsed.size() >= usdjpyNotificationPageSize ||
+                !reader.readNumber(id) ||
+                id == 0 ||
+                (!parsed.empty() && id <= parsed.back())) {
+                return false;
+            }
+            parsed.push_back(id);
+            if (reader.consume(']')) {
+                break;
+            }
+            if (!reader.consume(',')) {
+                return false;
+            }
+        } while (true);
+    }
+    if (!reader.consume('}') || !reader.atEnd()) {
+        return false;
+    }
+    notificationIds = std::move(parsed);
+    return true;
+}
+
+/**
+ * Sprawdza potwierdzenie odtworzenia zwrócone przez API.
+ * @param response Treść odpowiedzi JSON.
+ * @return true, jeśli API potwierdziło powiadomienie.
+ */
+bool parseUsdjpyNotificationAck(std::string_view response) {
+    NotificationJsonReader reader(response);
+    std::string_view key;
+    bool acknowledged = false;
+    return reader.consume('{') && reader.readKey(key) &&
+        key == "acknowledged" && reader.consume(':') &&
+        reader.readBool(acknowledged) && acknowledged &&
+        reader.consume('}') && reader.atEnd();
+}
+
+/**
  * Pobiera i waliduje listę symboli zwróconą jako osobne wiersze tekstu.
  */
 bool fetchSymbolList(
@@ -905,6 +964,47 @@ bool CandleHistoryClient::acknowledgeUsdmxnNotification(
     }
     if (!parseUsdmxnNotificationAck(response)) {
         error = "Lokalne API nie potwierdziło powiadomienia USD/MXN.";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Pobiera oczekujące powiadomienia USD/JPY bez przesuwania ich stanu.
+ */
+bool CandleHistoryClient::fetchUsdjpyNotificationIds(
+    std::vector<std::uint64_t>& notificationIds, std::string& error) {
+    std::string response;
+    if (!fetchApiResponse(usdjpyNotificationsPath, response, error)) {
+        return false;
+    }
+    std::vector<std::uint64_t> parsedIds;
+    if (!parseUsdjpyNotificationIds(response, parsedIds)) {
+        error = "Lokalne API zwróciło nieprawidłowe powiadomienia USD/JPY.";
+        return false;
+    }
+    notificationIds = std::move(parsedIds);
+    return true;
+}
+
+/**
+ * Potwierdza pojedyncze powiadomienie dopiero po odtworzeniu dźwięku.
+ */
+bool CandleHistoryClient::acknowledgeUsdjpyNotification(
+    std::uint64_t notificationId, std::string& error) {
+    if (notificationId == 0) {
+        error = "Identyfikator powiadomienia USD/JPY musi być dodatni.";
+        return false;
+    }
+    const std::wstring path =
+        L"/api/signals/usdjpy/notifications/" +
+        std::to_wstring(notificationId) + L"/ack";
+    std::string response;
+    if (!sendApiRequest(path, "{}", 200, response, error)) {
+        return false;
+    }
+    if (!parseUsdjpyNotificationAck(response)) {
+        error = "Lokalne API nie potwierdziło powiadomienia USD/JPY.";
         return false;
     }
     return true;

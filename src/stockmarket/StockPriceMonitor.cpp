@@ -462,6 +462,39 @@ void StockPriceMonitor::runNotifications() {
             succeeded = false;
         }
 
+        std::vector<std::uint64_t> usdjpyNotificationIds;
+        std::string usdjpyError;
+        bool usdjpySucceeded =
+            CandleHistoryClient::fetchUsdjpyNotificationIds(
+                usdjpyNotificationIds, usdjpyError);
+        if (usdjpySucceeded) {
+            for (const std::uint64_t id : usdjpyNotificationIds) {
+                if (WaitForSingleObject(stopEvent_, 0) != WAIT_TIMEOUT) {
+                    return;
+                }
+                if (!playAudio(true)) {
+                    usdjpyError =
+                        "Nie udało się odtworzyć dźwięku sygnału USD/JPY.";
+                    usdjpySucceeded = false;
+                    break;
+                }
+                if (!CandleHistoryClient::acknowledgeUsdjpyNotification(
+                        id, usdjpyError)) {
+                    usdjpySucceeded = false;
+                    break;
+                }
+            }
+            hasMore = hasMore || usdjpyNotificationIds.size() >= 100;
+        }
+        if (!usdjpySucceeded) {
+            if (succeeded) {
+                error = usdjpyError;
+            } else {
+                error += " | USD/JPY: " + usdjpyError;
+            }
+            succeeded = false;
+        }
+
         if (succeeded) {
             setNotificationStatus({});
             retryDelayMs = notificationRetryInitialMs;

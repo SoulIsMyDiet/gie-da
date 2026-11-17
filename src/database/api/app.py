@@ -101,6 +101,26 @@ usdmxn_package = importlib.util.module_from_spec(usdmxn_package_spec)
 sys.modules[usdmxn_package_name] = usdmxn_package
 usdmxn_package_spec.loader.exec_module(usdmxn_package)
 
+usdjpy_algorithm_directory = Path(__file__).resolve().parent / "usdjpy_algorithm"
+if not usdjpy_algorithm_directory.is_dir():
+    usdjpy_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Chat-gpt6"
+        / "USDJPY"
+    )
+usdjpy_package_name = "chat_gpt6_usdjpy"
+usdjpy_package_spec = importlib.util.spec_from_file_location(
+    usdjpy_package_name,
+    usdjpy_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(usdjpy_algorithm_directory)],
+)
+if usdjpy_package_spec is None or usdjpy_package_spec.loader is None:
+    raise ImportError("Nie można załadować pakietu strategii USDJPY.")
+usdjpy_package = importlib.util.module_from_spec(usdjpy_package_spec)
+sys.modules[usdjpy_package_name] = usdjpy_package
+usdjpy_package_spec.loader.exec_module(usdjpy_package)
+
 grok45_usdmxn_algorithm_directory = (
     Path(__file__).resolve().parent / "grok_usdmxn_algorithm"
 )
@@ -166,6 +186,16 @@ from chat_gpt6_usdmxn.config import (  # noqa: E402
     STRATEGY_NAME as USDMXN_STRATEGY_NAME,
 )
 from chat_gpt6_usdmxn.storage import USDMXNSignalStorage  # noqa: E402
+from chat_gpt6_usdjpy.USDJPYStrategyV1 import (  # noqa: E402
+    USDJPYStrategyV1,
+)
+from chat_gpt6_usdjpy.config import (  # noqa: E402
+    BEEP_ENABLED as USDJPY_BEEP_ENABLED,
+    DATABASE_SYMBOL as USDJPY_DATABASE_SYMBOL,
+    HISTORY_LIMIT as USDJPY_HISTORY_LIMIT,
+    STRATEGY_NAME as USDJPY_STRATEGY_NAME,
+)
+from chat_gpt6_usdjpy.storage import USDJPYSignalStorage  # noqa: E402
 from grok45_usdmxn.USDMXNStrategyV1 import (  # noqa: E402
     USDMXNStrategyV1 as Grok45USDMXNStrategy,
 )
@@ -1543,6 +1573,73 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_usdjpy_notification_ids(self, limit: int) -> list[int]:
+        """Pobiera oczekujące powiadomienia dla wszystkich strategii USD/JPY."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("Limit powiadomień musi być dodatnią liczbą całkowitą.")
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM algorithm_evaluations
+                    WHERE product = %s AND notification_pending = TRUE
+                    ORDER BY id ASC
+                    LIMIT %s
+                    """,
+                    (USDJPY_DATABASE_SYMBOL, limit),
+                )
+                return [int(row[0]) for row in cursor.fetchall()]
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def acknowledge_usdjpy_notification(self, notification_id: int) -> bool:
+        """Potwierdza odtworzenie i umożliwia ponowienie po błędzie dźwięku."""
+        if (
+            isinstance(notification_id, bool)
+            or not isinstance(notification_id, int)
+            or notification_id < 1
+        ):
+            raise ValueError("Identyfikator powiadomienia musi być dodatni.")
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE algorithm_evaluations
+                    SET notification_pending = FALSE
+                    WHERE id = %s AND product = %s
+                        AND notification_pending = TRUE
+                    """,
+                    (notification_id, USDJPY_DATABASE_SYMBOL),
+                )
+                acknowledged = cursor.rowcount == 1
+                if not acknowledged:
+                    cursor.execute(
+                        """
+                        SELECT 1
+                        FROM algorithm_evaluations
+                        WHERE id = %s AND product = %s
+                        LIMIT 1
+                        """,
+                        (notification_id, USDJPY_DATABASE_SYMBOL),
+                    )
+                    acknowledged = cursor.fetchone() is not None
+                connection.commit()
+                return acknowledged
+            finally:
+                cursor.close()
+        except mysql.connector.Error:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def save_grok45_signal(self, signal: Grok45SignalRecord) -> bool:
         """Zapisuje sygnał C++ Grok-45 i pomija duplikaty tej samej świecy."""
         connection = mysql.connector.connect(**self.database_settings)
@@ -2004,6 +2101,8 @@ chat_dax40_strategy = ChatDAX40Strategy(market_is_open=is_market_open)
 chat_dax40_storage = DAX40SignalStorage(repository)
 usdmxn_strategy = USDMXNStrategyV1(market_is_open=is_market_open)
 usdmxn_storage = USDMXNSignalStorage(repository)
+usdjpy_strategy = USDJPYStrategyV1(market_is_open=is_market_open)
+usdjpy_storage = USDJPYSignalStorage(repository)
 grok45_usdmxn_strategy = Grok45USDMXNStrategy(market_is_open=is_market_open)
 grok45_usdmxn_storage = Grok45USDMXNSignalStorage(repository)
 strategy_lock = Lock()
@@ -2396,6 +2495,89 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                                 candle_timestamp.isoformat(),
                             )
             if (
+                candle.symbol == USDJPY_DATABASE_SYMBOL
+                and candle.datetime.astimezone(timezone.utc)
+                    + timedelta(minutes=1) <= datetime.now(timezone.utc)
+            ):
+                candle_timestamp = candle.datetime.astimezone(timezone.utc)
+                state_prefix = "usdjpy"
+                last_processed = getattr(
+                    request.app.state,
+                    f"{state_prefix}_last_processed_timestamp",
+                    None,
+                )
+                if last_processed is None or candle_timestamp > last_processed:
+                    source_timestamp = int(candle_timestamp.timestamp())
+                    strategy = getattr(
+                        request.app.state,
+                        f"{state_prefix}_strategy",
+                        usdjpy_strategy,
+                    )
+                    storage = getattr(
+                        request.app.state,
+                        f"{state_prefix}_storage",
+                        usdjpy_storage,
+                    )
+                    if request.app.state.repository.has_algorithm_evaluation(
+                        USDJPY_DATABASE_SYMBOL,
+                        USDJPY_STRATEGY_NAME,
+                        source_timestamp,
+                    ):
+                        setattr(
+                            request.app.state,
+                            f"{state_prefix}_last_processed_timestamp",
+                            candle_timestamp,
+                        )
+                    else:
+                        usdjpy_candles = (
+                            request.app.state.repository.fetch_recent_candle_history(
+                                USDJPY_DATABASE_SYMBOL,
+                                USDJPY_HISTORY_LIMIT,
+                                candle_timestamp,
+                            )
+                        )
+                        if (
+                            usdjpy_candles
+                            and usdjpy_candles[-1]["timestamp_utc"]
+                            == candle_timestamp
+                        ):
+                            try:
+                                result = strategy.evaluate(
+                                    usdjpy_candles,
+                                    now=datetime.now(timezone.utc),
+                                )
+                                storage.save(
+                                    result,
+                                    len(usdjpy_candles),
+                                    enqueue_notification=USDJPY_BEEP_ENABLED,
+                                )
+                                setattr(
+                                    request.app.state,
+                                    f"{state_prefix}_last_processed_timestamp",
+                                    candle_timestamp,
+                                )
+                            except (
+                                mysql.connector.Error,
+                                RuntimeError,
+                                ValueError,
+                            ):
+                                logger.exception(
+                                    "Nie udało się wykonać strategii USDJPY "
+                                    "dla świecy %s.",
+                                    candle_timestamp.isoformat(),
+                                )
+                                raise
+                        else:
+                            logger.error(
+                                "Historia USDJPY nie zawiera właśnie zapisanej "
+                                "świecy %s; pominięto ewaluację.",
+                                candle_timestamp.isoformat(),
+                            )
+                            raise RuntimeError(
+                                "Historia USDJPY nie zawiera świecy "
+                                "przekazanej do ewaluacji."
+                            )
+            if (
                 candle.symbol == "ES"
                 and saved_candle_count
                 and candle.datetime.astimezone(timezone.utc)
@@ -2735,6 +2917,54 @@ def acknowledge_usdmxn_notification(
         raise HTTPException(
             status_code=404,
             detail="Powiadomienie USD/MXN nie istnieje.",
+        )
+    return {"acknowledged": True}
+
+
+@app.get("/api/signals/usdjpy/notifications")
+def usdjpy_notifications(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=100),
+) -> dict[str, list[int]]:
+    """Zwraca oczekujące powiadomienia USD/JPY dla klienta C++."""
+    try:
+        notification_ids = (
+            request.app.state.repository.fetch_usdjpy_notification_ids(limit)
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie można odczytać powiadomień USD/JPY.",
+        ) from error
+    return {"ids": notification_ids}
+
+
+@app.post("/api/signals/usdjpy/notifications/{notification_id}/ack")
+def acknowledge_usdjpy_notification(
+    notification_id: int,
+    request: Request,
+) -> dict[str, bool]:
+    """Potwierdza odtworzenie dźwięku dla jednego powiadomienia USD/JPY."""
+    if notification_id < 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Identyfikator powiadomienia musi być dodatni.",
+        )
+    try:
+        acknowledged = (
+            request.app.state.repository.acknowledge_usdjpy_notification(
+                notification_id
+            )
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie można potwierdzić powiadomienia USD/JPY.",
+        ) from error
+    if not acknowledged:
+        raise HTTPException(
+            status_code=404,
+            detail="Powiadomienie USD/JPY nie istnieje.",
         )
     return {"acknowledged": True}
 

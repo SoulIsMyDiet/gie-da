@@ -62,6 +62,14 @@ ponawia pobranie. Dostarczenie jest typu co najmniej raz, więc awaria między
 odtworzeniem a potwierdzeniem może powtórzyć dźwięk. Zapis NONE można wyłączyć
 flagą `SAVE_NONE_SIGNALS` w `src/algorithms/Chat-gpt6/USDMXN/config.py`.
 
+Po każdej nowej zamkniętej świecy `USD/JPY` API uruchamia niezależną strategię
+`Chat-gpt6/USDJPY/USDJPYStrategyV1`. Historia jest ograniczona do 1200 świec,
+a zamknięte M5 powstają wyłącznie z pięciu kolejnych świec M1. Pełny wynik
+LONG, SHORT albo NONE trafia do `signal_parameters`; ewaluacja jest chroniona
+markerem `algorithm_evaluations`. Powiadomienia po zapisie korzystają z tego
+samego outboxa i mechanizmu dwóch piknięć co pozostałe strategie. Zapisywanie
+NONE można wyłączyć przez `SAVE_NONE_SIGNALS` w `USDJPY/config.py`.
+
 Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
 `signal`, epokę `timestamp`, `instrument` oraz `parameters` z EMA9, ATR14,
 EMA21, RSI14, krótkim powodem i pasmami Bollingera. Pełne dane diagnostyczne

@@ -117,6 +117,24 @@ public:
         std::uint64_t notificationId, std::string& error);
 
     /**
+     * Pobiera identyfikatory oczekujących powiadomień strategii USD/JPY.
+     * @param notificationIds Otrzymuje identyfikatory w kolejności odtworzenia.
+     * @param error Otrzymuje opis błędu żądania lub odpowiedzi.
+     * @return true, jeśli odpowiedź API zawiera poprawną listę identyfikatorów.
+     */
+    static bool fetchUsdjpyNotificationIds(
+        std::vector<std::uint64_t>& notificationIds, std::string& error);
+
+    /**
+     * Potwierdza w API odtworzenie powiadomienia USD/JPY.
+     * @param notificationId Identyfikator odtworzonego powiadomienia.
+     * @param error Otrzymuje opis błędu, jeśli potwierdzenie się nie powiedzie.
+     * @return true, jeśli powiadomienie zostało potwierdzone.
+     */
+    static bool acknowledgeUsdjpyNotification(
+        std::uint64_t notificationId, std::string& error);
+
+    /**
      * Zapisuje świecę w lokalnym API historii rynkowej.
      * @param symbol Symbol instrumentu, którego dotyczy świeca.
      * @param candle Dane OHLCV i czas otwarcia świecy w UTC.
