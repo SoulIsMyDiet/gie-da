@@ -1647,13 +1647,18 @@ async def lifespan(application: FastAPI):
         )
         app.state.strategy_ready = True
     print("[Startup] Aplikacja gotowa do obsługi żądań.")
-    worker = GrokSP500Worker()
+    worker: GrokSP500Worker | None = None
+    if is_monitored_product("ES"):
+        worker = GrokSP500Worker()
+        worker.start()
+    else:
+        print("[Startup] Pętla Grok S&P 500 pominięta: ES nie jest monitorowany.")
     application.state.grok_sp500_worker = worker
-    worker.start()
     try:
         yield
     finally:
-        worker.stop()
+        if worker is not None:
+            worker.stop()
 
 
 app = FastAPI(title="gie-da market data API", lifespan=lifespan)

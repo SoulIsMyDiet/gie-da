@@ -27,7 +27,7 @@ Projekt używa MySQL uruchomionego w Dockerze. Pobrane świece rynkowe są przec
    ```
 
    Oczekiwany wynik to `status: ok`.
-6. Uruchom aplikację giełdy w CLion. Przy starcie aplikacja wyszukuje luki w świecach EUR/USD i uzupełnia maksymalnie 1000 najnowszych brakujących świec. Jedno żądanie Twelve Data może pobrać do 5000 świec, więc wiele bliskich luk jest pobieranych razem. Następnie monitor pobiera nową świecę 1-minutową po zamknięciu minuty.
+6. Uruchom aplikację giełdy w CLion. Przy starcie aplikacja wyszukuje luki dla otwartych, monitorowanych instrumentów i uzupełnia maksymalnie 1000 najnowszych brakujących świec. Jedno żądanie Twelve Data może pobrać do 5000 świec, więc wiele bliskich luk jest pobieranych razem. Następnie monitor pobiera nowe świece 1-minutowe po zamknięciu minuty.
 
 ## Codzienna obsługa
 
@@ -54,7 +54,7 @@ Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączo
 ponieważ dotychczasowe symbole nie zapewniały danych dla oczekiwanych indeksów.
 API nie zwraca tych instrumentów jako monitorowanych ani otwartych i odrzuca
 nowe zapisy oraz żądania uzupełnienia; zapisane wcześniej świece pozostają
-w bazie.
+w bazie. Monitor pobiera obecnie `EURUSD/USD`, `USD/MXN`, `USD/JPY` i `XAU/USD`.
 
 Strategia `Claude-sonnet55/S&P500` pozostaje w kodzie. Po ponownym włączeniu
 instrumentu API może uruchamiać ją po zapisaniu pojedynczej zamkniętej świecy
