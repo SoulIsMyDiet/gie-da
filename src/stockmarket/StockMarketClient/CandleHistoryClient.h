@@ -126,8 +126,8 @@ public:
         std::vector<std::uint64_t>& notificationIds, std::string& error);
 
     /**
-     * Potwierdza w API odtworzenie powiadomienia USD/JPY.
-     * @param notificationId Identyfikator odtworzonego powiadomienia.
+     * Oznacza powiadomienie USD/JPY jako obsłużone w API.
+     * @param notificationId Identyfikator obsługiwanego powiadomienia.
      * @param error Otrzymuje opis błędu, jeśli potwierdzenie się nie powiedzie.
      * @return true, jeśli powiadomienie zostało potwierdzone.
      */

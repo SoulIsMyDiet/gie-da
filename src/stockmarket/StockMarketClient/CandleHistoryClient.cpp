@@ -988,7 +988,7 @@ bool CandleHistoryClient::fetchUsdjpyNotificationIds(
 }
 
 /**
- * Potwierdza pojedyncze powiadomienie dopiero po odtworzeniu dźwięku.
+ * Oznacza pojedyncze powiadomienie USD/JPY jako obsłużone w API.
  */
 bool CandleHistoryClient::acknowledgeUsdjpyNotification(
     std::uint64_t notificationId, std::string& error) {

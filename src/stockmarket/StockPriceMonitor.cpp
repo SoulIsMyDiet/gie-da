@@ -390,7 +390,7 @@ bool StockPriceMonitor::playAudio(bool signalSaved) {
 
 /**
  * Obsługuje kursor w pamięci, strony powiadomień i ponawianie błędów.
- * Kursor przesuwa się dopiero po odtworzeniu danego dźwięku; po restarcie
+ * Kursor powiadomień Groka przesuwa się po odtworzeniu, a po restarcie
  * jest inicjalizowany ponownie z bieżącego maksimum i historia jest pomijana.
  */
 void StockPriceMonitor::runNotifications() {
@@ -472,14 +472,16 @@ void StockPriceMonitor::runNotifications() {
                 if (WaitForSingleObject(stopEvent_, 0) != WAIT_TIMEOUT) {
                     return;
                 }
-                if (!playAudio(true)) {
-                    usdjpyError =
-                        "Nie udało się odtworzyć dźwięku sygnału USD/JPY.";
+                // Potwierdzenie przed dźwiękiem zapobiega powtórkom po restarcie.
+                // Awaria między tymi operacjami może jednak zgubić powiadomienie.
+                if (!CandleHistoryClient::acknowledgeUsdjpyNotification(
+                        id, usdjpyError)) {
                     usdjpySucceeded = false;
                     break;
                 }
-                if (!CandleHistoryClient::acknowledgeUsdjpyNotification(
-                        id, usdjpyError)) {
+                if (!playAudio(true)) {
+                    usdjpyError =
+                        "Nie udało się odtworzyć dźwięku sygnału USD/JPY.";
                     usdjpySucceeded = false;
                     break;
                 }
