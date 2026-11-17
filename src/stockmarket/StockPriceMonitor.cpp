@@ -399,17 +399,19 @@ void StockPriceMonitor::runNotifications() {
     DWORD retryDelayMs = notificationRetryInitialMs;
     while (WaitForSingleObject(stopEvent_, 0) == WAIT_TIMEOUT) {
         std::string error;
-        bool succeeded = false;
+        bool succeeded = true;
         bool hasMore = false;
         if (!initialized) {
-            succeeded = CandleHistoryClient::fetchGrokNotificationCursor(
-                cursor, error);
-            initialized = succeeded;
+            if (CandleHistoryClient::fetchGrokNotificationCursor(
+                    cursor, error)) {
+                initialized = true;
+            } else {
+                succeeded = false;
+            }
         } else {
             GrokNotificationPage page;
-            succeeded = CandleHistoryClient::fetchGrokNotifications(
-                cursor, page, error);
-            if (succeeded) {
+            if (CandleHistoryClient::fetchGrokNotifications(
+                    cursor, page, error)) {
                 for (const std::uint64_t id : page.ids) {
                     if (WaitForSingleObject(stopEvent_, 0) != WAIT_TIMEOUT) {
                         return;
@@ -421,15 +423,50 @@ void StockPriceMonitor::runNotifications() {
                     }
                     cursor = id;
                 }
-                hasMore = succeeded && page.hasMore;
+                hasMore = page.hasMore;
+            } else {
+                succeeded = false;
             }
+        }
+
+        std::vector<std::uint64_t> usdmxnNotificationIds;
+        std::string usdmxnError;
+        bool usdmxnSucceeded =
+            CandleHistoryClient::fetchUsdmxnNotificationIds(
+                usdmxnNotificationIds, usdmxnError);
+        if (usdmxnSucceeded) {
+            for (const std::uint64_t id : usdmxnNotificationIds) {
+                if (WaitForSingleObject(stopEvent_, 0) != WAIT_TIMEOUT) {
+                    return;
+                }
+                if (!playAudio(true)) {
+                    usdmxnError =
+                        "Nie udało się odtworzyć dźwięku sygnału USD/MXN.";
+                    usdmxnSucceeded = false;
+                    break;
+                }
+                if (!CandleHistoryClient::acknowledgeUsdmxnNotification(
+                        id, usdmxnError)) {
+                    usdmxnSucceeded = false;
+                    break;
+                }
+            }
+            hasMore = hasMore || usdmxnNotificationIds.size() >= 100;
+        }
+        if (!usdmxnSucceeded) {
+            if (succeeded) {
+                error = usdmxnError;
+            } else {
+                error += " | USD/MXN: " + usdmxnError;
+            }
+            succeeded = false;
         }
 
         if (succeeded) {
             setNotificationStatus({});
             retryDelayMs = notificationRetryInitialMs;
         } else {
-            setNotificationStatus("Powiadomienia Groka: " + error);
+            setNotificationStatus("Powiadomienia sygnałów: " + error);
         }
         const DWORD waitMs = succeeded
             ? (hasMore ? 0 : notificationPollIntervalMs)

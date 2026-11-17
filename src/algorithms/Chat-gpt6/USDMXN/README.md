@@ -17,7 +17,9 @@ zmianie CET/CEST.
 - Wymagane jest minimum 100 świec M1 oraz 100 kompletnych świec M5.
 - Pojedyncza brakująca minuta nie resetuje wskaźników. Dłuższa luka w godzinach
   otwarcia rynku rozpoczyna warm-up od nowa. Kalendarz Forex API pomija zwykłe
-  zamknięcie weekendowe.
+  zamknięcie weekendowe. Długość długiej luki w diagnostyce może być podana jako
+  dolna granica; pole `latest_unexpected_gap_minutes_is_lower_bound` wskazuje,
+  czy jej wartość została obcięta dla wydajności.
 
 ## Warunki
 
@@ -34,10 +36,14 @@ progi, parametry transakcji i przyczynę wyniku NONE.
 ## Zapis i uruchamianie
 
 API zapisuje pełny dokument JSON do `signals.signal_parameters`, a
-`source_timestamp` wskazuje epokę UTC otwarcia świecy M1. Klucz unikalny tabeli
-`signals` zapobiega ponownemu zapisowi tej samej świecy; po restarcie API
-wcześniej zapisany wynik jest sprawdzany przed ewaluacją. Po nowym zapisie
-dotychczasowy klient C++ odtwarza dwa krótkie piknięcia.
+`source_timestamp` wskazuje epokę UTC otwarcia świecy M1. Tabela
+`algorithm_evaluations` trwale zapisuje każdą ewaluację, również NONE pominięte
+w `signals`, więc restart API nie powoduje ponownej oceny tej samej świecy.
+Nowy rekord sygnału i oczekujące powiadomienie trafiają do bazy w jednej
+transakcji. Klient C++ odtwarza dwa krótkie piknięcia, a następnie potwierdza
+powiadomienie; przy błędzie pobieranie jest ponawiane. To zapewnia dostarczenie
+co najmniej raz: awaria po odtworzeniu, ale przed potwierdzeniem, może spowodować
+powtórne piknięcie.
 
 Zapis wyników NONE można wyłączyć, zmieniając wyłącznie
 `SAVE_NONE_SIGNALS = True` na `False` w `config.py`. Nie zmienia to zapisu

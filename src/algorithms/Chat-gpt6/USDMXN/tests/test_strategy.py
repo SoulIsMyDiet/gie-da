@@ -159,6 +159,9 @@ class StrategyTests(unittest.TestCase):
         gap_state = result["signal_parameters"]["data"]["gap_state"]
         self.assertFalse(gap_state["warmup_reset"])
         self.assertEqual(gap_state["single_missing_minutes"], 1)
+        self.assertFalse(
+            gap_state["latest_unexpected_gap_minutes_is_lower_bound"]
+        )
         self.assertEqual(result["signal"], "LONG")
         self.assertLess(result["signal_parameters"]["data"]["completed_m5_candles"], 123)
 
@@ -172,8 +175,27 @@ class StrategyTests(unittest.TestCase):
         )
         parameters = result["signal_parameters"]
         self.assertTrue(parameters["data"]["gap_state"]["warmup_reset"])
+        self.assertTrue(
+            parameters["data"]["gap_state"][
+                "latest_unexpected_gap_minutes_is_lower_bound"
+            ]
+        )
         self.assertEqual(parameters["signal"], "NONE")
         self.assertLess(parameters["data"]["m1_candles_in_segment"], 500)
+
+    def test_long_gap_duration_is_reported_as_a_lower_bound(self) -> None:
+        """Diagnostyka jawnie oznacza długość luki obciętą dla wydajności."""
+        candles = build_trending_candles("LONG")
+        del candles[300:305]
+        result = USDMXNStrategyV1(ALWAYS_OPEN).evaluate(
+            candles,
+            now=candles[-1]["timestamp_utc"] + timedelta(minutes=1),
+        )
+        gap_state = result["signal_parameters"]["data"]["gap_state"]
+        self.assertEqual(gap_state["latest_unexpected_gap_minutes"], 2)
+        self.assertTrue(
+            gap_state["latest_unexpected_gap_minutes_is_lower_bound"]
+        )
 
     def test_regular_forex_weekend_closure_is_not_counted_as_data_gap(self) -> None:
         """Istniejący kalendarz Forex pomija planowe zamknięcie weekendowe."""
@@ -212,12 +234,13 @@ class StrategyTests(unittest.TestCase):
             )
 
     def test_none_storage_flag_is_single_configuration_switch(self) -> None:
-        """Wyłączenie jednej flagi blokuje zapis NONE przez adapter."""
+        """Flaga pomija rekord NONE, ale adapter trwale zapisuje ewaluację."""
         from unittest.mock import Mock, patch
 
         from chat_gpt6_usdmxn_test.storage import USDMXNSignalStorage
 
         repository = Mock()
+        repository.save_algorithm_signal.return_value = False
         storage = USDMXNSignalStorage(repository)
         result = {
             "signal": "NONE",
@@ -225,7 +248,15 @@ class StrategyTests(unittest.TestCase):
         }
         with patch.object(strategy_module, "SAVE_NONE_SIGNALS", False):
             self.assertFalse(storage.save(result, 100))
-        repository.save_algorithm_signal.assert_not_called()
+        repository.save_algorithm_signal.assert_called_once_with(
+            "USD/MXN",
+            "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+            result,
+            100,
+            record_evaluation=True,
+            save_signal=False,
+            enqueue_notification=True,
+        )
 
 
 if __name__ == "__main__":

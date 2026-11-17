@@ -29,6 +29,9 @@ constexpr wchar_t grokNotificationCursorPath[] =
 constexpr wchar_t grokNotificationsPath[] =
     L"/api/signals/grok-sp500/notifications?after_id=";
 constexpr std::size_t grokNotificationPageSize = 100;
+constexpr wchar_t usdmxnNotificationsPath[] =
+    L"/api/signals/usdmxn/notifications?limit=100";
+constexpr std::size_t usdmxnNotificationPageSize = 100;
 constexpr DWORD maxResponseSize = 64 * 1024;
 // Pozostałe żądania mają limit 3 s; zapis ES ma 70 s na analizę do 60 s i bufor.
 constexpr DWORD apiRequestTimeoutMs = 3000;
@@ -240,7 +243,7 @@ bool readResponse(HINTERNET request, std::string& response, std::string& error) 
  * @return true, jeśli odpowiedź ma oczekiwany lub jawnie dozwolony status.
  */
 bool sendApiRequest(
-    const wchar_t* path,
+    const std::wstring& path,
     const std::string& requestBody,
     DWORD expectedStatus,
     std::string& responseBody,
@@ -272,7 +275,7 @@ bool sendApiRequest(
     }
 
     InternetHandle request{WinHttpOpenRequest(
-        connection.value, L"POST", path, nullptr,
+        connection.value, L"POST", path.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
     if (request.value == nullptr) {
         error = "Nie udało się utworzyć żądania zapisu świec.";
@@ -575,6 +578,62 @@ bool parseGrokNotificationPage(
 }
 
 /**
+ * Sprawdza listę oczekujących identyfikatorów USD/MXN.
+ * @param response Treść odpowiedzi JSON.
+ * @param notificationIds Otrzymuje identyfikatory w rosnącej kolejności.
+ * @return true, jeśli odpowiedź jest poprawna i nie przekracza limitu strony.
+ */
+bool parseUsdmxnNotificationIds(
+    std::string_view response,
+    std::vector<std::uint64_t>& notificationIds) {
+    NotificationJsonReader reader(response);
+    std::vector<std::uint64_t> parsed;
+    std::string_view key;
+    if (!reader.consume('{') || !reader.readKey(key) || key != "ids" ||
+        !reader.consume(':') || !reader.consume('[')) {
+        return false;
+    }
+    if (!reader.consume(']')) {
+        do {
+            std::uint64_t id = 0;
+            if (parsed.size() >= usdmxnNotificationPageSize ||
+                !reader.readNumber(id) ||
+                id == 0 ||
+                (!parsed.empty() && id <= parsed.back())) {
+                return false;
+            }
+            parsed.push_back(id);
+            if (reader.consume(']')) {
+                break;
+            }
+            if (!reader.consume(',')) {
+                return false;
+            }
+        } while (true);
+    }
+    if (!reader.consume('}') || !reader.atEnd()) {
+        return false;
+    }
+    notificationIds = std::move(parsed);
+    return true;
+}
+
+/**
+ * Sprawdza potwierdzenie odtworzenia zwrócone przez API.
+ * @param response Treść odpowiedzi JSON.
+ * @return true, jeśli API potwierdziło powiadomienie.
+ */
+bool parseUsdmxnNotificationAck(std::string_view response) {
+    NotificationJsonReader reader(response);
+    std::string_view key;
+    bool acknowledged = false;
+    return reader.consume('{') && reader.readKey(key) &&
+        key == "acknowledged" && reader.consume(':') &&
+        reader.readBool(acknowledged) && acknowledged &&
+        reader.consume('}') && reader.atEnd();
+}
+
+/**
  * Pobiera i waliduje listę symboli zwróconą jako osobne wiersze tekstu.
  */
 bool fetchSymbolList(
@@ -811,11 +870,53 @@ bool CandleHistoryClient::fetchGrokNotifications(
 }
 
 /**
+ * Pobiera oczekujące powiadomienia USD/MXN bez przesuwania ich stanu.
+ */
+bool CandleHistoryClient::fetchUsdmxnNotificationIds(
+    std::vector<std::uint64_t>& notificationIds, std::string& error) {
+    std::string response;
+    if (!fetchApiResponse(usdmxnNotificationsPath, response, error)) {
+        return false;
+    }
+    std::vector<std::uint64_t> parsedIds;
+    if (!parseUsdmxnNotificationIds(response, parsedIds)) {
+        error = "Lokalne API zwróciło nieprawidłowe powiadomienia USD/MXN.";
+        return false;
+    }
+    notificationIds = std::move(parsedIds);
+    return true;
+}
+
+/**
+ * Potwierdza pojedyncze powiadomienie dopiero po udanym odtworzeniu dźwięku.
+ */
+bool CandleHistoryClient::acknowledgeUsdmxnNotification(
+    std::uint64_t notificationId, std::string& error) {
+    if (notificationId == 0) {
+        error = "Identyfikator powiadomienia USD/MXN musi być dodatni.";
+        return false;
+    }
+    const std::wstring path =
+        L"/api/signals/usdmxn/notifications/" +
+        std::to_wstring(notificationId) + L"/ack";
+    std::string response;
+    if (!sendApiRequest(path, "{}", 200, response, error)) {
+        return false;
+    }
+    if (!parseUsdmxnNotificationAck(response)) {
+        error = "Lokalne API nie potwierdziło powiadomienia USD/MXN.";
+        return false;
+    }
+    return true;
+}
+
+/**
  * Wysyła świecę i rozpoznaje potwierdzony zapis częściowy ES z odpowiedzi HTTP 503.
  * @param symbol Symbol instrumentu, którego dotyczy świeca.
  * @param candle Dane OHLCV i czas otwarcia świecy.
  * @param newlyDetectedGapCount Otrzymuje liczbę wykrytych luk.
- * @param savedSignalCount Otrzymuje liczbę zapisanych sygnałów wymagających dźwięku.
+ * @param savedSignalCount Otrzymuje liczbę sygnałów przekazywanych bezpośrednio
+ *        w odpowiedzi; powiadomienia USD/MXN obsługuje trwały outbox.
  * @param error Otrzymuje opis błędu lub nieukończonej analizy strategii.
  * @param candleSavedDespiteError Opcjonalnie otrzymuje informację o poprawnie
  *        potwierdzonym zapisie świecy, mimo błędu dalszej analizy.

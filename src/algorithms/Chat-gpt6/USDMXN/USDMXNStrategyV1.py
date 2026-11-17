@@ -259,6 +259,7 @@ class USDMXNStrategyV1:
         segment_start = 0
         single_missing_minutes = 0
         latest_unexpected_gap = 0
+        latest_unexpected_gap_is_lower_bound = False
         for index in range(1, len(candles)):
             previous = candles[index - 1]["timestamp_utc"]
             current = candles[index]["timestamp_utc"]
@@ -269,10 +270,15 @@ class USDMXNStrategyV1:
                 segment_start = index
                 single_missing_minutes = 0
                 latest_unexpected_gap = missing
+                latest_unexpected_gap_is_lower_bound = (
+                    missing > MAX_MISSING_MARKET_MINUTES_WITHOUT_RESET
+                )
         segment = list(candles[segment_start:])
         return segment, {
             "single_missing_minutes": single_missing_minutes,
             "latest_unexpected_gap_minutes": latest_unexpected_gap,
+            "latest_unexpected_gap_minutes_is_lower_bound":
+                latest_unexpected_gap_is_lower_bound,
             "warmup_reset": segment_start > 0,
             "segment_start_utc": segment[0]["timestamp_utc"].isoformat(),
         }
@@ -280,7 +286,7 @@ class USDMXNStrategyV1:
     def _missing_market_minutes(
         self, previous_open: datetime, current_open: datetime
     ) -> int:
-        """Liczy tylko minuty brakujące w sesji z istniejącego kalendarza rynku."""
+        """Liczy brakujące minuty sesji, kończąc po przekroczeniu progu resetu."""
         missing = 0
         cursor = previous_open + CANDLE_DURATION
         while cursor < current_open:

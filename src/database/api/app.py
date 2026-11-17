@@ -137,6 +137,7 @@ from chat_gpt6_usdmxn.USDMXNStrategyV1 import (  # noqa: E402
 )
 from chat_gpt6_usdmxn.config import (  # noqa: E402
     BEEP_ENABLED as USDMXN_BEEP_ENABLED,
+    DATABASE_SYMBOL as USDMXN_DATABASE_SYMBOL,
     HISTORY_LIMIT as USDMXN_HISTORY_LIMIT,
     STRATEGY_NAME as USDMXN_STRATEGY_NAME,
 )
@@ -540,6 +541,26 @@ class MarketDataRepository:
                 )
                 self._migrate_signal_enum(cursor)
                 self._migrate_signal_source_timestamp(cursor)
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS algorithm_evaluations (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        product VARCHAR(32) NOT NULL,
+                        algorithm_name VARCHAR(255) NOT NULL,
+                        source_timestamp BIGINT NOT NULL,
+                        `signal` ENUM('short', 'long', 'none') NOT NULL,
+                        notification_pending BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at_utc DATETIME(6) NOT NULL
+                            DEFAULT CURRENT_TIMESTAMP(6),
+                        UNIQUE KEY uq_algorithm_evaluations_source_timestamp
+                            (product, algorithm_name, source_timestamp),
+                        INDEX idx_algorithm_evaluations_pending
+                            (notification_pending, id),
+                        CONSTRAINT fk_algorithm_evaluations_product
+                            FOREIGN KEY (product) REFERENCES products(symbol)
+                    ) ENGINE=InnoDB
+                    """
+                )
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS signal_potention (
@@ -1092,10 +1113,19 @@ class MarketDataRepository:
         finally:
             connection.close()
 
-    def has_algorithm_signal(
+    def has_algorithm_evaluation(
         self, product: str, algorithm_name: str, source_timestamp: int
     ) -> bool:
-        """Sprawdza trwały klucz idempotencji przed ponowną ewaluacją świecy."""
+        """Sprawdza, czy świeca została już oceniona.
+
+        Args:
+            product: Symbol produktu zapisany w bazie.
+            algorithm_name: Nazwa strategii.
+            source_timestamp: Epoka UTC otwarcia ocenianej świecy.
+
+        Returns:
+            ``True`` dla znacznika ewaluacji albo starszego zapisu sygnału.
+        """
         connection = mysql.connector.connect(**self.database_settings)
         try:
             cursor = connection.cursor()
@@ -1103,12 +1133,27 @@ class MarketDataRepository:
                 cursor.execute(
                     """
                     SELECT 1
-                    FROM signals
-                    WHERE product = %s AND algorithm_name = %s
-                        AND source_timestamp = %s
+                    FROM (
+                        SELECT 1
+                        FROM algorithm_evaluations
+                        WHERE product = %s AND algorithm_name = %s
+                            AND source_timestamp = %s
+                        UNION ALL
+                        SELECT 1
+                        FROM signals
+                        WHERE product = %s AND algorithm_name = %s
+                            AND source_timestamp = %s
+                    ) AS existing_evaluation
                     LIMIT 1
                     """,
-                    (product, algorithm_name, source_timestamp),
+                    (
+                        product,
+                        algorithm_name,
+                        source_timestamp,
+                        product,
+                        algorithm_name,
+                        source_timestamp,
+                    ),
                 )
                 return cursor.fetchone() is not None
             finally:
@@ -1238,11 +1283,35 @@ class MarketDataRepository:
         algorithm_name: str,
         signal: dict[str, object],
         candles_count: int,
+        *,
+        record_evaluation: bool = False,
+        save_signal: bool = True,
+        enqueue_notification: bool = True,
     ) -> bool:
-        """Zapisuje sygnał dowolnej strategii przez istniejący adapter MySQL."""
+        """Zapisuje wynik strategii w jednej transakcji MySQL.
+
+        Args:
+            product: Symbol produktu zapisany w bazie.
+            algorithm_name: Nazwa strategii.
+            signal: Wynik strategii z parametrami JSON i czasem świecy.
+            candles_count: Liczba świec wykorzystanych do analizy.
+            record_evaluation: Czy trwale oznaczyć świecę jako ocenioną.
+            save_signal: Czy zapisać rekord również w tabeli ``signals``.
+            enqueue_notification: Czy po nowym zapisie przygotować dźwięk.
+
+        Returns:
+            ``True`` tylko wtedy, gdy powstał nowy rekord w ``signals``.
+
+        Raises:
+            ValueError: Gdy wynik lub wymagany sposób zapisu jest nieprawidłowy.
+            RuntimeError: Gdy zapis spójnego outboxa nie powiedzie się logicznie.
+            mysql.connector.Error: Gdy zapis do bazy się nie powiedzie.
+        """
         direction = str(signal.get("signal", "")).upper()
         if direction not in {"LONG", "SHORT", "NONE"}:
             raise ValueError("Sygnał musi mieć wartość LONG, SHORT albo NONE.")
+        if not record_evaluation and not save_signal:
+            raise ValueError("Nie można pominąć sygnału bez zapisu ewaluacji.")
         price = signal.get("price")
         candle_open_epoch = signal.get("candle_open_epoch")
         close_time_value = signal.get("timestamp")
@@ -1275,26 +1344,71 @@ class MarketDataRepository:
         cursor = None
         try:
             cursor = connection.cursor()
-            cursor.execute(
-                """
-                INSERT IGNORE INTO signals
-                    (`datetime`, product, price, `signal`, algorithm_name,
-                     ai_decision, transaction_id, candles_count,
-                     signal_parameters, source_timestamp)
-                VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)
-                """,
-                (
-                    local_close_time,
-                    product,
-                    Decimal(str(price)),
-                    direction.lower(),
-                    algorithm_name,
-                    max(0, int(candles_count)),
-                    serialized_parameters,
-                    source_timestamp,
-                ),
-            )
-            inserted = cursor.rowcount == 1
+            evaluation_id = None
+            if record_evaluation:
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO algorithm_evaluations
+                        (product, algorithm_name, source_timestamp, `signal`)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        product,
+                        algorithm_name,
+                        source_timestamp,
+                        direction.lower(),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    connection.commit()
+                    return False
+                evaluation_id = cursor.lastrowid
+                if evaluation_id is None:
+                    connection.rollback()
+                    raise RuntimeError(
+                        "Nie udało się odczytać identyfikatora ewaluacji."
+                    )
+
+            inserted = False
+            if save_signal:
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO signals
+                        (`datetime`, product, price, `signal`, algorithm_name,
+                         ai_decision, transaction_id, candles_count,
+                         signal_parameters, source_timestamp)
+                    VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)
+                    """,
+                    (
+                        local_close_time,
+                        product,
+                        Decimal(str(price)),
+                        direction.lower(),
+                        algorithm_name,
+                        max(0, int(candles_count)),
+                        serialized_parameters,
+                        source_timestamp,
+                    ),
+                )
+                inserted = cursor.rowcount == 1
+                if (
+                    inserted
+                    and evaluation_id is not None
+                    and enqueue_notification
+                ):
+                    cursor.execute(
+                        """
+                        UPDATE algorithm_evaluations
+                        SET notification_pending = TRUE
+                        WHERE id = %s
+                        """,
+                        (evaluation_id,),
+                    )
+                    if cursor.rowcount != 1:
+                        connection.rollback()
+                        raise RuntimeError(
+                            "Nie udało się dodać powiadomienia do outboxa."
+                        )
             connection.commit()
             return inserted
         except mysql.connector.Error:
@@ -1303,6 +1417,109 @@ class MarketDataRepository:
         finally:
             if cursor is not None:
                 cursor.close()
+            connection.close()
+
+    def fetch_usdmxn_notification_ids(self, limit: int) -> list[int]:
+        """Pobiera najstarsze niepotwierdzone powiadomienia USD/MXN.
+
+        Args:
+            limit: Maksymalna liczba zwracanych identyfikatorów.
+
+        Returns:
+            Identyfikatory oczekujące na odtworzenie, w kolejności rosnącej.
+
+        Raises:
+            ValueError: Gdy limit nie jest dodatnią liczbą całkowitą.
+            mysql.connector.Error: Gdy odczyt bazy się nie powiedzie.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("Limit powiadomień musi być dodatnią liczbą całkowitą.")
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM algorithm_evaluations
+                    WHERE product = %s AND algorithm_name = %s
+                        AND notification_pending = TRUE
+                    ORDER BY id ASC
+                    LIMIT %s
+                    """,
+                    (
+                        USDMXN_DATABASE_SYMBOL,
+                        USDMXN_STRATEGY_NAME,
+                        limit,
+                    ),
+                )
+                return [int(row[0]) for row in cursor.fetchall()]
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def acknowledge_usdmxn_notification(self, notification_id: int) -> bool:
+        """Potwierdza odtworzenie i bezpiecznie obsługuje ponowne potwierdzenie.
+
+        Args:
+            notification_id: Identyfikator odebranego zdarzenia outboxa.
+
+        Returns:
+            ``True`` dla istniejącego zdarzenia, także już potwierdzonego.
+
+        Raises:
+            ValueError: Gdy identyfikator nie jest dodatnią liczbą całkowitą.
+            mysql.connector.Error: Gdy aktualizacja bazy się nie powiedzie.
+        """
+        if (
+            isinstance(notification_id, bool)
+            or not isinstance(notification_id, int)
+            or notification_id < 1
+        ):
+            raise ValueError("Identyfikator powiadomienia musi być dodatni.")
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE algorithm_evaluations
+                    SET notification_pending = FALSE
+                    WHERE id = %s AND product = %s AND algorithm_name = %s
+                        AND notification_pending = TRUE
+                    """,
+                    (
+                        notification_id,
+                        USDMXN_DATABASE_SYMBOL,
+                        USDMXN_STRATEGY_NAME,
+                    ),
+                )
+                acknowledged = cursor.rowcount == 1
+                if not acknowledged:
+                    cursor.execute(
+                        """
+                        SELECT 1
+                        FROM algorithm_evaluations
+                        WHERE id = %s AND product = %s
+                            AND algorithm_name = %s
+                        LIMIT 1
+                        """,
+                        (
+                            notification_id,
+                            USDMXN_DATABASE_SYMBOL,
+                            USDMXN_STRATEGY_NAME,
+                        ),
+                    )
+                    acknowledged = cursor.fetchone() is not None
+                connection.commit()
+                return acknowledged
+            finally:
+                cursor.close()
+        except mysql.connector.Error:
+            connection.rollback()
+            raise
+        finally:
             connection.close()
 
     def save_grok45_signal(self, signal: Grok45SignalRecord) -> bool:
@@ -2027,7 +2244,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     or candle_timestamp > last_usdmxn_candle
                 ):
                     signal_repository = request.app.state.repository
-                    if signal_repository.has_algorithm_signal(
+                    if signal_repository.has_algorithm_evaluation(
                         "USD/MXN",
                         USDMXN_STRATEGY_NAME,
                         int(candle_timestamp.timestamp()),
@@ -2062,11 +2279,11 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                                 usdmxn_candles,
                                 now=datetime.now(timezone.utc),
                             )
-                            saved = current_storage.save(
-                                result, len(usdmxn_candles)
+                            current_storage.save(
+                                result,
+                                len(usdmxn_candles),
+                                enqueue_notification=USDMXN_BEEP_ENABLED,
                             )
-                            if saved and USDMXN_BEEP_ENABLED:
-                                signal_save_count += 1
                             request.app.state.usdmxn_last_processed_timestamp = (
                                 candle_timestamp
                             )
@@ -2347,6 +2564,77 @@ def grok_sp500_notifications(
     except mysql.connector.Error as error:
         raise HTTPException(status_code=503, detail="Nie można odczytać powiadomień Groka.") from error
     return {"ids": ids, "next_cursor": ids[-1] if ids else after_id, "has_more": has_more}
+
+
+@app.get("/api/signals/usdmxn/notifications")
+def usdmxn_notifications(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=100),
+) -> dict[str, list[int]]:
+    """Zwraca oczekujące powiadomienia USD/MXN.
+
+    Args:
+        request: Żądanie API z repozytorium bazy danych.
+        limit: Maksymalna liczba identyfikatorów w odpowiedzi.
+
+    Returns:
+        Identyfikatory oczekujące na odtworzenie przez klienta C++.
+
+    Raises:
+        HTTPException: Z kodem 503, gdy odczyt bazy się nie powiedzie.
+    """
+    try:
+        notification_ids = (
+            request.app.state.repository.fetch_usdmxn_notification_ids(limit)
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie można odczytać powiadomień USD/MXN.",
+        ) from error
+    return {"ids": notification_ids}
+
+
+@app.post("/api/signals/usdmxn/notifications/{notification_id}/ack")
+def acknowledge_usdmxn_notification(
+    notification_id: int,
+    request: Request,
+) -> dict[str, bool]:
+    """Potwierdza odtworzenie dźwięku dla jednego powiadomienia USD/MXN.
+
+    Args:
+        notification_id: Identyfikator odebranego zdarzenia outboxa.
+        request: Żądanie API z repozytorium bazy danych.
+
+    Returns:
+        Potwierdzenie, że zdarzenie istnieje i zostało obsłużone.
+
+    Raises:
+        HTTPException: Z kodem 422, 404 lub 503 przy błędnych danych,
+            brakującym zdarzeniu albo błędzie bazy.
+    """
+    if notification_id < 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Identyfikator powiadomienia musi być dodatni.",
+        )
+    try:
+        acknowledged = (
+            request.app.state.repository.acknowledge_usdmxn_notification(
+                notification_id
+            )
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie można potwierdzić powiadomienia USD/MXN.",
+        ) from error
+    if not acknowledged:
+        raise HTTPException(
+            status_code=404,
+            detail="Powiadomienie USD/MXN nie istnieje.",
+        )
+    return {"acknowledged": True}
 
 
 @app.get("/api/signals/report", response_class=Response)

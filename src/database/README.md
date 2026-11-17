@@ -53,11 +53,14 @@ Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każ
 Po każdej nowej zamkniętej świecy `USD/MXN` API uruchamia strategię
 `Chat-gpt6/USDMXN/USDMXNStrategyV1`. Odczyt ograniczony do ostatnich 1200 świec
 odtwarza czas UTC z `datetime` i `utc_offset_minutes`; pełny wynik LONG, SHORT
-lub NONE jest zapisywany w `signal_parameters`. Unikalny
-`source_timestamp` blokuje ponowną ewaluację rekordu po restarcie, a po nowym
-zapisie aplikacja desktopowa odtwarza dwa krótkie piknięcia. Zapis NONE można
-wyłączyć flagą `SAVE_NONE_SIGNALS` w
-`src/algorithms/Chat-gpt6/USDMXN/config.py`.
+lub NONE jest zapisywany w `signal_parameters` zgodnie z konfiguracją. Tabela
+`algorithm_evaluations` trwale oznacza każdą ewaluację, także NONE pominięte
+w `signals`, i blokuje jej powtórzenie po restarcie. Rekord sygnału i oczekujące
+powiadomienie są zapisywane w jednej transakcji. Aplikacja desktopowa odtwarza
+dwa krótkie piknięcia, a po ich odtworzeniu potwierdza zdarzenie; w razie błędu
+ponawia pobranie. Dostarczenie jest typu co najmniej raz, więc awaria między
+odtworzeniem a potwierdzeniem może powtórzyć dźwięk. Zapis NONE można wyłączyć
+flagą `SAVE_NONE_SIGNALS` w `src/algorithms/Chat-gpt6/USDMXN/config.py`.
 
 Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
 `signal`, epokę `timestamp`, `instrument` oraz `parameters` z EMA9, ATR14,

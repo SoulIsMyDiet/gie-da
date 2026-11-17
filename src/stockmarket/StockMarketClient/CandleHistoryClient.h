@@ -99,11 +99,30 @@ public:
         std::uint64_t afterId, GrokNotificationPage& page, std::string& error);
 
     /**
+     * Pobiera identyfikatory oczekujących powiadomień strategii USD/MXN.
+     * @param notificationIds Otrzymuje identyfikatory w kolejności odtworzenia.
+     * @param error Otrzymuje opis błędu żądania lub odpowiedzi.
+     * @return true, jeśli odpowiedź API zawiera poprawną listę identyfikatorów.
+     */
+    static bool fetchUsdmxnNotificationIds(
+        std::vector<std::uint64_t>& notificationIds, std::string& error);
+
+    /**
+     * Potwierdza w API odtworzenie powiadomienia USD/MXN.
+     * @param notificationId Identyfikator odtworzonego powiadomienia.
+     * @param error Otrzymuje opis błędu żądania lub odpowiedzi.
+     * @return true, jeśli powiadomienie zostało potwierdzone.
+     */
+    static bool acknowledgeUsdmxnNotification(
+        std::uint64_t notificationId, std::string& error);
+
+    /**
      * Zapisuje świecę w lokalnym API historii rynkowej.
      * @param symbol Symbol instrumentu, którego dotyczy świeca.
      * @param candle Dane OHLCV i czas otwarcia świecy w UTC.
      * @param newlyDetectedGapCount Otrzymuje liczbę nowo wykrytych luk.
-     * @param savedSignalCount Otrzymuje liczbę nowych rekordów sygnałów.
+     * @param savedSignalCount Otrzymuje liczbę nowych rekordów sygnałów
+     *        przekazywanych bezpośrednio w odpowiedzi API.
      * @param error Otrzymuje opis błędu, jeśli zapis się nie powiedzie.
      * @param candleSavedDespiteError Opcjonalnie otrzymuje true, gdy świeca
      *        została zapisana, ale dalsza analiza zakończyła się błędem.

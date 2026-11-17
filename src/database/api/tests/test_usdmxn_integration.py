@@ -12,13 +12,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import mysql.connector
+
 os.environ.setdefault("MYSQL_HOST", "localhost")
 os.environ.setdefault("MYSQL_USER", "test")
 os.environ.setdefault("MYSQL_PASSWORD", "test")
 os.environ.setdefault("MYSQL_DATABASE", "test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import CandleRecord, MarketDataRepository, save_candle  # noqa: E402
+from app import (  # noqa: E402
+    CandleRecord,
+    MarketDataRepository,
+    acknowledge_usdmxn_notification,
+    save_candle,
+    usdmxn_notifications,
+)
 from fastapi import Request  # noqa: E402
 
 UTC = timezone.utc
@@ -56,7 +64,7 @@ def new_state(opened: datetime, saved: bool = True) -> SimpleNamespace:
     repository = Mock()
     repository._is_market_open.return_value = True
     repository.save_candle.return_value = (0, 1, "", 0)
-    repository.has_algorithm_signal.return_value = False
+    repository.has_algorithm_evaluation.return_value = False
     repository.fetch_recent_candle_history.return_value = [
         {
             "timestamp_utc": opened,
@@ -86,10 +94,10 @@ def new_state(opened: datetime, saved: bool = True) -> SimpleNamespace:
 
 
 class USDMXNIntegrationTests(unittest.TestCase):
-    """Sprawdza idempotencję, mapowanie zapisu i liczbę dźwięków po zapisie."""
+    """Sprawdza ewaluacje, trwałe powiadomienia i mapowanie zapisu."""
 
-    def test_new_closed_candle_is_evaluated_once_and_requests_two_beeps(self) -> None:
-        """Nowy rekord zwiększa licznik C++ o jeden, a ponowienie nie zapisuje."""
+    def test_new_closed_candle_is_evaluated_once_and_uses_notification_outbox(self) -> None:
+        """Nowy zapis trafia do trwałego outboxa, a ponowienie go nie tworzy."""
         opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=2)
         state = new_state(opened)
         request = create_request(state)
@@ -99,11 +107,15 @@ class USDMXNIntegrationTests(unittest.TestCase):
             first = save_candle(live_candle(opened), request)
             second = save_candle(live_candle(opened), request)
 
-        self.assertEqual(first.body, b"0\n1")
+        self.assertEqual(first.body, b"0\n0")
         self.assertEqual(second.body, b"0\n0")
         state.usdmxn_strategy.evaluate.assert_called_once()
-        state.usdmxn_storage.save.assert_called_once()
-        state.repository.has_algorithm_signal.assert_called_once_with(
+        state.usdmxn_storage.save.assert_called_once_with(
+            state.usdmxn_strategy.evaluate.return_value,
+            1,
+            enqueue_notification=True,
+        )
+        state.repository.has_algorithm_evaluation.assert_called_once_with(
             "USD/MXN",
             "Chat-gpt6/USDMXN/USDMXNStrategyV1",
             int(opened.timestamp()),
@@ -113,7 +125,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
         """Trwały source_timestamp blokuje ponowną ewaluację po restarcie API."""
         opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=2)
         state = new_state(opened)
-        state.repository.has_algorithm_signal.return_value = True
+        state.repository.has_algorithm_evaluation.return_value = True
         with patch("app.is_monitored_product", return_value=True):
             response = save_candle(
                 live_candle(opened),
@@ -198,14 +210,290 @@ class USDMXNIntegrationTests(unittest.TestCase):
         self.assertIn("DATE_SUB", connection.cursor_value.query)
         self.assertEqual(connection.cursor_value.parameters[0], "USD/MXN")
 
-    def test_signal_json_and_timestamp_are_saved_without_truncating_parameters(self) -> None:
-        """Istniejący zapis przekazuje kompletny JSON i epokę otwarcia."""
+    def test_none_without_signal_record_still_persists_evaluation_marker(self) -> None:
+        """NONE może być pominięty w signals, ale blokuje powtórną ewaluację."""
+        class FakeCursor:
+            rowcount = 1
+            lastrowid = 41
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def execute(self, query, parameters) -> None:
+                self.calls.append((query, parameters))
+
+            def close(self) -> None:
+                pass
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.cursor_value = FakeCursor()
+                self.committed = False
+
+            def cursor(self):
+                return self.cursor_value
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                raise AssertionError("Nieoczekiwany rollback.")
+
+            def close(self) -> None:
+                pass
+
+        opened = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+        result = {
+            "signal": "NONE",
+            "price": 17.05,
+            "timestamp": (opened + timedelta(minutes=1)).isoformat(),
+            "candle_open_epoch": int(opened.timestamp()),
+            "signal_parameters": {"signal": "NONE"},
+        }
+        connection = FakeConnection()
+        repository = MarketDataRepository.__new__(MarketDataRepository)
+        repository.database_settings = {}
+        with patch("app.mysql.connector.connect", return_value=connection):
+            inserted = repository.save_algorithm_signal(
+                "USD/MXN",
+                "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                result,
+                100,
+                record_evaluation=True,
+                save_signal=False,
+            )
+
+        self.assertFalse(inserted)
+        self.assertTrue(connection.committed)
+        self.assertEqual(len(connection.cursor_value.calls), 1)
+        self.assertIn(
+            "INSERT IGNORE INTO algorithm_evaluations",
+            connection.cursor_value.calls[0][0],
+        )
+
+    def test_failed_signal_insert_rolls_back_evaluation_and_outbox(self) -> None:
+        """Błąd zapisu sygnału nie pozostawia markera ani powiadomienia."""
+        class FakeCursor:
+            rowcount = 1
+            lastrowid = 41
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def execute(self, query, parameters) -> None:
+                self.calls += 1
+                if self.calls == 2:
+                    raise mysql.connector.Error("test insert failure")
+
+            def close(self) -> None:
+                pass
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.cursor_value = FakeCursor()
+                self.committed = False
+                self.rolled_back = False
+
+            def cursor(self):
+                return self.cursor_value
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                self.rolled_back = True
+
+            def close(self) -> None:
+                pass
+
+        opened = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+        result = {
+            "signal": "LONG",
+            "price": 17.05,
+            "timestamp": (opened + timedelta(minutes=1)).isoformat(),
+            "candle_open_epoch": int(opened.timestamp()),
+            "signal_parameters": {"signal": "LONG"},
+        }
+        connection = FakeConnection()
+        repository = MarketDataRepository.__new__(MarketDataRepository)
+        repository.database_settings = {}
+        with patch("app.mysql.connector.connect", return_value=connection):
+            with self.assertRaises(mysql.connector.Error):
+                repository.save_algorithm_signal(
+                    "USD/MXN",
+                    "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                    result,
+                    100,
+                    record_evaluation=True,
+                )
+
+        self.assertFalse(connection.committed)
+        self.assertTrue(connection.rolled_back)
+
+    def test_disabled_beep_does_not_enqueue_notification(self) -> None:
+        """Wyłączenie dźwięku zachowuje sygnał, ale nie zostawia outboxa."""
+        class FakeCursor:
+            rowcount = 1
+            lastrowid = 41
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def execute(self, query, parameters) -> None:
+                self.calls.append(query)
+
+            def close(self) -> None:
+                pass
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.cursor_value = FakeCursor()
+                self.committed = False
+
+            def cursor(self):
+                return self.cursor_value
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                raise AssertionError("Nieoczekiwany rollback.")
+
+            def close(self) -> None:
+                pass
+
+        opened = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+        result = {
+            "signal": "LONG",
+            "price": 17.05,
+            "timestamp": (opened + timedelta(minutes=1)).isoformat(),
+            "candle_open_epoch": int(opened.timestamp()),
+            "signal_parameters": {"signal": "LONG"},
+        }
+        connection = FakeConnection()
+        repository = MarketDataRepository.__new__(MarketDataRepository)
+        repository.database_settings = {}
+        with patch("app.mysql.connector.connect", return_value=connection):
+            self.assertTrue(
+                repository.save_algorithm_signal(
+                    "USD/MXN",
+                    "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                    result,
+                    100,
+                    record_evaluation=True,
+                    enqueue_notification=False,
+                )
+            )
+
+        self.assertTrue(connection.committed)
+        self.assertEqual(len(connection.cursor_value.calls), 2)
+
+    def test_evaluation_lookup_checks_marker_and_legacy_signal_rows(self) -> None:
+        """Po migracji wykrywane są też sygnały zapisane przed dodaniem outboxa."""
+        class FakeCursor:
+            def execute(self, query, parameters) -> None:
+                self.query = query
+                self.parameters = parameters
+
+            def fetchone(self):
+                return (1,)
+
+            def close(self) -> None:
+                pass
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.cursor_value = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_value
+
+            def close(self) -> None:
+                pass
+
+        connection = FakeConnection()
+        repository = MarketDataRepository.__new__(MarketDataRepository)
+        repository.database_settings = {}
+        with patch("app.mysql.connector.connect", return_value=connection):
+            exists = repository.has_algorithm_evaluation(
+                "USD/MXN",
+                "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                123,
+            )
+
+        self.assertTrue(exists)
+        self.assertIn("FROM algorithm_evaluations", connection.cursor_value.query)
+        self.assertIn("FROM signals", connection.cursor_value.query)
+        self.assertEqual(connection.cursor_value.parameters, (
+            "USD/MXN",
+            "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+            123,
+            "USD/MXN",
+            "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+            123,
+        ))
+
+    def test_usdmxn_outbox_returns_pending_ids_and_acknowledges_delivery(self) -> None:
+        """C++ może ponowić pobranie aż do potwierdzenia dźwięku."""
         class FakeCursor:
             rowcount = 1
 
             def execute(self, query, parameters) -> None:
                 self.query = query
                 self.parameters = parameters
+
+            def fetchall(self):
+                return [(11,), (12,)]
+
+            def close(self) -> None:
+                pass
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.cursor_value = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_value
+
+            def commit(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        repository = MarketDataRepository.__new__(MarketDataRepository)
+        repository.database_settings = {}
+        connection = FakeConnection()
+        with patch("app.mysql.connector.connect", return_value=connection):
+            self.assertEqual(repository.fetch_usdmxn_notification_ids(100), [11, 12])
+            self.assertTrue(repository.acknowledge_usdmxn_notification(11))
+        self.assertIn("notification_pending = TRUE", connection.cursor_value.query)
+
+    def test_usdmxn_notification_endpoints_expose_and_ack_pending_id(self) -> None:
+        """Endpointy przekazują oczekujące zdarzenie i potwierdzają jego ID."""
+        repository = Mock()
+        repository.fetch_usdmxn_notification_ids.return_value = [11]
+        repository.acknowledge_usdmxn_notification.return_value = True
+        request = create_request(SimpleNamespace(repository=repository))
+
+        self.assertEqual(usdmxn_notifications(request, 100), {"ids": [11]})
+        self.assertEqual(
+            acknowledge_usdmxn_notification(11, request),
+            {"acknowledged": True},
+        )
+        repository.acknowledge_usdmxn_notification.assert_called_once_with(11)
+
+    def test_signal_json_and_timestamp_are_saved_without_truncating_parameters(self) -> None:
+        """Istniejący zapis przekazuje kompletny JSON i epokę otwarcia."""
+        class FakeCursor:
+            rowcount = 1
+            lastrowid = 71
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def execute(self, query, parameters) -> None:
+                self.calls.append((query, parameters))
 
             def close(self) -> None:
                 pass
@@ -255,13 +543,28 @@ class USDMXNIntegrationTests(unittest.TestCase):
                 "Chat-gpt6/USDMXN/USDMXNStrategyV1",
                 result,
                 600,
+                record_evaluation=True,
             )
         self.assertTrue(inserted)
         self.assertTrue(connection.committed)
-        self.assertIn("INSERT IGNORE INTO signals", connection.cursor_value.query)
-        saved_json = json.loads(connection.cursor_value.parameters[6])
+        self.assertIn(
+            "INSERT IGNORE INTO algorithm_evaluations",
+            connection.cursor_value.calls[0][0],
+        )
+        self.assertIn(
+            "INSERT IGNORE INTO signals",
+            connection.cursor_value.calls[1][0],
+        )
+        self.assertIn(
+            "UPDATE algorithm_evaluations",
+            connection.cursor_value.calls[2][0],
+        )
+        saved_json = json.loads(connection.cursor_value.calls[1][1][6])
         self.assertEqual(saved_json, payload)
-        self.assertEqual(connection.cursor_value.parameters[7], int(opened.timestamp()))
+        self.assertEqual(
+            connection.cursor_value.calls[1][1][7],
+            int(opened.timestamp()),
+        )
 
 
 if __name__ == "__main__":

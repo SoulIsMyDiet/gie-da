@@ -17,8 +17,12 @@ class SignalRepository(Protocol):
         algorithm_name: str,
         signal: dict[str, Any],
         candles_count: int,
+        *,
+        record_evaluation: bool,
+        save_signal: bool,
+        enqueue_notification: bool,
     ) -> bool:
-        """Zapisuje sygnał i zwraca True tylko dla nowego rekordu."""
+        """Zapisuje ewaluację i opcjonalnie sygnał z trwałym powiadomieniem."""
 
 
 class USDMXNSignalStorage:
@@ -28,10 +32,27 @@ class USDMXNSignalStorage:
         """Przyjmuje gotowe repozytorium API; nie otwiera drugiego połączenia."""
         self.repository = repository
 
-    def save(self, result: dict[str, Any], candles_count: int) -> bool:
-        """Pomija NONE według konfiguracji i zachowuje idempotencję bazy."""
-        if not should_save_signal(result):
-            return False
+    def save(
+        self,
+        result: dict[str, Any],
+        candles_count: int,
+        *,
+        enqueue_notification: bool = True,
+    ) -> bool:
+        """Zapisuje ewaluację także dla NONE, a sygnał według konfiguracji.
+
+        Args:
+            result: Wynik strategii zawierający sygnał, czas i parametry JSON.
+            candles_count: Liczba świec wykorzystanych do analizy.
+            enqueue_notification: Czy przygotować dźwięk po nowym zapisie.
+
+        Returns:
+            ``True`` tylko wtedy, gdy zapisano nowy rekord sygnału.
+
+        Raises:
+            ValueError: Gdy wynik nie zawiera epoki otwarcia świecy.
+            Błąd bazy danych: Gdy repozytorium nie może zapisać wyniku.
+        """
         if result.get("candle_open_epoch") is None:
             raise ValueError("Wynik USDMXN nie zawiera epoki otwarcia świecy.")
         return self.repository.save_algorithm_signal(
@@ -39,4 +60,7 @@ class USDMXNSignalStorage:
             STRATEGY_NAME,
             result,
             candles_count,
+            record_evaluation=True,
+            save_signal=should_save_signal(result),
+            enqueue_notification=enqueue_notification,
         )
