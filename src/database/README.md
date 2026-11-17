@@ -50,6 +50,15 @@ Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego AP
 
 Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każdej nowej zamkniętej świecy EUR/USD API uruchamia strategię `Chat-gpt6/EURUSD/EURUSDStrategyV1`; wygenerowany sygnał zapisuje w tej samej transakcji bazodanowej co świecę, a jego pakiet JSON trafia do `signal_parameters`. Po potwierdzonym zapisie aplikacja desktopowa odtwarza dwa piknięcia. Integracja z agentem AI nie jest jeszcze podłączona.
 
+Po każdej nowej zamkniętej świecy `USD/MXN` API uruchamia strategię
+`Chat-gpt6/USDMXN/USDMXNStrategyV1`. Odczyt ograniczony do ostatnich 1200 świec
+odtwarza czas UTC z `datetime` i `utc_offset_minutes`; pełny wynik LONG, SHORT
+lub NONE jest zapisywany w `signal_parameters`. Unikalny
+`source_timestamp` blokuje ponowną ewaluację rekordu po restarcie, a po nowym
+zapisie aplikacja desktopowa odtwarza dwa krótkie piknięcia. Zapis NONE można
+wyłączyć flagą `SAVE_NONE_SIGNALS` w
+`src/algorithms/Chat-gpt6/USDMXN/config.py`.
+
 Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
 `signal`, epokę `timestamp`, `instrument` oraz `parameters` z EMA9, ATR14,
 EMA21, RSI14, krótkim powodem i pasmami Bollingera. Pełne dane diagnostyczne

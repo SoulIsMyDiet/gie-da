@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import mysql.connector
@@ -81,6 +81,26 @@ chat_dax_package = importlib.util.module_from_spec(chat_dax_package_spec)
 sys.modules[chat_dax_package_name] = chat_dax_package
 chat_dax_package_spec.loader.exec_module(chat_dax_package)
 
+usdmxn_algorithm_directory = Path(__file__).resolve().parent / "usdmxn_algorithm"
+if not usdmxn_algorithm_directory.is_dir():
+    usdmxn_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Chat-gpt6"
+        / "USDMXN"
+    )
+usdmxn_package_name = "chat_gpt6_usdmxn"
+usdmxn_package_spec = importlib.util.spec_from_file_location(
+    usdmxn_package_name,
+    usdmxn_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(usdmxn_algorithm_directory)],
+)
+if usdmxn_package_spec is None or usdmxn_package_spec.loader is None:
+    raise ImportError("Nie można załadować pakietu strategii USDMXN.")
+usdmxn_package = importlib.util.module_from_spec(usdmxn_package_spec)
+sys.modules[usdmxn_package_name] = usdmxn_package
+usdmxn_package_spec.loader.exec_module(usdmxn_package)
+
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from EURUSDStrategyV2 import (  # noqa: E402
     Candle as Grok45Candle,
@@ -112,6 +132,15 @@ from chat_gpt6_dax40.config import (  # noqa: E402
     HISTORY_LIMIT as CHAT_DAX40_HISTORY_LIMIT,
 )
 from chat_gpt6_dax40.storage import DAX40SignalStorage  # noqa: E402
+from chat_gpt6_usdmxn.USDMXNStrategyV1 import (  # noqa: E402
+    USDMXNStrategyV1,
+)
+from chat_gpt6_usdmxn.config import (  # noqa: E402
+    BEEP_ENABLED as USDMXN_BEEP_ENABLED,
+    HISTORY_LIMIT as USDMXN_HISTORY_LIMIT,
+    STRATEGY_NAME as USDMXN_STRATEGY_NAME,
+)
+from chat_gpt6_usdmxn.storage import USDMXNSignalStorage  # noqa: E402
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
@@ -1005,6 +1034,88 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_recent_candle_history(
+        self, symbol: str, limit: int, cutoff: datetime
+    ) -> list[dict[str, Any]]:
+        """Pobiera ograniczoną historię do otwarcia cutoff, zachowując czas UTC."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("Limit historii musi być dodatnią liczbą całkowitą.")
+        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            raise ValueError("Granica historii musi zawierać strefę czasową.")
+        cutoff_utc = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT datetime, utc_offset_minutes, open, high, low, close, volume
+                    FROM candles
+                    WHERE symbol = %s
+                        AND DATE_SUB(
+                            datetime, INTERVAL utc_offset_minutes MINUTE
+                        ) <= %s
+                    ORDER BY DATE_SUB(
+                        datetime, INTERVAL utc_offset_minutes MINUTE
+                    ) DESC
+                    LIMIT %s
+                    """,
+                    (symbol, cutoff_utc, limit),
+                )
+                rows = reversed(cursor.fetchall())
+                candles = []
+                for (
+                    local_datetime,
+                    offset_minutes,
+                    open_price,
+                    high,
+                    low,
+                    close,
+                    volume,
+                ) in rows:
+                    opened_utc = local_datetime.replace(
+                        tzinfo=timezone(timedelta(minutes=int(offset_minutes)))
+                    ).astimezone(timezone.utc)
+                    candles.append(
+                        {
+                            "timestamp_utc": opened_utc,
+                            "open": float(open_price),
+                            "high": float(high),
+                            "low": float(low),
+                            "close": float(close),
+                            "volume": float(volume) if volume is not None else None,
+                        }
+                    )
+                return candles
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def has_algorithm_signal(
+        self, product: str, algorithm_name: str, source_timestamp: int
+    ) -> bool:
+        """Sprawdza trwały klucz idempotencji przed ponowną ewaluacją świecy."""
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT 1
+                    FROM signals
+                    WHERE product = %s AND algorithm_name = %s
+                        AND source_timestamp = %s
+                    LIMIT 1
+                    """,
+                    (product, algorithm_name, source_timestamp),
+                )
+                return cursor.fetchone() is not None
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     @staticmethod
     def _insert_signal(cursor: mysql.connector.cursor.MySQLCursor, signal: Signal) -> None:
         """Dodaje sygnał do bieżącej transakcji wraz z jego pakietem JSON."""
@@ -1653,6 +1764,8 @@ dax40_strategy = DAX40StrategyV1()
 dax40_storage = DAX40Storage()
 chat_dax40_strategy = ChatDAX40Strategy(market_is_open=is_market_open)
 chat_dax40_storage = DAX40SignalStorage(repository)
+usdmxn_strategy = USDMXNStrategyV1(market_is_open=is_market_open)
+usdmxn_storage = USDMXNSignalStorage(repository)
 strategy_lock = Lock()
 
 
@@ -1896,6 +2009,72 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                                 signal_save_count += 1
                             request.app.state.chat_dax40_last_processed_timestamp = (
                                 candle_timestamp
+                            )
+            if (
+                candle.symbol == "USD/MXN"
+                and saved_candle_count
+                and candle.datetime.astimezone(timezone.utc)
+                    + timedelta(minutes=1) <= datetime.now(timezone.utc)
+            ):
+                candle_timestamp = candle.datetime.astimezone(timezone.utc)
+                last_usdmxn_candle = getattr(
+                    request.app.state,
+                    "usdmxn_last_processed_timestamp",
+                    None,
+                )
+                if (
+                    last_usdmxn_candle is None
+                    or candle_timestamp > last_usdmxn_candle
+                ):
+                    signal_repository = request.app.state.repository
+                    if signal_repository.has_algorithm_signal(
+                        "USD/MXN",
+                        USDMXN_STRATEGY_NAME,
+                        int(candle_timestamp.timestamp()),
+                    ):
+                        request.app.state.usdmxn_last_processed_timestamp = (
+                            candle_timestamp
+                        )
+                    else:
+                        usdmxn_candles = (
+                            signal_repository.fetch_recent_candle_history(
+                                "USD/MXN",
+                                USDMXN_HISTORY_LIMIT,
+                                candle_timestamp,
+                            )
+                        )
+                        if (
+                            usdmxn_candles
+                            and usdmxn_candles[-1]["timestamp_utc"]
+                                == candle_timestamp
+                        ):
+                            current_strategy = getattr(
+                                request.app.state,
+                                "usdmxn_strategy",
+                                usdmxn_strategy,
+                            )
+                            current_storage = getattr(
+                                request.app.state,
+                                "usdmxn_storage",
+                                usdmxn_storage,
+                            )
+                            result = current_strategy.evaluate(
+                                usdmxn_candles,
+                                now=datetime.now(timezone.utc),
+                            )
+                            saved = current_storage.save(
+                                result, len(usdmxn_candles)
+                            )
+                            if saved and USDMXN_BEEP_ENABLED:
+                                signal_save_count += 1
+                            request.app.state.usdmxn_last_processed_timestamp = (
+                                candle_timestamp
+                            )
+                        else:
+                            logger.error(
+                                "Historia USD/MXN nie zawiera właśnie "
+                                "zapisanej świecy %s; pominięto ewaluację.",
+                                candle_timestamp.isoformat(),
                             )
             if (
                 candle.symbol == "ES"
