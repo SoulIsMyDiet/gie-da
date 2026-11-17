@@ -50,12 +50,18 @@ Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego AP
 
 Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każdej nowej zamkniętej świecy EUR/USD API uruchamia strategię `Chat-gpt6/EURUSD/EURUSDStrategyV1`; wygenerowany sygnał zapisuje w tej samej transakcji bazodanowej co świecę, a jego pakiet JSON trafia do `signal_parameters`. Po potwierdzonym zapisie aplikacja desktopowa odtwarza dwa piknięcia. Integracja z agentem AI nie jest jeszcze podłączona.
 
-Strategia `Claude-sonnet55/S&P500` działa analogicznie do strategii DAX: API
-uruchamia ją po zapisaniu pojedynczej zamkniętej świecy `ES`, a aplikacja Windows
-odtwarza dźwięk po nowym zapisie sygnału. Ten tryb nie odpytuje samodzielnie bazy
-i nie wykrywa braku świecy po 20 sekundach ani nie analizuje automatycznie
-uzupełnianej historii. Tryb `--loop` można uruchomić osobno; szczegóły i
-ograniczenia znajdują się w README strategii.
+Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączone,
+ponieważ dotychczasowe symbole nie zapewniały danych dla oczekiwanych indeksów.
+API nie zwraca tych instrumentów jako monitorowanych ani otwartych i odrzuca
+nowe zapisy oraz żądania uzupełnienia; zapisane wcześniej świece pozostają
+w bazie.
+
+Strategia `Claude-sonnet55/S&P500` pozostaje w kodzie. Po ponownym włączeniu
+instrumentu API może uruchamiać ją po zapisaniu pojedynczej zamkniętej świecy
+`ES`, a aplikacja Windows odtwarza dźwięk po nowym zapisie sygnału. Ten tryb nie
+odpytuje samodzielnie bazy i nie wykrywa braku świecy po 20 sekundach ani nie
+analizuje automatycznie uzupełnianej historii. Tryb `--loop` można uruchomić
+osobno; szczegóły i ograniczenia znajdują się w README strategii.
 
 Tabela `signal_potention` jest tworzona automatycznie przy uruchomieniu API. Przy aktualizacji istniejąca kolumna `saldo_10th_candle` jest bezpiecznie przemianowywana na `saldo_10aggr_candles`, z obcięciem wartości do pięciu miejsc po przecinku; dodawane są też kolumny `saldo_20_aggr_candles`, `max_candle` i `spread`. Dla sygnałów EUR/USD domyślny spread wynosi `0,0003` (3 pipsy), a dla nowej strategii S&P 500 zapisywany jest koszt przyjęty w jej konfiguracji. Kolejne zamknięte świece M1, licząc od świecy po tej, która wygenerowała sygnał, stopniowo uzupełniają salda pierwszych pięciu świec. Po 10 i 20 świecach zapisywane są salda agregowane. Wynik LONG wykorzystuje najwyższe `high`, a SHORT najniższe `low`; od zmiany kursu odejmowany jest spread zapisany w tym samym wierszu. `max_candle` to numer od 1 do 20 świecy, która wyznaczyła ekstremum dla salda 20 świec. Po zebraniu 20 świec `100zl_deal` jest szacowany jako `100 * 30 * saldo_20_aggr_candles / cena_wejścia`; wynik jest w przybliżeniu w PLN i nie uwzględnia osobnych kursów przeliczeniowych walut ani specyfikacji kontraktu futures. Niewypełnione jeszcze kolumny pozostają `NULL`, a salda mogą być ujemne.
 

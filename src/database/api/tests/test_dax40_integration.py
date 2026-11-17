@@ -50,6 +50,17 @@ def create_candle(candle_time: datetime) -> CandleRecord:
 class DAX40ApiIntegrationTests(unittest.TestCase):
     """Sprawdza wykonanie algorytmu wyłącznie dla zamkniętej świecy live."""
 
+    def setUp(self) -> None:
+        """Symuluje aktywny GER30, aby testować działanie strategii."""
+        self.monitored_product_patch = patch(
+            "app.is_monitored_product", return_value=True
+        )
+        self.monitored_product_patch.start()
+
+    def tearDown(self) -> None:
+        """Przywraca rzeczywistą listę aktywnych produktów po teście."""
+        self.monitored_product_patch.stop()
+
     def test_chat_and_claude_strategies_count_each_new_signal_record(self) -> None:
         candle_time = (
             datetime.now(timezone.utc).replace(second=0, microsecond=0)

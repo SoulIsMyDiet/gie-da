@@ -14,6 +14,7 @@ from market_products import (  # noqa: E402
     get_monitored_symbols,
     get_open_symbols,
     is_market_open,
+    is_monitored_product,
 )
 
 
@@ -87,8 +88,8 @@ class MarketProductsTests(unittest.TestCase):
             with self.subTest(timestamp=timestamp):
                 self.assertEqual(profile.is_open(timestamp), expected_open)
 
-    def test_all_monitored_products_follow_their_schedules(self) -> None:
-        expected_symbols = ("EURUSD/USD", "GER30", "ES", "XAU/USD")
+    def test_only_available_products_are_monitored(self) -> None:
+        expected_symbols = ("EURUSD/USD", "XAU/USD")
         self.assertEqual(get_monitored_symbols(), expected_symbols)
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)),
@@ -98,6 +99,10 @@ class MarketProductsTests(unittest.TestCase):
             get_open_symbols(datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)),
             (),
         )
+        self.assertFalse(is_monitored_product("GER30"))
+        self.assertFalse(is_monitored_product("ES"))
+        self.assertTrue(is_monitored_product("EURUSD/USD"))
+        self.assertTrue(is_monitored_product("XAU/USD"))
 
     def test_unknown_symbols_are_not_treated_as_configured_products(self) -> None:
         with self.assertRaisesRegex(ValueError, "nie jest skonfigurowany"):

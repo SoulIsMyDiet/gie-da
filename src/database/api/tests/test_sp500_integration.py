@@ -30,6 +30,12 @@ from app import (  # noqa: E402
 from fastapi import Request  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def allow_strategy_test_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pozwala testować strategię ES mimo tymczasowego wyłączenia pobierania."""
+    monkeypatch.setattr("app.is_monitored_product", lambda _symbol: True)
+
+
 def _request() -> tuple[Request, Mock]:
     """Tworzy żądanie z atrapą repozytorium i działającym stanem API."""
     repository = Mock()

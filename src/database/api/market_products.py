@@ -141,11 +141,9 @@ MARKET_PROFILES = {
     ),
 }
 
-# Dodaj nowe symbole tutaj i przypisz im odpowiedni profil rynku.
+# Lista określa instrumenty udostępniane monitorowi i endpointom API.
 MONITORED_PRODUCTS = (
     MarketProduct("EURUSD/USD", "forex_ny_24_5"),
-    MarketProduct("GER30", "dax_index"),
-    MarketProduct("ES", "sp500_futures"),
     MarketProduct("XAU/USD", "gold_spot"),
 )
 
