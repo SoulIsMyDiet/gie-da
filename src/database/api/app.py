@@ -101,6 +101,30 @@ usdmxn_package = importlib.util.module_from_spec(usdmxn_package_spec)
 sys.modules[usdmxn_package_name] = usdmxn_package
 usdmxn_package_spec.loader.exec_module(usdmxn_package)
 
+grok45_usdmxn_algorithm_directory = (
+    Path(__file__).resolve().parent / "grok_usdmxn_algorithm"
+)
+if not grok45_usdmxn_algorithm_directory.is_dir():
+    grok45_usdmxn_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Grok-45"
+        / "USDMXN"
+    )
+grok45_usdmxn_package_name = "grok45_usdmxn"
+grok45_usdmxn_package_spec = importlib.util.spec_from_file_location(
+    grok45_usdmxn_package_name,
+    grok45_usdmxn_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(grok45_usdmxn_algorithm_directory)],
+)
+if grok45_usdmxn_package_spec is None or grok45_usdmxn_package_spec.loader is None:
+    raise ImportError("Nie można załadować strategii Grok-45 USD/MXN.")
+grok45_usdmxn_package = importlib.util.module_from_spec(
+    grok45_usdmxn_package_spec
+)
+sys.modules[grok45_usdmxn_package_name] = grok45_usdmxn_package
+grok45_usdmxn_package_spec.loader.exec_module(grok45_usdmxn_package)
+
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from EURUSDStrategyV2 import (  # noqa: E402
     Candle as Grok45Candle,
@@ -142,6 +166,17 @@ from chat_gpt6_usdmxn.config import (  # noqa: E402
     STRATEGY_NAME as USDMXN_STRATEGY_NAME,
 )
 from chat_gpt6_usdmxn.storage import USDMXNSignalStorage  # noqa: E402
+from grok45_usdmxn.USDMXNStrategyV1 import (  # noqa: E402
+    USDMXNStrategyV1 as Grok45USDMXNStrategy,
+)
+from grok45_usdmxn.config import (  # noqa: E402
+    BEEP_ENABLED as GROK45_USDMXN_BEEP_ENABLED,
+    HISTORY_LIMIT as GROK45_USDMXN_HISTORY_LIMIT,
+    STRATEGY_NAME as GROK45_USDMXN_STRATEGY_NAME,
+)
+from grok45_usdmxn.storage import (  # noqa: E402
+    USDMXNSignalStorage as Grok45USDMXNSignalStorage,
+)
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
@@ -1420,7 +1455,7 @@ class MarketDataRepository:
             connection.close()
 
     def fetch_usdmxn_notification_ids(self, limit: int) -> list[int]:
-        """Pobiera najstarsze niepotwierdzone powiadomienia USD/MXN.
+        """Pobiera oczekujące dźwięki dla wszystkich strategii USD/MXN.
 
         Args:
             limit: Maksymalna liczba zwracanych identyfikatorów.
@@ -1442,16 +1477,11 @@ class MarketDataRepository:
                     """
                     SELECT id
                     FROM algorithm_evaluations
-                    WHERE product = %s AND algorithm_name = %s
-                        AND notification_pending = TRUE
+                    WHERE product = %s AND notification_pending = TRUE
                     ORDER BY id ASC
                     LIMIT %s
                     """,
-                    (
-                        USDMXN_DATABASE_SYMBOL,
-                        USDMXN_STRATEGY_NAME,
-                        limit,
-                    ),
+                    (USDMXN_DATABASE_SYMBOL, limit),
                 )
                 return [int(row[0]) for row in cursor.fetchall()]
             finally:
@@ -1460,7 +1490,7 @@ class MarketDataRepository:
             connection.close()
 
     def acknowledge_usdmxn_notification(self, notification_id: int) -> bool:
-        """Potwierdza odtworzenie i bezpiecznie obsługuje ponowne potwierdzenie.
+        """Potwierdza dźwięk dowolnej strategii USD/MXN i obsługuje retry.
 
         Args:
             notification_id: Identyfikator odebranego zdarzenia outboxa.
@@ -1486,14 +1516,10 @@ class MarketDataRepository:
                     """
                     UPDATE algorithm_evaluations
                     SET notification_pending = FALSE
-                    WHERE id = %s AND product = %s AND algorithm_name = %s
+                    WHERE id = %s AND product = %s
                         AND notification_pending = TRUE
                     """,
-                    (
-                        notification_id,
-                        USDMXN_DATABASE_SYMBOL,
-                        USDMXN_STRATEGY_NAME,
-                    ),
+                    (notification_id, USDMXN_DATABASE_SYMBOL),
                 )
                 acknowledged = cursor.rowcount == 1
                 if not acknowledged:
@@ -1502,14 +1528,9 @@ class MarketDataRepository:
                         SELECT 1
                         FROM algorithm_evaluations
                         WHERE id = %s AND product = %s
-                            AND algorithm_name = %s
                         LIMIT 1
                         """,
-                        (
-                            notification_id,
-                            USDMXN_DATABASE_SYMBOL,
-                            USDMXN_STRATEGY_NAME,
-                        ),
+                        (notification_id, USDMXN_DATABASE_SYMBOL),
                     )
                     acknowledged = cursor.fetchone() is not None
                 connection.commit()
@@ -1983,6 +2004,8 @@ chat_dax40_strategy = ChatDAX40Strategy(market_is_open=is_market_open)
 chat_dax40_storage = DAX40SignalStorage(repository)
 usdmxn_strategy = USDMXNStrategyV1(market_is_open=is_market_open)
 usdmxn_storage = USDMXNSignalStorage(repository)
+grok45_usdmxn_strategy = Grok45USDMXNStrategy(market_is_open=is_market_open)
+grok45_usdmxn_storage = Grok45USDMXNSignalStorage(repository)
 strategy_lock = Lock()
 
 
@@ -2229,68 +2252,147 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                             )
             if (
                 candle.symbol == "USD/MXN"
-                and saved_candle_count
                 and candle.datetime.astimezone(timezone.utc)
                     + timedelta(minutes=1) <= datetime.now(timezone.utc)
             ):
                 candle_timestamp = candle.datetime.astimezone(timezone.utc)
-                last_usdmxn_candle = getattr(
+                last_chat_usdmxn_candle = getattr(
                     request.app.state,
                     "usdmxn_last_processed_timestamp",
                     None,
                 )
-                if (
-                    last_usdmxn_candle is None
-                    or candle_timestamp > last_usdmxn_candle
+                last_grok_usdmxn_candle = getattr(
+                    request.app.state,
+                    "grok45_usdmxn_last_processed_timestamp",
+                    None,
+                )
+                if any(
+                    last_processed is None or candle_timestamp > last_processed
+                    for last_processed in (
+                        last_chat_usdmxn_candle,
+                        last_grok_usdmxn_candle,
+                    )
                 ):
                     signal_repository = request.app.state.repository
-                    if signal_repository.has_algorithm_evaluation(
-                        "USD/MXN",
-                        USDMXN_STRATEGY_NAME,
-                        int(candle_timestamp.timestamp()),
-                    ):
-                        request.app.state.usdmxn_last_processed_timestamp = (
-                            candle_timestamp
+                    source_timestamp = int(candle_timestamp.timestamp())
+                    strategy_specs = (
+                        (
+                            "usdmxn",
+                            USDMXN_STRATEGY_NAME,
+                            USDMXN_HISTORY_LIMIT,
+                            usdmxn_strategy,
+                            usdmxn_storage,
+                            USDMXN_BEEP_ENABLED,
+                        ),
+                        (
+                            "grok45_usdmxn",
+                            GROK45_USDMXN_STRATEGY_NAME,
+                            GROK45_USDMXN_HISTORY_LIMIT,
+                            grok45_usdmxn_strategy,
+                            grok45_usdmxn_storage,
+                            GROK45_USDMXN_BEEP_ENABLED,
+                        ),
+                    )
+                    pending_strategies = []
+                    for (
+                        state_prefix,
+                        algorithm_name,
+                        _history_limit,
+                        default_strategy,
+                        default_storage,
+                        beep_enabled,
+                    ) in strategy_specs:
+                        last_processed = getattr(
+                            request.app.state,
+                            f"{state_prefix}_last_processed_timestamp",
+                            None,
                         )
-                    else:
+                        if (
+                            last_processed is not None
+                            and candle_timestamp <= last_processed
+                        ):
+                            continue
+                        if signal_repository.has_algorithm_evaluation(
+                            USDMXN_DATABASE_SYMBOL,
+                            algorithm_name,
+                            source_timestamp,
+                        ):
+                            setattr(
+                                request.app.state,
+                                f"{state_prefix}_last_processed_timestamp",
+                                candle_timestamp,
+                            )
+                            continue
+                        pending_strategies.append(
+                            (
+                                state_prefix,
+                                getattr(
+                                    request.app.state,
+                                    f"{state_prefix}_strategy",
+                                    default_strategy,
+                                ),
+                                getattr(
+                                    request.app.state,
+                                    f"{state_prefix}_storage",
+                                    default_storage,
+                                ),
+                                beep_enabled,
+                            )
+                        )
+
+                    if pending_strategies:
+                        history_limit = max(
+                            spec[2] for spec in strategy_specs
+                        )
                         usdmxn_candles = (
                             signal_repository.fetch_recent_candle_history(
-                                "USD/MXN",
-                                USDMXN_HISTORY_LIMIT,
+                                USDMXN_DATABASE_SYMBOL,
+                                history_limit,
                                 candle_timestamp,
                             )
                         )
                         if (
                             usdmxn_candles
                             and usdmxn_candles[-1]["timestamp_utc"]
-                                == candle_timestamp
+                            == candle_timestamp
                         ):
-                            current_strategy = getattr(
-                                request.app.state,
-                                "usdmxn_strategy",
-                                usdmxn_strategy,
-                            )
-                            current_storage = getattr(
-                                request.app.state,
-                                "usdmxn_storage",
-                                usdmxn_storage,
-                            )
-                            result = current_strategy.evaluate(
-                                usdmxn_candles,
-                                now=datetime.now(timezone.utc),
-                            )
-                            current_storage.save(
-                                result,
-                                len(usdmxn_candles),
-                                enqueue_notification=USDMXN_BEEP_ENABLED,
-                            )
-                            request.app.state.usdmxn_last_processed_timestamp = (
-                                candle_timestamp
-                            )
+                            strategy_error = None
+                            for (
+                                state_prefix,
+                                current_strategy,
+                                current_storage,
+                                beep_enabled,
+                            ) in pending_strategies:
+                                try:
+                                    result = current_strategy.evaluate(
+                                        usdmxn_candles,
+                                        now=datetime.now(timezone.utc),
+                                    )
+                                    current_storage.save(
+                                        result,
+                                        len(usdmxn_candles),
+                                        enqueue_notification=beep_enabled,
+                                    )
+                                    setattr(
+                                        request.app.state,
+                                        f"{state_prefix}_last_processed_timestamp",
+                                        candle_timestamp,
+                                    )
+                                except (mysql.connector.Error, ValueError) as error:
+                                    logger.exception(
+                                        "Nie udało się wykonać strategii %s dla "
+                                        "świecy USD/MXN %s.",
+                                        state_prefix,
+                                        candle_timestamp.isoformat(),
+                                    )
+                                    if strategy_error is None:
+                                        strategy_error = error
+                            if strategy_error is not None:
+                                raise strategy_error
                         else:
                             logger.error(
                                 "Historia USD/MXN nie zawiera właśnie "
-                                "zapisanej świecy %s; pominięto ewaluację.",
+                                "zapisanej świecy %s; pominięto obie ewaluacje.",
                                 candle_timestamp.isoformat(),
                             )
             if (
@@ -2691,5 +2793,11 @@ app.state.dax40_last_processed_timestamp = None
 app.state.chat_dax40_strategy = chat_dax40_strategy
 app.state.chat_dax40_storage = chat_dax40_storage
 app.state.chat_dax40_last_processed_timestamp = None
+app.state.usdmxn_strategy = usdmxn_strategy
+app.state.usdmxn_storage = usdmxn_storage
+app.state.usdmxn_last_processed_timestamp = None
+app.state.grok45_usdmxn_strategy = grok45_usdmxn_strategy
+app.state.grok45_usdmxn_storage = grok45_usdmxn_storage
+app.state.grok45_usdmxn_last_processed_timestamp = None
 app.state.strategy_ready = False
 app.state.grok45_v2_candles = []

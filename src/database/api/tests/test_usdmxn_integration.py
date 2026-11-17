@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (  # noqa: E402
     CandleRecord,
+    GROK45_USDMXN_STRATEGY_NAME,
     MarketDataRepository,
     acknowledge_usdmxn_notification,
     save_candle,
@@ -83,6 +84,14 @@ def new_state(opened: datetime, saved: bool = True) -> SimpleNamespace:
     }
     storage = Mock()
     storage.save.return_value = saved
+    grok_strategy = Mock()
+    grok_strategy.evaluate.return_value = {
+        "signal": "NONE",
+        "candle_open_epoch": int(opened.timestamp()),
+        "signal_parameters": {"reason": "warmup"},
+    }
+    grok_storage = Mock()
+    grok_storage.save.return_value = saved
     return SimpleNamespace(
         repository=repository,
         strategy_ready=True,
@@ -90,14 +99,16 @@ def new_state(opened: datetime, saved: bool = True) -> SimpleNamespace:
         grok45_v2_candles=[],
         usdmxn_strategy=strategy,
         usdmxn_storage=storage,
+        grok45_usdmxn_strategy=grok_strategy,
+        grok45_usdmxn_storage=grok_storage,
     )
 
 
 class USDMXNIntegrationTests(unittest.TestCase):
     """Sprawdza ewaluacje, trwałe powiadomienia i mapowanie zapisu."""
 
-    def test_new_closed_candle_is_evaluated_once_and_uses_notification_outbox(self) -> None:
-        """Nowy zapis trafia do trwałego outboxa, a ponowienie go nie tworzy."""
+    def test_new_closed_candle_runs_both_strategies_once_with_notifications(self) -> None:
+        """Obie strategie niezależnie oceniają tę samą świecę i używają outboxa."""
         opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=2)
         state = new_state(opened)
         request = create_request(state)
@@ -115,11 +126,28 @@ class USDMXNIntegrationTests(unittest.TestCase):
             1,
             enqueue_notification=True,
         )
-        state.repository.has_algorithm_evaluation.assert_called_once_with(
-            "USD/MXN",
-            "Chat-gpt6/USDMXN/USDMXNStrategyV1",
-            int(opened.timestamp()),
+        state.grok45_usdmxn_strategy.evaluate.assert_called_once()
+        state.grok45_usdmxn_storage.save.assert_called_once_with(
+            state.grok45_usdmxn_strategy.evaluate.return_value,
+            1,
+            enqueue_notification=True,
         )
+        self.assertEqual(
+            state.repository.has_algorithm_evaluation.call_args_list,
+            [
+                unittest.mock.call(
+                    "USD/MXN",
+                    "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                    int(opened.timestamp()),
+                ),
+                unittest.mock.call(
+                    "USD/MXN",
+                    GROK45_USDMXN_STRATEGY_NAME,
+                    int(opened.timestamp()),
+                ),
+            ],
+        )
+        state.repository.fetch_recent_candle_history.assert_called_once()
 
     def test_existing_database_signal_prevents_re_evaluation_after_restart(self) -> None:
         """Trwały source_timestamp blokuje ponowną ewaluację po restarcie API."""
@@ -134,6 +162,8 @@ class USDMXNIntegrationTests(unittest.TestCase):
         self.assertEqual(response.body, b"0\n0")
         state.usdmxn_strategy.evaluate.assert_not_called()
         state.usdmxn_storage.save.assert_not_called()
+        state.grok45_usdmxn_strategy.evaluate.assert_not_called()
+        state.grok45_usdmxn_storage.save.assert_not_called()
 
     def test_failed_or_disabled_save_does_not_request_a_beep(self) -> None:
         """Brak nowego zapisu nie zwiększa licznika dźwięku odpowiedzi API."""
@@ -148,6 +178,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
             )
         self.assertEqual(response.body, b"0\n0")
         state.usdmxn_storage.save.assert_called_once()
+        state.grok45_usdmxn_storage.save.assert_called_once()
 
     def test_recent_history_reconstructs_warsaw_winter_and_summer_offsets(self) -> None:
         """Odczyt uwzględnia zapisane CET/CEST bez traktowania czasu jako UTC."""
@@ -434,13 +465,17 @@ class USDMXNIntegrationTests(unittest.TestCase):
         ))
 
     def test_usdmxn_outbox_returns_pending_ids_and_acknowledges_delivery(self) -> None:
-        """C++ może ponowić pobranie aż do potwierdzenia dźwięku."""
+        """C++ odbiera i potwierdza dźwięki niezależnie od strategii USD/MXN."""
         class FakeCursor:
             rowcount = 1
+
+            def __init__(self) -> None:
+                self.calls = []
 
             def execute(self, query, parameters) -> None:
                 self.query = query
                 self.parameters = parameters
+                self.calls.append((query, parameters))
 
             def fetchall(self):
                 return [(11,), (12,)]
@@ -467,7 +502,14 @@ class USDMXNIntegrationTests(unittest.TestCase):
         with patch("app.mysql.connector.connect", return_value=connection):
             self.assertEqual(repository.fetch_usdmxn_notification_ids(100), [11, 12])
             self.assertTrue(repository.acknowledge_usdmxn_notification(11))
-        self.assertIn("notification_pending = TRUE", connection.cursor_value.query)
+        fetch_query, fetch_parameters = connection.cursor_value.calls[0]
+        self.assertIn("notification_pending = TRUE", fetch_query)
+        self.assertNotIn("algorithm_name", fetch_query)
+        self.assertEqual(fetch_parameters, ("USD/MXN", 100))
+        ack_query, ack_parameters = connection.cursor_value.calls[1]
+        self.assertIn("notification_pending = TRUE", ack_query)
+        self.assertNotIn("algorithm_name", ack_query)
+        self.assertEqual(ack_parameters, (11, "USD/MXN"))
 
     def test_usdmxn_notification_endpoints_expose_and_ack_pending_id(self) -> None:
         """Endpointy przekazują oczekujące zdarzenie i potwierdzają jego ID."""
