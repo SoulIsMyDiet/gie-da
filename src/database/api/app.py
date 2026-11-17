@@ -120,6 +120,18 @@ SP500_PROCESS_TIMEOUT_SECONDS = 30
 logger = logging.getLogger(__name__)
 
 
+def _format_api_timestamp(timestamp: datetime) -> str:
+    """Formatuje czas API do 19-znakowej postaci wymaganej przez klienta C++.
+
+    Args:
+        timestamp: Data i czas, które mają zostać zwrócone klientowi.
+
+    Returns:
+        Tekst w formacie ``YYYY-MM-DD HH:MM:SS``.
+    """
+    return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+
 class SP500StrategyError(RuntimeError):
     """Sygnalizuje błąd procesu strategii po zapisaniu świecy w bazie."""
 
@@ -821,9 +833,9 @@ class MarketDataRepository:
             open_market_candles,
             key=lambda item: item.datetime.astimezone(timezone.utc),
         )
-        latest_saved_time = latest_saved_candle.datetime.astimezone(
-            timezone.utc
-        ).strftime("%Y-%m-%d %H:%M:%S&P500")
+        latest_saved_time = _format_api_timestamp(
+            latest_saved_candle.datetime.astimezone(timezone.utc)
+        )
         return (
             newly_detected_gap_count,
             len(open_market_candles),
@@ -1234,7 +1246,7 @@ class MarketDataRepository:
         return (
             True,
             [
-                missing_time.strftime("%Y-%m-%d %H:%M:%S&P500")
+                _format_api_timestamp(missing_time)
                 for missing_time in latest_missing_times
             ],
             total_missing_count,
@@ -1325,7 +1337,7 @@ class MarketDataRepository:
                 return [
                     (
                         symbol,
-                        candle_datetime.strftime("%Y-%m-%d %H:%M:%S&P500"),
+                        _format_api_timestamp(candle_datetime),
                         open_price,
                         high_price,
                         low_price,
@@ -1433,11 +1445,11 @@ class MarketDataRepository:
                 return [
                     (
                         symbol,
-                        candle_datetime_utc.strftime("%Y-%m-%d %H:%M:%S&P500"),
+                        _format_api_timestamp(candle_datetime_utc),
                         status,
-                        detected_at_utc.strftime("%Y-%m-%d %H:%M:%S&P500"),
+                        _format_api_timestamp(detected_at_utc),
                         (
-                            filled_at_utc.strftime("%Y-%m-%d %H:%M:%S&P500")
+                            _format_api_timestamp(filled_at_utc)
                             if filled_at_utc is not None
                             else None
                         ),
@@ -1531,7 +1543,7 @@ class MarketDataRepository:
                 return [
                     (
                         str(signal_id),
-                        signal_datetime.strftime("%Y-%m-%d %H:%M:%S&P500"),
+                        _format_api_timestamp(signal_datetime),
                         product,
                         price,
                         signal_direction,

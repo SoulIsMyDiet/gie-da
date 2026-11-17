@@ -50,7 +50,7 @@ class MarketProfile:
 
 @dataclass(frozen=True)
 class MarketProduct:
-    """Łączy symbol Twelve Data z typem rynku i jego harmonogramem."""
+    """Łączy wewnętrzny symbol produktu z typem rynku i jego harmonogramem."""
 
     symbol: str
     profile_name: str

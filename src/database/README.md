@@ -18,6 +18,8 @@ Projekt używa MySQL uruchomionego w Dockerze. Pobrane świece rynkowe są przec
    docker compose up -d --build
    ```
 
+   Nazwa projektu Docker jest ustawiona na `gieda` w pliku Compose, więc zmiana nazwy folderu nie tworzy nowego, pustego wolumenu z bazą.
+
 5. Sprawdź, czy API odpowiada:
 
    ```powershell
@@ -38,7 +40,7 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu 
 
 ## Struktura danych
 
-- `products`: unikalne symbole produktów (np. `EUR/USD`).
+- `products`: unikalne symbole wewnętrzne produktów (np. `EURUSD/USD`). Przed wysłaniem żądania aplikacja mapuje `EURUSD/USD` na symbol Twelve Data `EUR/USD`; nazwa w lokalnej bazie pozostaje bez zmian.
 - `candles`: kolumny `symbol`, `datetime`, `open`, `high`, `low`, `close`, `volume` oraz `utc_offset_minutes`. `datetime` jest zapisywany w czasie lokalnym `Europe/Warsaw`; offset rozróżnia powtarzającą się godzinę przy zmianie czasu. Klucz główny `(symbol, datetime, utc_offset_minutes)` zapobiega duplikatom, a ponowne pobranie świecy aktualizuje wpis. `volume` jest `NULL`, jeśli dostawca go nie podał.
 - `candle_gaps`: osobny wiersz dla każdej wykrytej brakującej świecy. `candle_datetime_utc` oznacza oczekiwany początek świecy w UTC, `status` ma wartość `missing` albo `filled`, a pola `detected_at_utc` i `filled_at_utc` zapisują moment wykrycia i uzupełnienia. Klucz `(symbol, candle_datetime_utc)` zapobiega duplikatom.
 - `signals`: `id`, `datetime`, `product`, `price`, `signal`, `algorithm_name`, `ai_decision`, `transaction_id`, `candles_count` oraz `signal_parameters`. `datetime` ma typ `DATETIME(6)` i ma być zapisywany jako lokalny czas `Europe/Warsaw`; `signal` dopuszcza `long` lub `short`; `ai_decision` jest nullable JSON, więc może później przechowywać wartość logiczną albo obiekt JSON; `transaction_id` jest nullable i na razie nie ma klucza obcego, bo tabela transakcji jeszcze nie istnieje; `signal_parameters` przechowuje wymagany dokument JSON. Kolumna `product` wskazuje na istniejący symbol w `products`.

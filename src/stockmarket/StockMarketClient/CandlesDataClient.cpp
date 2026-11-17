@@ -9,6 +9,18 @@
 namespace {
 
 /**
+ * Zamienia wewnętrzny symbol instrumentu na symbol wymagany przez Twelve Data.
+ * @param internalSymbol Symbol używany w lokalnej bazie danych.
+ * @return Symbol rozpoznawany przez dostawcę danych.
+ */
+std::string getTwelveDataSymbol(const std::string& internalSymbol) {
+    if (internalSymbol == "EURUSD/USD") {
+        return "EUR/USD";
+    }
+    return internalSymbol;
+}
+
+/**
  * Koduje symbol dla parametru URL, aby znaki symbolu nie zmieniały zapytania.
  */
 bool encodeSymbolForUrl(
@@ -235,7 +247,8 @@ bool fetchOneMinuteCandles(
     std::vector<CandleData>& candles,
     std::string& error) {
     std::wstring encodedSymbol;
-    if (!encodeSymbolForUrl(symbol, encodedSymbol)) {
+    const std::string twelveDataSymbol = getTwelveDataSymbol(symbol);
+    if (!encodeSymbolForUrl(twelveDataSymbol, encodedSymbol)) {
         error = "Symbol instrumentu jest pusty, za długi albo zawiera niedozwolone białe znaki.";
         return false;
     }
