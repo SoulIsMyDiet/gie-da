@@ -55,10 +55,16 @@ class USDMXNSignalStorage:
         """
         if result.get("candle_open_epoch") is None:
             raise ValueError("Wynik Grok-45 USDMXN nie zawiera epoki otwarcia.")
+        close_time = result.get("candle_close_time")
+        if not isinstance(close_time, str):
+            raise ValueError("Wynik Grok-45 USDMXN nie zawiera czasu zamknięcia.")
+        repository_result = dict(result)
+        repository_result.pop("candle_close_time")
+        repository_result["timestamp"] = close_time
         return self.repository.save_algorithm_signal(
             DATABASE_SYMBOL,
             STRATEGY_NAME,
-            result,
+            repository_result,
             candles_count,
             record_evaluation=True,
             save_signal=should_save_signal(result),

@@ -30,6 +30,7 @@ from .config import (
     INSTRUMENT,
     LONG_RSI_MAXIMUM,
     LONG_RSI_MINIMUM,
+    MAX_REPORTED_GAP_INTERVALS,
     MAX_HOLDING_MINUTES,
     MINIMUM_M1_CANDLES,
     MOMENTUM_LOOKBACK,
@@ -169,7 +170,11 @@ class USDMXNStrategyV1:
             "instrument": INSTRUMENT,
             "database_symbol": DATABASE_SYMBOL,
             "price": price,
-            "timestamp": candle_close.astimezone(WARSAW_TIMEZONE).isoformat(),
+            "timestamp": open_epoch,
+            "reason": reason,
+            "candle_close_time": candle_close.astimezone(
+                WARSAW_TIMEZONE
+            ).isoformat(),
             "candle_open_time": candle_open.astimezone(WARSAW_TIMEZONE).isoformat(),
             "candle_open_epoch": open_epoch,
             "signal": signal,
@@ -354,8 +359,9 @@ class USDMXNStrategyV1:
             "delivery_pause_count": delivery_pause_count,
             "scheduled_closure_count": scheduled_closure_count,
             "delivery_pause_after_minutes": DELIVERY_PAUSE_AFTER_MINUTES,
+            "recent_interval_limit": MAX_REPORTED_GAP_INTERVALS,
             "warmup_reset": False,
-            "recent_intervals": intervals[-20:],
+            "recent_intervals": intervals[-MAX_REPORTED_GAP_INTERVALS:],
         }
 
     @staticmethod

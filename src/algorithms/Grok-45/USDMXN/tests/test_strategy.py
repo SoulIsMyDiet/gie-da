@@ -113,6 +113,9 @@ def test_controlled_history_generates_expected_direction(direction: str) -> None
     assert payload["instrument"] == "USDMXN"
     assert payload["price"] == candles[-1]["close"]
     assert payload["timestamp"] == int(candles[-1]["timestamp_utc"].timestamp())
+    assert result["timestamp"] == payload["timestamp"]
+    assert result["reason"] == payload["reason"]
+    assert isinstance(result["candle_close_time"], str)
     assert payload["thresholds"]["max_holding_minutes"] == 20
     json.dumps(payload, allow_nan=False)
 
@@ -184,6 +187,7 @@ def test_single_and_long_gaps_are_used_without_reset_or_interpolation() -> None:
     assert result["signal"] == "LONG"
     assert diagnostics["warmup_reset"] is False
     assert diagnostics["non_contiguous_intervals"] == 1
+    assert diagnostics["recent_interval_limit"] == 20
     assert len(one_missing) == result["signal_parameters"]["data"]["m1_candles_available"]
 
     long_gap = build_trending_candles("LONG")
@@ -243,13 +247,24 @@ def test_none_storage_flag_is_central_and_signal_name_is_independent() -> None:
     assert STRATEGY_NAME == "Grok-45/USDMXN/USDMXNStrategyV1"
     repository = Mock()
     storage = USDMXNSignalStorage(repository)
-    result = {"signal": "NONE", "candle_open_epoch": 1}
+    result = {
+        "signal": "NONE",
+        "timestamp": 1,
+        "candle_close_time": "2026-01-01T00:01:00+01:00",
+        "candle_open_epoch": 1,
+        "signal_parameters": {"signal": "NONE", "timestamp": 1},
+    }
     with patch.object(strategy_module, "SAVE_NONE_SIGNALS", False):
         assert storage.save(result, 100) is repository.save_algorithm_signal.return_value
     repository.save_algorithm_signal.assert_called_once_with(
         "USD/MXN",
         STRATEGY_NAME,
-        result,
+        {
+            "signal": "NONE",
+            "timestamp": result["candle_close_time"],
+            "candle_open_epoch": 1,
+            "signal_parameters": {"signal": "NONE", "timestamp": 1},
+        },
         100,
         record_evaluation=True,
         save_signal=False,
