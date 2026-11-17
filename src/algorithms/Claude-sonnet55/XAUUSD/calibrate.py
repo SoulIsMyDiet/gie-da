@@ -1,15 +1,27 @@
 """Analiza rozkładu zmienności i wolumenu bez automatycznej zmiany progów."""
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from config import (
+    CANDLE_DURATION_SECONDS,
+    RANGE_ASIA_END,
+    RANGE_ASIA_MIN_COVERAGE,
+    RANGE_ASIA_START,
+)
 from indicators import build_m1_indicators
-from schedule import LONDON, segment_id, session_name
+from schedule import (
+    LONDON,
+    expected_candle_opens,
+    is_trading_minute,
+    segment_id,
+    session_name,
+)
 from storage import XAUUSDStorage
 
 UTC = timezone.utc
@@ -17,10 +29,28 @@ PERCENTILES = (5, 25, 50, 75, 95)
 logger = logging.getLogger(__name__)
 
 
-def calibration_report(candles: list[dict[str, Any]]) -> dict[str, Any]:
+def calibration_report(
+    candles: list[dict[str, Any]], now: datetime | None = None
+) -> dict[str, Any]:
     """Zwraca percentyle ATR, zakresu Azji i wolumenu według sesji."""
-    groups: dict[str, list[dict[str, Any]]] = {}
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Czas kalibracji musi zawierać strefę czasową.")
+    now = now.astimezone(UTC)
+    closed_candles = []
     for candle in candles:
+        stamp = candle.get("timestamp_utc")
+        if not isinstance(stamp, datetime) or stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise ValueError("Czas każdej świecy musi zawierać strefę czasową.")
+        stamp = stamp.astimezone(UTC)
+        if (
+            stamp + timedelta(seconds=CANDLE_DURATION_SECONDS) <= now
+            and is_trading_minute(stamp)
+        ):
+            closed_candles.append({**candle, "timestamp_utc": stamp})
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for candle in closed_candles:
         groups.setdefault(segment_id(candle["timestamp_utc"]), []).append(candle)
     observations: dict[str, list[dict[str, float]]] = {
         "LONDON": [], "OVERLAP": [], "NY": []
@@ -43,12 +73,21 @@ def calibration_report(candles: list[dict[str, Any]]) -> dict[str, Any]:
                 })
         london_days = {item["timestamp_utc"].astimezone(LONDON).date() for item in segment}
         for day in london_days:
+            start = datetime.combine(day, RANGE_ASIA_START, tzinfo=LONDON)
+            end = datetime.combine(day, RANGE_ASIA_END, tzinfo=LONDON)
+            expected = expected_candle_opens(start, end)
             asia = [
                 item for item in segment
-                if item["timestamp_utc"].astimezone(LONDON).date() == day
-                and 1 <= item["timestamp_utc"].astimezone(LONDON).hour < 8
+                if start.astimezone(UTC)
+                <= item["timestamp_utc"]
+                < end.astimezone(UTC)
             ]
-            if asia:
+            coverage = (
+                len({item["timestamp_utc"] for item in asia}) / len(expected)
+                if expected
+                else 0.0
+            )
+            if asia and coverage >= RANGE_ASIA_MIN_COVERAGE:
                 asia_ranges[day.isoformat()] = max(item["high"] for item in asia) - min(
                     item["low"] for item in asia
                 )

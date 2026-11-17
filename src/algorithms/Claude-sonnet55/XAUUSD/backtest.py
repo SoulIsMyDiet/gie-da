@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from config import ASSUMED_COST_USD, MAX_HOLD_MINUTES, PRICE_DECIMALS
-from schedule import segment_id, session_name
+from schedule import is_trading_minute, segment_id, session_name
 from signal_logic import generate_signal
 from storage import XAUUSDStorage
 
@@ -31,12 +31,24 @@ def _trade_result(
     candle_open = datetime.fromisoformat(signal["candle_open_time"]).astimezone(UTC)
     opened = candle_open + timedelta(minutes=1)
     trade_segment = segment_id(candle_open)
+    deadline = opened + timedelta(minutes=MAX_HOLD_MINUTES)
     last_price = entry
     exit_reason = "time_stop"
     exit_time = opened
     for offset, candle in enumerate(candles[signal_index + 1 :], start=1):
         index = signal_index + offset
         candle_time = candle["timestamp_utc"]
+        candle_close = candle_time + timedelta(minutes=1)
+        if candle_close > deadline:
+            exit_price = last_price
+            exit_time = deadline
+            exit_reason = "time_stop"
+            break
+        if not is_trading_minute(candle_time):
+            exit_time = candles[index - 1]["timestamp_utc"] + timedelta(minutes=1)
+            exit_price = last_price
+            exit_reason = "segment_end"
+            break
         if segment_id(candle_time) != trade_segment:
             exit_time = candles[index - 1]["timestamp_utc"] + timedelta(minutes=1)
             exit_price = last_price
@@ -46,7 +58,7 @@ def _trade_result(
         if direction == "LONG":
             if low <= sl:
                 exit_price, exit_reason = sl, "stop_loss"
-                exit_time = candle_time + timedelta(minutes=1)
+                exit_time = candle_close
                 break
             if high >= tp:
                 exit_price, exit_reason = tp, "take_profit"
@@ -115,6 +127,7 @@ def run_backtest(candles: list[dict[str, Any]]) -> dict[str, Any]:
     """Testuje strategię po jednej świecy i zwraca metryki oraz transakcje."""
     ordered = sorted(candles, key=lambda candle: candle["timestamp_utc"])
     trades = []
+    signal_count = 0
     signal_history: dict[str, Any] = {
         "last_signal_epoch": None,
         "signals_today": 0,
@@ -141,6 +154,7 @@ def run_backtest(candles: list[dict[str, Any]]) -> dict[str, Any]:
         if result["signal"] not in ("LONG", "SHORT"):
             index += 1
             continue
+        signal_count += 1
         trade = _trade_result(ordered, index, result)
         signal_history["last_signal_epoch"] = result["timestamp"]
         signal_history["signals_today"] += 1
@@ -159,7 +173,12 @@ def run_backtest(candles: list[dict[str, Any]]) -> dict[str, Any]:
         for trade in trades:
             grouped[str(trade[key])].append(trade)
         breakdowns[key] = {name: _summary(group) for name, group in grouped.items()}
-    return {"overall": _summary(trades), "breakdowns": breakdowns, "trades": trades}
+    return {
+        "signal_count": signal_count,
+        "overall": _summary(trades),
+        "breakdowns": breakdowns,
+        "trades": trades,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

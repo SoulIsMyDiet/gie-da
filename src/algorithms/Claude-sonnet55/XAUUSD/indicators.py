@@ -89,7 +89,14 @@ def wilder_atr(candles: pd.DataFrame, period: int = ATR_PERIOD) -> pd.Series:
     """Oblicza ATR Wildera dla jednej historii segmentu."""
     if period < 1:
         raise ValueError("Okres ATR musi być dodatni.")
-    return true_range(candles).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    ranges = true_range(candles)
+    if len(ranges) < period:
+        return pd.Series(np.nan, index=ranges.index, dtype=float)
+
+    seeded = ranges.copy()
+    seeded.iloc[:period - 1] = np.nan
+    seeded.iloc[period - 1] = ranges.iloc[:period].mean()
+    return seeded.ewm(alpha=1 / period, adjust=False, min_periods=1).mean()
 
 
 def efficiency_ratio(values: pd.Series, period: int = EFFICIENCY_PERIOD) -> pd.Series:

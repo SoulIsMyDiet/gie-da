@@ -25,9 +25,10 @@ Zwrócony przez API licznik nowych zapisów wykorzystuje istniejąca aplikacja
 Windows do odtworzenia dźwięku.
 
 Połączenie korzysta z istniejących zmiennych `MYSQL_HOST`, `MYSQL_PORT`,
-`MYSQL_DATABASE`, `MYSQL_USER` i `MYSQL_PASSWORD`. Nie jest wymagana migracja:
-wynik, setup, poziomy TP/SL oraz diagnostyka trafiają do `signals.signal_parameters`
-(JSON, UTF-8), a epoka zamknięcia świecy jest zapisywana w `source_timestamp`.
+`MYSQL_DATABASE`, `MYSQL_USER` i `MYSQL_PASSWORD`. Wynik, setup, poziomy TP/SL
+oraz diagnostyka trafiają do `signals.signal_parameters` (JSON, UTF-8), a epoka
+zamknięcia świecy jest zapisywana w `source_timestamp`. Osobne kolumny dla setupu
+i poziomów TP/SL nie są używane.
 Kolumna `signals.datetime` przechowuje naiwny czas otwarcia w Warszawie,
 zgodnie z `candles.datetime`; offset jest już zapisany w tabeli `candles`.
 
@@ -80,9 +81,10 @@ strefa wpisu i `zoneinfo` uwzględniają różnice w terminach DST.
 
 ## Kalibracja i backtest
 
-`python calibrate.py` raportuje percentyle 5/25/50/75/95 ATR (USD i bps),
-zakresu Azji oraz wolumenu względnego osobno dla sesji LONDON, OVERLAP i NY.
-Skrypt tylko proponuje ocenę progów — nie zmienia `config.py`.
+`python calibrate.py` raportuje percentyle 5/25/50/75/95 ATR (USD i bps)
+oraz wolumenu względnego osobno dla sesji LONDON, OVERLAP i NY. Zakres Azji
+raportowany jest globalnie dla dni z pokryciem co najmniej 80%. Analiza pomija
+świece formowane. Skrypt tylko proponuje ocenę progów — nie zmienia `config.py`.
 
 `python backtest.py` analizuje świece po jednej, bez look-ahead. W pojedynczej
 świecy dotknięcie SL i TP oznacza najpierw SL. Pozycja kończy się po 20

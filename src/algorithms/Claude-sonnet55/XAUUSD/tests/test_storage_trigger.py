@@ -224,3 +224,35 @@ def test_loop_processes_new_closed_candle_once_across_restart(tmp_path, monkeypa
     )
     assert analyze.call_count == 1
     assert storage_module.read_loop_state(state_path) == opened_epoch
+
+
+def test_loop_retries_database_error_while_loading_initial_cursor(tmp_path, monkeypatch):
+    """Ponawia inicjalizację kursora po chwilowym błędzie bazy."""
+    storage = Mock()
+    storage.latest_candle_open_epoch.return_value = None
+    stop_event = Event()
+    attempts = []
+    waits = []
+
+    def initialize_cursor(*_args):
+        attempts.append(None)
+        if len(attempts) == 1:
+            raise MySQLError(msg="chwilowa awaria", errno=1205)
+        return None
+
+    def wait_once(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            stop_event.set()
+
+    monkeypatch.setattr(trigger, "_initial_cursor", initialize_cursor)
+    trigger.run_loop(
+        storage=storage,
+        stop_event=stop_event,
+        state_path=tmp_path / "loop-state.json",
+        now_provider=lambda: datetime(2026, 1, 5, 12, 0, tzinfo=UTC),
+        wait=wait_once,
+    )
+
+    assert len(attempts) == 2
+    assert len(waits) == 2

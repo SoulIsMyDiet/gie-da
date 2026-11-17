@@ -166,7 +166,7 @@ def blackout_codes(instant: datetime) -> list[str]:
         fomc = datetime.combine(new_york.date(), BLACKOUTS["fomc_start"], tzinfo=NEW_YORK)
         if fomc <= new_york < fomc + timedelta(minutes=BLACKOUTS["fomc_duration_minutes"]):
             codes.append("fomc")
-    if new_york.time() >= BLACKOUTS["rollover_start"]:
+    if BLACKOUTS["rollover_start"] <= new_york.time() < MARKET_CLOSE_ET:
         codes.append("rollover")
     for blackout in NEWS_BLACKOUTS:
         if _inside_manual_blackout(local, blackout):

@@ -6,7 +6,6 @@ import json
 import logging
 import sys
 from threading import Event
-import time
 from typing import Callable
 
 import mysql.connector
@@ -89,10 +88,14 @@ def run_loop(
     state_path = state_path or default_state_path()
     now_provider = now_provider or (lambda: datetime.now(UTC))
     wait = wait or (lambda seconds: stop_event.wait(seconds))
-    cursor = _initial_cursor(storage, state_path)
+    cursor = None
+    cursor_initialized = False
     retry_seconds = 1.0
     while not stop_event.is_set():
         try:
+            if not cursor_initialized:
+                cursor = _initial_cursor(storage, state_path)
+                cursor_initialized = True
             now = utc_time(now_provider())
             if cursor is None:
                 latest = storage.latest_candle_open_epoch()

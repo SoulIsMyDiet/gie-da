@@ -3,7 +3,7 @@
 import json
 import math
 import sys
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +17,7 @@ import indicators  # noqa: E402
 import schedule  # noqa: E402
 import signal_logic  # noqa: E402
 import backtest  # noqa: E402
+import calibrate  # noqa: E402
 
 for _module_name in (
     "config", "indicators", "schedule", "signal_logic", "storage", "backtest"
@@ -68,6 +69,23 @@ def test_wilder_indicators_and_segment_first_true_range():
     )
 
 
+def test_wilder_atr_starts_with_sma_seed():
+    """Inicjalizuje ATR średnią TR, a potem kontynuuje wygładzanie Wildera."""
+    period = 14
+    ranges = list(range(1, period + 2))
+    rows = pd.DataFrame({
+        "high": ranges,
+        "low": [0] * len(ranges),
+        "close": ranges,
+    })
+
+    atr = indicators.wilder_atr(rows, period)
+
+    assert atr.iloc[period - 2] != atr.iloc[period - 2]
+    assert atr.iloc[period - 1] == pytest.approx(7.5)
+    assert atr.iloc[period] == pytest.approx((7.5 * 13 + 15) / 14)
+
+
 def test_m5_uses_four_of_five_closed_minutes_without_filling():
     """Pozwala na cztery rzeczywiste minuty i odrzuca niedomknięty kubełek."""
     start = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
@@ -104,6 +122,24 @@ def test_schedule_skips_rollover_and_weekend_in_expected_minutes():
     friday = datetime(2026, 1, 9, 22, 0, tzinfo=UTC)
     sunday = datetime(2026, 1, 11, 23, 0, tzinfo=UTC)
     assert schedule.expected_candle_opens(friday, sunday) == []
+
+
+def test_rollover_blackout_ends_at_market_close_and_asia_has_one_reason():
+    """Nie rozciąga blokad rollover na noc ani po ponownym otwarciu rynku."""
+    london_asia = datetime(2026, 1, 6, 3, 0, tzinfo=schedule.LONDON)
+    assert signal_logic._time_filters(london_asia.astimezone(UTC)) == [
+        "outside_session"
+    ]
+
+    rollover = datetime(2026, 1, 6, 16, 55, tzinfo=schedule.NEW_YORK)
+    after_close = datetime(2026, 1, 6, 17, 30, tzinfo=schedule.NEW_YORK)
+    reopened = datetime(2026, 1, 6, 18, 10, tzinfo=schedule.NEW_YORK)
+    assert "rollover" in schedule.blackout_codes(rollover)
+    assert "rollover" not in schedule.blackout_codes(after_close)
+    assert "rollover" not in schedule.blackout_codes(reopened)
+    assert "pre_break_buffer" not in signal_logic._time_filters(
+        after_close.astimezone(UTC)
+    )
 
 
 def test_is_trading_minute_accepts_aware_and_warsaw_naive_times():
@@ -166,6 +202,59 @@ def test_early_close_applies_the_pre_break_buffer(monkeypatch):
     assert "pre_break_buffer" in signal_logic._time_filters(event_time)
 
 
+def test_holiday_and_weekend_latest_candles_return_blocked_results(monkeypatch):
+    """Zachowuje wskazaną świecę poza sesją, aby zwrócić NONE zamiast starego wyniku."""
+    holiday_day = date(2026, 1, 5)
+    monkeypatch.setattr(schedule, "NO_TRADE_DATES", {holiday_day})
+    holiday_open = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+    holiday_rows = _candles(2, holiday_open)
+    holiday_now = holiday_rows[-1]["timestamp_utc"] + timedelta(minutes=1)
+
+    holiday_result = signal_logic.generate_signal(holiday_rows, now=holiday_now)
+
+    assert holiday_result["timestamp"] == int(holiday_now.timestamp())
+    assert holiday_result["signal"] == "NONE"
+    assert "holiday" in holiday_result["blocked_by"]
+
+    weekend_open = datetime(2026, 1, 4, 3, 0, tzinfo=UTC)
+    weekend_row = _candles(1, weekend_open)
+    weekend_now = weekend_open + timedelta(minutes=1)
+    weekend_result = signal_logic.generate_signal(weekend_row, now=weekend_now)
+
+    assert weekend_result["timestamp"] == int(weekend_now.timestamp())
+    assert weekend_result["signal"] == "NONE"
+    assert "outside_session" in weekend_result["blocked_by"]
+
+
+def test_early_close_target_candle_is_not_replaced_by_an_older_candle(monkeypatch):
+    """Zwraca wynik dla zamkniętej świecy po skróconym zamknięciu."""
+    early_closes = {date(2026, 1, 5): time(16, 0)}
+    monkeypatch.setattr(schedule, "EARLY_CLOSE_DATES", early_closes)
+    monkeypatch.setattr(signal_logic, "EARLY_CLOSE_DATES", early_closes)
+    opened = datetime(2026, 1, 5, 21, 1, tzinfo=UTC)
+    now = opened + timedelta(minutes=1)
+
+    result = signal_logic.generate_signal(_candles(1, opened), now=now)
+
+    assert result["timestamp"] == int(now.timestamp())
+    assert result["signal"] == "NONE"
+    assert "early_close" in result["blocked_by"]
+
+
+def test_short_segment_reports_warmup_without_indicator_blockers(monkeypatch):
+    """Oznacza zbyt krótki segment jako warmup, a nie brak ATR lub wolumenu."""
+    opened = datetime(2026, 1, 5, 8, 16, tzinfo=UTC)
+    candles = _candles(5, opened)
+    now = candles[-1]["timestamp_utc"] + timedelta(minutes=1)
+    monkeypatch.setattr(signal_logic, "_missing_state", lambda *_args: (0, 0))
+
+    result = signal_logic.generate_signal(candles, now=now)
+
+    assert "warmup" in result["blocked_by"]
+    assert "atr_out_of_range" not in result["blocked_by"]
+    assert "low_relative_volume" not in result["blocked_by"]
+
+
 def test_backtest_exits_with_stop_loss_first_when_both_levels_hit():
     """Kontrakt backtestu wybiera SL przed TP przy dotknięciu obu poziomów."""
     opened = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
@@ -204,6 +293,71 @@ def test_backtest_time_stop_is_twenty_minutes_after_candle_close():
     assert trade["entry_time"] == (opened + timedelta(minutes=1)).isoformat()
     assert trade["exit_time"] == (opened + timedelta(minutes=21)).isoformat()
     assert trade["exit_reason"] == "time_stop"
+
+
+def test_backtest_ignores_take_profit_after_time_limit():
+    """Nie zalicza poziomu TP na świecy, która zamyka się po limicie 20 minut."""
+    opened = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+    candles = _candles(22, opened)
+    candles.pop(20)
+    candles[20]["high"] = 2402.0
+    signal = {
+        "signal": "LONG",
+        "setup": "TREND_PULLBACK",
+        "price": 2400.0,
+        "tp_price": 2401.0,
+        "sl_price": 2390.0,
+        "candle_open_time": opened.isoformat(),
+    }
+
+    trade = backtest._trade_result(candles, 0, signal)
+
+    assert trade["exit_reason"] == "time_stop"
+    assert trade["exit_time"] == (opened + timedelta(minutes=21)).isoformat()
+
+
+def test_backtest_closes_at_early_market_close(monkeypatch):
+    """Kończy pozycję na końcu skróconej sesji, nawet bez zmiany segmentu."""
+    monkeypatch.setattr(
+        schedule,
+        "EARLY_CLOSE_DATES",
+        {date(2026, 1, 5): time(16, 0)},
+    )
+    opened = datetime(2026, 1, 5, 20, 58, tzinfo=UTC)
+    candles = _candles(3, opened)
+    signal = {
+        "signal": "LONG",
+        "setup": "TREND_PULLBACK",
+        "price": candles[0]["close"],
+        "tp_price": 9999.0,
+        "sl_price": 1.0,
+        "candle_open_time": opened.isoformat(),
+    }
+
+    trade = backtest._trade_result(candles, 0, signal)
+
+    assert trade["exit_reason"] == "segment_end"
+    assert trade["exit_time"] == (opened + timedelta(minutes=2)).isoformat()
+
+
+def test_calibration_excludes_forming_candles_and_incomplete_asia_range():
+    """Kalibruje wyłącznie zamknięte świece i pomija zakres Azji z małym pokryciem."""
+    london_open = datetime(2026, 1, 5, 13, 0, tzinfo=UTC)
+    london_rows = _candles(15, london_open)
+    london_rows[-1]["high"] += 3.0
+    calibration_now = london_open + timedelta(minutes=14, seconds=30)
+
+    report = calibrate.calibration_report(london_rows, now=calibration_now)
+
+    assert report["LONDON"]["atr14_usd"]["95"] < 0.2
+
+    asia_open = datetime(2026, 1, 5, 1, 0, tzinfo=UTC)
+    partial_asia = _candles(20, asia_open)
+    asia_report = calibrate.calibration_report(
+        partial_asia,
+        now=asia_open + timedelta(minutes=21),
+    )
+    assert asia_report["ASIA_RANGE_USD"] == {}
 
 
 def test_cooldown_and_daily_limit_use_closed_signal_history():
@@ -268,6 +422,8 @@ def test_opposite_setups_conflict_even_if_one_score_is_below_threshold(monkeypat
     )
     monkeypatch.setattr(signal_logic, "_time_filters", lambda _instant: [])
     monkeypatch.setattr(signal_logic, "_detect_setups", lambda *_args: candidates)
+    monkeypatch.setattr(signal_logic, "WARMUP_BREAKOUT", 1)
+    monkeypatch.setattr(signal_logic, "WARMUP_PULLBACK", 1)
 
     result = signal_logic.generate_signal(candles, now=opened + timedelta(minutes=1))
 

@@ -46,8 +46,10 @@ from config import (
     PULLBACK_ER_MIN,
     PULLBACK_LONDON_END,
     PULLBACK_LONDON_START,
+    PULLBACK_LOOKBACK_CANDLES,
     PULLBACK_NEW_YORK_END,
     PULLBACK_NEW_YORK_START,
+    PULLBACK_PRIOR_RSI_CANDLES,
     PULLBACK_PROXIMITY_ATR,
     PULLBACK_RSI_HIGH,
     PULLBACK_RSI_LOW,
@@ -71,6 +73,7 @@ from config import (
     RELATIVE_VOLUME_BONUS_MIN,
     REVERSION_ER_MAX,
     REVERSION_RSI_SHORT_THRESHOLD,
+    REVERSION_RSI_LOOKBACK,
     REVERSION_RSI_THRESHOLD,
     REVERSION_SLOPE_ATR_MAX,
     REVERSION_VWAP_DISTANCE_ATR,
@@ -116,10 +119,11 @@ Candle = dict[str, Any]
 
 
 def _normalize_candles(candles: list[Candle], now: datetime) -> list[Candle]:
-    """Sprawdza, sortuje i odrzuca świece formowane oraz spoza harmonogramu."""
+    """Odrzuca świece formowane; zachowuje najnowszą zamkniętą do diagnostyki."""
     if not isinstance(candles, list):
         raise ValueError("Dane wejściowe muszą być listą świec.")
     normalized = []
+    latest_outside_schedule = None
     seen = set()
     for row in candles:
         if not isinstance(row, dict):
@@ -143,10 +147,24 @@ def _normalize_candles(candles: list[Candle], now: datetime) -> list[Candle]:
             or (volume is not None and (not isfinite(volume) or volume < 0))
         ):
             raise ValueError("Niepoprawny zakres OHLC lub wolumen.")
-        if stamp + timedelta(minutes=1) <= now and is_trading_minute(stamp):
-            normalized.append(
-                {"timestamp_utc": stamp, **values, "volume": volume}
-            )
+        if stamp + timedelta(minutes=1) <= now:
+            candle = {"timestamp_utc": stamp, **values, "volume": volume}
+            if is_trading_minute(stamp):
+                normalized.append(candle)
+            elif (
+                latest_outside_schedule is None
+                or stamp > latest_outside_schedule["timestamp_utc"]
+            ):
+                latest_outside_schedule = candle
+    latest_trading_open = max(
+        (candle["timestamp_utc"] for candle in normalized),
+        default=None,
+    )
+    if latest_outside_schedule is not None and (
+        latest_trading_open is None
+        or latest_outside_schedule["timestamp_utc"] > latest_trading_open
+    ):
+        normalized.append(latest_outside_schedule)
     return sorted(normalized, key=lambda candle: candle["timestamp_utc"])
 
 
@@ -226,8 +244,13 @@ def _time_filters(instant: datetime) -> list[str]:
         codes.append("friday_cutoff")
     new_york = instant.astimezone(NEW_YORK)
     market_close = EARLY_CLOSE_DATES.get(new_york.date(), MARKET_CLOSE_ET)
+    current_minute = new_york.hour * 60 + new_york.minute
     market_close_minute = market_close.hour * 60 + market_close.minute
-    if new_york.hour * 60 + new_york.minute >= market_close_minute - PRE_BREAK_BUFFER_MIN:
+    if (
+        market_close_minute - PRE_BREAK_BUFFER_MIN
+        <= current_minute
+        < market_close_minute
+    ):
         codes.append("pre_break_buffer")
     configured = blackout_codes(instant)
     codes.extend(configured)
@@ -366,8 +389,9 @@ def _detect_setups(
         or PULLBACK_NEW_YORK_START <= ny_time < PULLBACK_NEW_YORK_END
     )
     if pullback_window and er is not None and er >= PULLBACK_ER_MIN and len(rows) >= WARMUP_PULLBACK:
-        last_five = rows.tail(5)
-        last_three_rsi = rows["rsi5"].iloc[-4:-1].dropna()
+        last_five = rows.tail(PULLBACK_LOOKBACK_CANDLES)
+        prior_rsi_start = -(PULLBACK_PRIOR_RSI_CANDLES + 1)
+        last_three_rsi = rows["rsi5"].iloc[prior_rsi_start:-1].dropna()
         fast = _finite_or_none(current.get(f"ema{EMA_FAST_PERIOD}"))
         middle = _finite_or_none(current.get(f"ema{EMA_MIDDLE_PERIOD}"))
         slow = _finite_or_none(current.get(f"ema{EMA_SLOW_PERIOD}"))
@@ -415,7 +439,7 @@ def _detect_setups(
         lower = _finite_or_none(current.get("bb_lower"))
         upper = _finite_or_none(current.get("bb_upper"))
         vwap_distance = abs(vwap - price) if vwap is not None else 0.0
-        recent_rsi = rows["rsi5"].tail(2).dropna()
+        recent_rsi = rows["rsi5"].tail(REVERSION_RSI_LOOKBACK).dropna()
         body_low = min(float(current["open"]), float(current["close"])) - float(current["low"])
         body_high = float(current["high"]) - max(float(current["open"]), float(current["close"]))
         candle_range = float(current["high"]) - float(current["low"])
@@ -459,7 +483,6 @@ def _round_result(value: Any, decimals: int = INDICATOR_DECIMALS) -> float | Non
 def _build_params(
     rows: pd.DataFrame,
     m5_rows: pd.DataFrame,
-    candles: list[Candle],
     now: datetime,
     vwap: float | None,
     vwap_start: datetime,
@@ -621,26 +644,45 @@ def generate_signal(
     asian = _asian_range(rows_list, opened.astimezone(LONDON).date())
     missing_count, longest_missing = _missing_state(rows_list, opened)
     params = _build_params(
-        rows, m5_rows, rows_list, now, vwap, vwap_start, asian,
+        rows, m5_rows, now, vwap, vwap_start, asian,
         missing_count, longest_missing,
     )
     blocked = _time_filters(closed)
     current = rows.iloc[-1]
-    atr = _finite_or_none(current.get("atr14_usd"))
-    atr_ratio = _finite_or_none(current.get("atr_ratio"))
     if params["data_age_minutes"] is None or params["data_age_minutes"] > STALE_MAX_MINUTES:
         blocked.append("stale_data")
     if longest_missing > MAX_CONSECUTIVE_MISSING or missing_count > MAX_MISSING_IN_60:
         blocked.append("data_gap")
-    if atr is None or not ATR_MIN_USD <= atr <= ATR_MAX_USD:
-        blocked.append("atr_out_of_range")
-    if atr_ratio is None or not ATR_RATIO_MIN <= atr_ratio <= ATR_RATIO_MAX:
-        blocked.append("atr_ratio_out_of_range")
-    if atr is not None and params["candle_range_usd"] > CANDLE_RANGE_ATR_MAX * atr:
-        blocked.append("candle_anomaly")
-    rel_volume = _finite_or_none(current.get("rel_volume"))
-    if rel_volume is None or rel_volume < RELATIVE_VOLUME_HARD_MIN:
-        blocked.append("low_relative_volume")
+    london_now = opened.astimezone(LONDON).time()
+    ny_now = opened.astimezone(NEW_YORK).time()
+    breakout_window = (
+        RANGE_BREAKOUT_LONDON_START <= london_now < RANGE_BREAKOUT_LONDON_END
+    )
+    pullback_window = (
+        PULLBACK_LONDON_START <= london_now < PULLBACK_LONDON_END
+        or PULLBACK_NEW_YORK_START <= ny_now < PULLBACK_NEW_YORK_END
+    )
+    required_warmup = (
+        WARMUP_BREAKOUT
+        if breakout_window
+        else WARMUP_PULLBACK
+        if pullback_window
+        else WARMUP_REVERSION
+    )
+    if not blocked and len(rows) < required_warmup:
+        blocked.append("warmup")
+    atr = _finite_or_none(current.get("atr14_usd"))
+    if not blocked:
+        atr_ratio = _finite_or_none(current.get("atr_ratio"))
+        if atr is None or not ATR_MIN_USD <= atr <= ATR_MAX_USD:
+            blocked.append("atr_out_of_range")
+        if atr_ratio is None or not ATR_RATIO_MIN <= atr_ratio <= ATR_RATIO_MAX:
+            blocked.append("atr_ratio_out_of_range")
+        if atr is not None and params["candle_range_usd"] > CANDLE_RANGE_ATR_MAX * atr:
+            blocked.append("candle_anomaly")
+        rel_volume = _finite_or_none(current.get("rel_volume"))
+        if rel_volume is None or rel_volume < RELATIVE_VOLUME_HARD_MIN:
+            blocked.append("low_relative_volume")
     history = signal_history or {}
     close_epoch = int(closed.timestamp())
     last_signal_epoch = history.get("last_signal_epoch")
@@ -661,27 +703,8 @@ def generate_signal(
         )
         if not candidates:
             er = _finite_or_none(current.get("efficiency_ratio_30"))
-            london_now = opened.astimezone(LONDON).time()
-            ny_now = opened.astimezone(NEW_YORK).time()
-            breakout_window = (
-                RANGE_BREAKOUT_LONDON_START <= london_now < RANGE_BREAKOUT_LONDON_END
-            )
-            pullback_window = (
-                PULLBACK_LONDON_START <= london_now < PULLBACK_LONDON_END
-                or PULLBACK_NEW_YORK_START <= ny_now < PULLBACK_NEW_YORK_END
-            )
             if er is not None and UNCLEAR_ER_MIN < er < UNCLEAR_ER_MAX:
                 blocked.append("regime_unclear")
-            elif (
-                (breakout_window and len(rows) < WARMUP_BREAKOUT)
-                or (pullback_window and len(rows) < WARMUP_PULLBACK)
-                or (
-                    not breakout_window
-                    and not pullback_window
-                    and len(rows) < WARMUP_REVERSION
-                )
-            ):
-                blocked.append("warmup")
             elif (
                 breakout_window
                 and asian[4] < RANGE_ASIA_MIN_COVERAGE
