@@ -173,6 +173,48 @@ def _run_xauusd_strategy(candle_open_time: datetime) -> bool:
     raise XAUUSDStrategyError("Strategia XAUUSD zakończyła się błędem.")
 
 
+def _run_claude_xauusd_strategy(candle_open_time: datetime) -> bool:
+    """Uruchamia strategię Claude dla zamkniętej świecy; True oznacza nowy zapis."""
+    algorithm_directory = (
+        Path(__file__).resolve().parent / "claude_xauusd_algorithm"
+    )
+    if not algorithm_directory.is_dir():
+        algorithm_directory = (
+            Path(__file__).resolve().parents[2]
+            / "algorithms"
+            / "Claude-sonnet55"
+            / "XAUUSD"
+        )
+    command = [
+        sys.executable,
+        str(algorithm_directory / "XAUUSDStrategyV1.py"),
+        "--api-candle-open-epoch",
+        str(int(candle_open_time.timestamp())),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=SP500_PROCESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise XAUUSDStrategyError(
+            "Nie udało się uruchomić strategii Claude XAU/USD."
+        ) from error
+    if completed.returncode == 0:
+        return True
+    if completed.returncode in (3, 4):
+        return False
+    logger.error(
+        "Strategia Claude XAU/USD zakończyła się błędem %s: %s",
+        completed.returncode,
+        completed.stderr.strip(),
+    )
+    raise XAUUSDStrategyError("Strategia Claude XAU/USD zakończyła się błędem.")
+
+
 def _run_sp500_process(candle_open_time: datetime, container_directory: str,
                        author: str) -> bool:
     """Uruchamia strategię autora dla świecy UTC; błąd procesu zgłasza SP500StrategyError."""
@@ -1702,6 +1744,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
         return Response(content="0\n0", media_type="text/plain; charset=utf-8")
 
     xauusd_error = False
+    claude_xauusd_error = False
     try:
         with strategy_lock:
             if not request.app.state.strategy_ready:
@@ -1881,6 +1924,16 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     # Backend: także nieoczekiwany błąd procesu nie cofa zapisanej świecy.
                     logger.exception("Błąd strategii XAUUSD po zapisaniu świecy.")
                     xauusd_error = True
+                try:
+                    if _run_claude_xauusd_strategy(
+                        candle.datetime.astimezone(timezone.utc)
+                    ):
+                        signal_save_count += 1
+                except Exception:
+                    logger.exception(
+                        "Błąd strategii Claude XAU/USD po zapisaniu świecy."
+                    )
+                    claude_xauusd_error = True
             request.app.state.eurusd_strategy = updated_strategy
             request.app.state.grok45_v2_candles = (
                 updated_grok45_v2_candles
@@ -1910,7 +1963,14 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
     return Response(
         content=f"{new_gap_count}\n{signal_save_count}",
         media_type="text/plain; charset=utf-8",
-        headers={"X-XAUUSD-Strategy-Error": "1"} if xauusd_error else None,
+        headers={
+            name: "1"
+            for name, enabled in (
+                ("X-XAUUSD-Strategy-Error", xauusd_error),
+                ("X-Claude-XAUUSD-Strategy-Error", claude_xauusd_error),
+            )
+            if enabled
+        } or None,
     )
 
 

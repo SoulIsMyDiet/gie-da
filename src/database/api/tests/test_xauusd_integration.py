@@ -48,6 +48,7 @@ def test_closed_candle_runs_after_save_and_adds_only_new_beep(beep, expected):
         assert value == opened
         return beep
     with patch.object(app, "_run_xauusd_strategy", side_effect=run), \
+            patch.object(app, "_run_claude_xauusd_strategy", return_value=False) as claude, \
             patch.object(app, "Thread") as thread:
         response = app.save_candle(candle, request)
     assert response.body == expected
@@ -58,6 +59,19 @@ def test_closed_candle_runs_after_save_and_adds_only_new_beep(beep, expected):
         }
     else:
         thread.assert_not_called()
+    claude.assert_called_once_with(opened)
+
+
+def test_claude_signal_increments_response_count_after_successful_save():
+    """Udany zapis Claude zwiększa licznik sygnałów przekazywany klientowi."""
+    opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
+    request, candle, repository = request_and_candle(opened)
+    repository.save_candle.return_value = (0, 1, "", 3)
+    with patch.object(app, "_run_xauusd_strategy", return_value=False), \
+            patch.object(app, "_run_claude_xauusd_strategy", return_value=True), \
+            patch.object(app, "Thread"):
+        response = app.save_candle(candle, request)
+    assert response.body == b"0\n4"
 
 
 @pytest.mark.parametrize("saved,minutes,symbol", [(0, 2, "XAU/USD"), (1, 0, "XAU/USD"), (1, 2, "EURUSD/USD")])
@@ -68,9 +82,12 @@ def test_nonqualifying_candles_do_not_trigger(saved, minutes, symbol):
     if symbol == "EURUSD/USD":
         request.app.state.eurusd_strategy = Mock()
         request.app.state.eurusd_strategy.process_candle.return_value = None
-    with patch.object(app, "_run_xauusd_strategy") as run, patch.object(app, "Thread"):
+    with patch.object(app, "_run_xauusd_strategy") as run, \
+            patch.object(app, "_run_claude_xauusd_strategy") as claude, \
+            patch.object(app, "Thread"):
         app.save_candle(candle, request)
     run.assert_not_called()
+    claude.assert_not_called()
 
 
 @pytest.mark.parametrize("code,beep", [(0, True), (3, False), (4, False)])
@@ -92,12 +109,31 @@ def test_process_failure_is_logged_without_blocking_client(failure, caplog):
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, candle, repository = request_and_candle(opened)
     process = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
-    with patch.object(app.subprocess, "run", **process), patch.object(app, "Thread"):
+    with patch.object(app.subprocess, "run", **process), \
+            patch.object(app, "_run_claude_xauusd_strategy", return_value=False), \
+            patch.object(app, "Thread"):
         response = app.save_candle(candle, request)
     assert response.status_code == 200 and response.body == b"2\n3"
     assert response.headers["X-XAUUSD-Strategy-Error"] == "1"
     assert "Błąd strategii XAUUSD" in caplog.text
     repository.save_candle.assert_called_once()
+
+
+@pytest.mark.parametrize("exit_code,saved", [(0, True), (3, False), (4, False)])
+def test_claude_strategy_process_exit_code(exit_code, saved):
+    """Nowa strategia otrzymuje epokę otwarcia i raportuje tylko nowy zapis."""
+    opened = datetime.now(timezone.utc)
+    with patch.object(
+        app.subprocess, "run",
+        return_value=SimpleNamespace(returncode=exit_code, stderr=""),
+    ) as run:
+        assert app._run_claude_xauusd_strategy(opened) is saved
+    command = run.call_args.args[0]
+    assert "Claude-sonnet55" in command[1]
+    assert command[-2:] == [
+        "--api-candle-open-epoch",
+        str(int(opened.timestamp())),
+    ]
 
 
 def test_initialize_never_backfills_xau_with_default_spread():
@@ -124,8 +160,26 @@ def test_unexpected_strategy_failure_is_isolated(caplog):
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, candle, _ = request_and_candle(opened)
     with patch.object(app, "_run_xauusd_strategy", side_effect=ValueError("test")), \
+            patch.object(app, "_run_claude_xauusd_strategy", return_value=False), \
             patch.object(app, "Thread"):
         response = app.save_candle(candle, request)
     assert response.status_code == 200 and response.body == b"2\n3"
     assert response.headers["X-XAUUSD-Strategy-Error"] == "1"
     assert "Błąd strategii XAUUSD" in caplog.text
+
+
+def test_claude_strategy_failure_is_reported_without_reverting_candle(caplog):
+    """Awaria Claude ma osobny nagłówek i nie cofa zapisu świecy."""
+    opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
+    request, candle, repository = request_and_candle(opened)
+    with patch.object(app, "_run_xauusd_strategy", return_value=False), \
+            patch.object(
+                app,
+                "_run_claude_xauusd_strategy",
+                side_effect=app.XAUUSDStrategyError("błąd testowy"),
+            ), \
+            patch.object(app, "Thread"):
+        response = app.save_candle(candle, request)
+    assert response.status_code == 200 and response.body == b"2\n3"
+    assert response.headers["X-Claude-XAUUSD-Strategy-Error"] == "1"
+    assert "Błąd strategii Claude XAU/USD" in caplog.text
