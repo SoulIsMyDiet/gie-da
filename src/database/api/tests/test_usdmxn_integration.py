@@ -25,6 +25,7 @@ from app import (  # noqa: E402
     CandleRecord,
     GROK45_USDMXN_STRATEGY_NAME,
     MarketDataRepository,
+    SignalPotentialCalculator,
     acknowledge_usdmxn_notification,
     save_candle,
     save_candle_batch,
@@ -484,7 +485,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
             )
 
         self.assertTrue(connection.committed)
-        self.assertEqual(len(connection.cursor_value.calls), 2)
+        self.assertEqual(len(connection.cursor_value.calls), 3)
 
     def test_evaluation_lookup_checks_marker_and_legacy_signal_rows(self) -> None:
         """Po migracji wykrywane są też sygnały zapisane przed dodaniem outboxa."""
@@ -726,8 +727,16 @@ class USDMXNIntegrationTests(unittest.TestCase):
             connection.cursor_value.calls[1][0],
         )
         self.assertIn(
-            "UPDATE algorithm_evaluations",
+            "INSERT INTO signal_potention",
             connection.cursor_value.calls[2][0],
+        )
+        self.assertEqual(
+            connection.cursor_value.calls[2][1][1],
+            SignalPotentialCalculator.spread_for_product("USD/MXN"),
+        )
+        self.assertIn(
+            "UPDATE algorithm_evaluations",
+            connection.cursor_value.calls[3][0],
         )
         saved_json = json.loads(connection.cursor_value.calls[1][1][6])
         self.assertEqual(saved_json, payload)

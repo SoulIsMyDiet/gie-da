@@ -6,6 +6,7 @@ import json
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -691,9 +692,12 @@ class StorageTests(unittest.TestCase):
     def test_signal_uses_close_datetime_and_open_epoch_for_idempotency(self) -> None:
         class FakeCursor:
             rowcount = 1
+            lastrowid = 42
 
             def execute(self, query: str, values: tuple[object, ...]) -> None:
-                self.query, self.values = query, values
+                if not hasattr(self, "queries"):
+                    self.queries = []
+                self.queries.append((query, values))
 
             def close(self) -> None:
                 pass
@@ -730,14 +734,17 @@ class StorageTests(unittest.TestCase):
         }
         with patch.object(storage.mysql.connector, "connect", return_value=connection):
             inserted = DAX40Storage({}).save_signal(signal, 40)
-        values = connection.cursor_instance.values
+        signal_query, values = connection.cursor_instance.queries[0]
+        potential_query, potential_values = connection.cursor_instance.queries[1]
         self.assertTrue(inserted)
         self.assertEqual(connection.commits, 1)
         self.assertEqual(connection.rollbacks, 0)
-        self.assertIn("INSERT IGNORE INTO signals", connection.cursor_instance.query)
+        self.assertIn("INSERT IGNORE INTO signals", signal_query)
         self.assertEqual(values[0], datetime(2026, 1, 12, 9, 5))
         self.assertEqual(values[3], "long")
         self.assertEqual(values[7], int(opened.timestamp()))
+        self.assertIn("INSERT INTO signal_potention", potential_query)
+        self.assertEqual(potential_values[1], Decimal("1.5"))
         payload = json.loads(values[6])
         self.assertEqual(payload["params"]["atr14_points"], 2.5)
         self.assertEqual(payload["utc_offset_minutes"], 60)

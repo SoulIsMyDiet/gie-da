@@ -67,7 +67,8 @@ Wynik setupu zaczyna się od 60 punktów; premie są naliczane wyłącznie po
 spełnieniu jego warunków bazowych. Sygnał wymaga co najmniej 70 punktów.
 TP/SL są liczone od zamknięcia świecy, a maksymalny czas trzymania wynosi
 20 minut. Rzeczywisty spread, poślizg i opłaty nie są pobierane z danych;
-używana jest konfigurowalna wartość `ASSUMED_COST_USD`.
+raport `signal_potention` odejmuje szacunkowy spread XAU/USD `0,30` jednostki
+ceny, który nie jest bieżącym kwotowaniem brokera.
 
 ## Święta i wydarzenia
 

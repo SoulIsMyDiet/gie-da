@@ -17,6 +17,7 @@ from config import (
     UTC_TIMEZONE,
     STRATEGY_NAME,
     SAVE_NONE_SIGNALS,
+    SIGNAL_POTENTIAL_SPREAD,
 )
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,25 @@ class CandleDatabase:
                     int(timestamp_utc.timestamp()),  # source_timestamp
                 ),
             )
+
+            if signal_type.lower() in ("long", "short"):
+                cursor.execute(
+                    """
+                    INSERT INTO signal_potention (signal_id, spread)
+                    SELECT id, %s
+                    FROM signals
+                    WHERE product = %s
+                        AND algorithm_name = %s
+                        AND source_timestamp = %s
+                    ON DUPLICATE KEY UPDATE spread = VALUES(spread)
+                    """,
+                    (
+                        Decimal(str(SIGNAL_POTENTIAL_SPREAD)),
+                        INSTRUMENT,
+                        STRATEGY_NAME,
+                        int(timestamp_utc.timestamp()),
+                    ),
+                )
 
             connection.commit()
 

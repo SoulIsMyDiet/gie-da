@@ -85,7 +85,7 @@ def test_save_commits_warsaw_close_and_reads_json_with_polish_text(monkeypatch):
     storage, connections = _mock_storage(monkeypatch, connections=2)
     assert storage.save_signal(_result("LONG"), 120)
     connection, cursor = connections[0]
-    query, values = cursor.execute.call_args.args
+    query, values = cursor.execute.call_args_list[0].args
     assert "INSERT INTO signals" in query
     assert values[0] == datetime(2026, 1, 5, 22, 1)
     assert values[1] == "USD/JPY"
@@ -98,6 +98,9 @@ def test_save_commits_warsaw_close_and_reads_json_with_polish_text(monkeypatch):
         "price", "signal", "timestamp", "instrument", "reason"
     ]
     assert stored["reason"] == "Zablokowano: trwa przerwa."
+    potential_query, potential_values = cursor.execute.call_args_list[1].args
+    assert "INSERT INTO signal_potention" in potential_query
+    assert potential_values[1] == Decimal("0.03")
     connection.commit.assert_called_once()
 
     read_connection, read_cursor = connections[1]

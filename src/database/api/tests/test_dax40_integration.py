@@ -6,6 +6,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -260,12 +261,13 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
     def test_algorithm_signal_uses_one_parameterized_transaction(self) -> None:
         class FakeCursor:
             rowcount = 1
-            query = ""
-            parameters = ()
+            lastrowid = 42
+
+            def __init__(self) -> None:
+                self.calls = []
 
             def execute(self, query, parameters) -> None:
-                self.query = query
-                self.parameters = parameters
+                self.calls.append((query, parameters))
 
             def close(self) -> None:
                 pass
@@ -309,18 +311,22 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
 
         self.assertTrue(inserted)
         connect.assert_called_once_with(**repository.database_settings)
-        self.assertIn("INSERT IGNORE INTO signals", connection.cursor_instance.query)
-        self.assertIn("%s", connection.cursor_instance.query)
-        self.assertEqual(connection.cursor_instance.parameters[1], "GER30")
-        self.assertEqual(connection.cursor_instance.parameters[3], "long")
+        signal_query, signal_parameters = connection.cursor_instance.calls[0]
+        potential_query, potential_parameters = connection.cursor_instance.calls[1]
+        self.assertIn("INSERT IGNORE INTO signals", signal_query)
+        self.assertIn("%s", signal_query)
+        self.assertEqual(signal_parameters[1], "GER30")
+        self.assertEqual(signal_parameters[3], "long")
         self.assertEqual(
-            connection.cursor_instance.parameters[4],
+            signal_parameters[4],
             "Chat-gpt6/DAX40/DAX40StrategyV1",
         )
         self.assertEqual(
-            connection.cursor_instance.parameters[6],
+            signal_parameters[6],
             '{"reason":"no_breakout"}',
         )
+        self.assertIn("INSERT INTO signal_potention", potential_query)
+        self.assertEqual(potential_parameters[1], Decimal("1.50000"))
         self.assertTrue(connection.committed)
         self.assertTrue(connection.closed)
 

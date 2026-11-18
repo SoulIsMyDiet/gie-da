@@ -28,9 +28,10 @@ pojedynczy brak ani regularna przerwa nie resetują wskaźników.
 
 Ceny wejścia, SL i TP są wyłącznie propozycją wyliczoną na podstawie świec;
 kurs zamknięcia nie jest gwarantowaną ceną wykonania. Wyliczenia nie
-uwzględniają rzeczywistego spreadu, poślizgu ani opłat. Przyjęto SL
+nie uwzględniają rzeczywistego spreadu, poślizgu ani opłat. Raport
+`signal_potention` odejmuje szacunkowy spread XAU/USD `0,30` jednostki ceny.
+Przyjęto SL
 1,5 × ATR i TP 2 × ATR. Sygnały nie są dowodem opłacalności: w obecnej bazie
 nie ma świec XAU/USD, na których można byłoby skalibrować parametry.
 
-Raport `signal_potention` nie jest generowany ani przeliczany dla tej
-strategii, ponieważ jego domyślny spread nie jest znaną wartością dla XAUUSD.
+Spread jest założeniem orientacyjnym, a nie rzeczywistym kwotowaniem brokera.

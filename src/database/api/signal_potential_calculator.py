@@ -14,10 +14,39 @@ WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 class SignalPotentialCalculator:
     """Wylicza salda sygnałów na podstawie kolejnych zamkniętych świec M1."""
 
-    SPREAD_PRICE = Decimal("0.0003")
+    SPREAD_PRICE = Decimal("0.00030")
+    SPREADS_BY_PRODUCT = {
+        "EUR/USD": Decimal("0.00030"),
+        "EURUSD/USD": Decimal("0.00030"),
+        "USD/MXN": Decimal("0.01000"),
+        "USD/JPY": Decimal("0.03000"),
+        "XAU/USD": Decimal("0.30000"),
+        "ES": Decimal("0.60000"),
+        "GER30": Decimal("1.50000"),
+    }
     DEPOSIT_PLN = Decimal("100")
     LEVERAGE = Decimal("30")
     BALANCE_DECIMAL_PLACES = Decimal("0.00001")
+
+    @classmethod
+    def spread_for_product(cls, product: str) -> Decimal:
+        """Zwraca przyjęty spread dla instrumentu lub zgłasza brak konfiguracji.
+
+        Args:
+            product: Symbol instrumentu zapisany w kolumnie ``signals.product``.
+
+        Returns:
+            Szacowany spread wyrażony w jednostkach ceny instrumentu.
+
+        Raises:
+            ValueError: Gdy instrument nie ma skonfigurowanego spreadu.
+        """
+        try:
+            return cls.SPREADS_BY_PRODUCT[product]
+        except KeyError as error:
+            raise ValueError(
+                f"Brak domyślnego spreadu dla instrumentu {product!r}."
+            ) from error
 
     def calculate(
         self,

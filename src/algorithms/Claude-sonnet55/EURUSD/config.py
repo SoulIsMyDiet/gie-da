@@ -19,6 +19,7 @@ except ImportError:
 INSTRUMENT = "EURUSD"
 PIP = 0.0001  # 1 pip dla EURUSD
 ASSUMED_COST_PIPS = 1.5  # Założony spread/prowizja w pipsach
+SIGNAL_POTENTIAL_SPREAD = 0.0003
 COST_MULTIPLE = 3.0  # Mnożnik: oczekiwany ruch musi być ≥ COST_MULTIPLE * ASSUMED_COST_PIPS
 
 # ============================================================================

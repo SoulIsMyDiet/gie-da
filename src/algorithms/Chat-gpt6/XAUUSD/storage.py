@@ -166,7 +166,7 @@ class XAUUSDStorage:
         """Zapisuje wynik i zwraca True tylko dla nowego rekordu.
 
         Błędne dane zgłaszają ValueError; błędy bazy są cofane i propagowane.
-        Nie tworzy wpisu potencjału: spread złota nie jest znany.
+        Dla nowego sygnału LONG/SHORT zapisuje także założony spread XAU/USD.
         """
         signal = result.get("signal")
         if not isinstance(signal, str) or signal.upper() not in ("LONG", "SHORT", "NONE"):
@@ -212,6 +212,17 @@ class XAUUSDStorage:
                     connection.rollback()
                     return False
                 raise
+            if signal in ("long", "short"):
+                cursor.execute(
+                    """
+                    INSERT INTO signal_potention (signal_id, spread)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        cursor.lastrowid,
+                        Decimal(str(config.SIGNAL_POTENTIAL_SPREAD)),
+                    ),
+                )
             connection.commit()
             return True
         except Exception:

@@ -229,12 +229,12 @@ def test_claude_strategy_process_exit_code(exit_code, signal, expected):
     ]
 
 
-def test_initialize_never_backfills_xau_with_default_spread():
-    """Atrapa inicjalizacji sprawdza filtr bez uruchamiania migracji w bazie."""
+def test_initialize_backfills_xau_with_configured_spread():
+    """Inicjalizacja przypisuje XAU/USD jego własny spread."""
     repository = app.MarketDataRepository()
     connection, cursor = Mock(), Mock()
     connection.cursor.return_value = cursor
-    repository.signal_potential_calculator = Mock()
+    cursor.fetchall.return_value = []
     with patch.object(app.mysql.connector, "connect", return_value=connection), \
             patch.object(repository, "_migrate_signal_enum"), \
             patch.object(repository, "_migrate_signal_source_timestamp"), \
@@ -244,8 +244,14 @@ def test_initialize_never_backfills_xau_with_default_spread():
     calls = [call.args for call in cursor.execute.call_args_list
              if "INSERT IGNORE INTO signal_potention" in call.args[0]]
     assert len(calls) == 1
-    assert "AND NOT (product = %s AND algorithm_name = %s)" in calls[0][0]
-    assert calls[0][1] == ("XAU/USD", "Chat-gpt6/XAUUSDStrategyV1")
+    assert "CASE s.product" in calls[0][0]
+    spreads = app.SignalPotentialCalculator.SPREADS_BY_PRODUCT
+    expected_xau_pair = ("XAU/USD", spreads["XAU/USD"])
+    case_pairs = tuple(
+        (calls[0][1][index], calls[0][1][index + 1])
+        for index in range(0, 2 * len(spreads), 2)
+    )
+    assert expected_xau_pair in case_pairs
 
 
 def test_unexpected_strategy_failure_is_isolated(caplog):

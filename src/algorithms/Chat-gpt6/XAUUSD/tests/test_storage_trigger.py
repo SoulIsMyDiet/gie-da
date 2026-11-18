@@ -24,6 +24,7 @@ def modules(monkeypatch):
     config = SimpleNamespace(
         DB_SYMBOL="XAU/USD", STRATEGY_NAME="Chat-gpt6/XAUUSDStrategyV1",
         HISTORY_LIMIT=2500, SAVE_NONE_SIGNALS=False, BEEP_ENABLED=True,
+        SIGNAL_POTENTIAL_SPREAD=0.3,
         CONFIG=SimpleNamespace(
             ema_fast=9, ema_middle=21, atr_period=14, rsi_period=14,
         ),
@@ -77,14 +78,16 @@ def connection_for(module):
     return storage, connection, cursor
 
 
-def test_storage_writes_compact_json_and_no_assumed_spread(modules):
-    """Zapis ogranicza JSON do sygnału i ośmiu podstawowych parametrów."""
+def test_storage_writes_compact_json_and_configured_potential_spread(modules):
+    """Zapisuje krótki JSON oraz spread przyjęty dla XAU/USD."""
     module, _, _, _ = modules
     storage, connection, cursor = connection_for(module)
     assert storage.save_signal(result(), 31)
-    sql, values = cursor.execute.call_args.args
+    sql, values = cursor.execute.call_args_list[0].args
     assert "INSERT INTO signals" in sql
-    assert cursor.execute.call_count == 1
+    potential_sql, potential_values = cursor.execute.call_args_list[1].args
+    assert "INSERT INTO signal_potention" in potential_sql
+    assert potential_values[1] == Decimal("0.3")
     assert values[:6] == (
         datetime(2026, 1, 5, 11, 1), "XAU/USD", Decimal("2500.5"),
         "long", "Chat-gpt6/XAUUSDStrategyV1", 31,
@@ -242,7 +245,7 @@ def test_cli_exit_codes(modules, monkeypatch, saved, enabled, code, capsys):
 
 
 def test_real_generator_trigger_and_storage_together(monkeypatch):
-    """Sprawdza rzeczywiste importy pakietowe i zapis generatora przez atrapę MySQL."""
+    """Weryfikuje pomijanie NONE i zachowanie krótkiego wyniku strategii."""
     package = ModuleType("xau_integration_test")
     package.__path__ = [str(DIRECTORY)]
     monkeypatch.setitem(sys.modules, package.__name__, package)

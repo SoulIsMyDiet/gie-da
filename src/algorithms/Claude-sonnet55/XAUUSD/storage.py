@@ -303,6 +303,17 @@ class XAUUSDStorage:
                     connection.rollback()
                     return False
                 raise
+            if signal in {"LONG", "SHORT"}:
+                cursor.execute(
+                    """
+                    INSERT INTO signal_potention (signal_id, spread)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        cursor.lastrowid,
+                        Decimal(str(config.SIGNAL_POTENTIAL_SPREAD)),
+                    ),
+                )
             connection.commit()
             return True
         except Exception:

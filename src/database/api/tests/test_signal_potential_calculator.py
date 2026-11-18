@@ -103,6 +103,27 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
 
         self.assertEqual(result["saldo_1st_candle"], Decimal("0.0000"))
 
+    def test_default_spreads_are_specific_to_each_product(self) -> None:
+        """Każdy instrument zwraca własny spread w jednostkach swojej ceny."""
+        self.assertEqual(
+            self.calculator.spread_for_product("EUR/USD"),
+            Decimal("0.00030"),
+        )
+        self.assertEqual(
+            self.calculator.spread_for_product("USD/MXN"),
+            Decimal("0.01000"),
+        )
+        self.assertEqual(
+            self.calculator.spread_for_product("USD/JPY"),
+            Decimal("0.03000"),
+        )
+        self.assertEqual(
+            self.calculator.spread_for_product("XAU/USD"),
+            Decimal("0.30000"),
+        )
+        with self.assertRaises(ValueError):
+            self.calculator.spread_for_product("UNKNOWN")
+
     def test_reads_unix_timestamp_from_signal_parameters(self) -> None:
         """Kalkulator obsługuje epokę Unix zapisywaną przez strategie."""
         signal_time = self.calculator._signal_timestamp(

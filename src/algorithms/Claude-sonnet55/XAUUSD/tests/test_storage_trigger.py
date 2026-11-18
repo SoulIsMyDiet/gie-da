@@ -71,9 +71,9 @@ def test_payload_order_rounding_and_polish_utf8():
 def test_save_commits_naive_warsaw_close_and_reads_json_back(monkeypatch):
     """Zapisuje sygnał transakcyjnie i odczytuje JSON z polskimi znakami."""
     storage, connection, cursor = _mock_storage(monkeypatch)
-    result = _result()
+    result = _result("LONG")
     assert storage.save_signal(result, 120)
-    query, values = cursor.execute.call_args.args
+    query, values = cursor.execute.call_args_list[0].args
     assert "INSERT INTO signals" in query
     assert values[0] == datetime(2026, 1, 5, 11, 1)
     assert values[1] == "XAU/USD"
@@ -86,6 +86,9 @@ def test_save_commits_naive_warsaw_close_and_reads_json_back(monkeypatch):
     assert list(stored) == [
         "price", "signal", "timestamp", "instrument", "reason"
     ]
+    potential_query, potential_values = cursor.execute.call_args_list[1].args
+    assert "INSERT INTO signal_potention" in potential_query
+    assert potential_values[1] == Decimal("0.3")
     cursor.fetchone.return_value = (serialized,)
     assert storage.get_processed_signal(result["timestamp"]) == stored
     connection.commit.assert_called_once()

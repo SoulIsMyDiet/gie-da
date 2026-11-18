@@ -9,6 +9,7 @@ STRATEGY_NAME = "Chat-gpt6/XAUUSDStrategyV1"
 SAVE_NONE_SIGNALS = False
 HISTORY_LIMIT = 2500
 BEEP_ENABLED = True
+SIGNAL_POTENTIAL_SPREAD = 0.30
 
 
 @dataclass(frozen=True)

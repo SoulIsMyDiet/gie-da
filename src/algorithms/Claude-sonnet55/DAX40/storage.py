@@ -14,6 +14,7 @@ from typing import Any
 import mysql.connector
 
 from .config import (
+    ASSUMED_COST_POINTS,
     INSTRUMENT,
     SAVE_NONE_SIGNALS,
     STRATEGY_NAME,
@@ -199,6 +200,17 @@ class DAX40Storage:
                 ),
             )
             inserted = cursor.rowcount == 1
+            if inserted and signal_type in {"LONG", "SHORT"}:
+                cursor.execute(
+                    """
+                    INSERT INTO signal_potention (signal_id, spread)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        cursor.lastrowid,
+                        Decimal(str(ASSUMED_COST_POINTS)),
+                    ),
+                )
             connection.commit()
             return inserted
         except Exception:

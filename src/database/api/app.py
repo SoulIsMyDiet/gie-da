@@ -883,7 +883,7 @@ class MarketDataRepository:
                         saldo_20_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         max_candle INT NULL DEFAULT NULL,
                         `100zl_deal` DECIMAL(20, 5) NULL DEFAULT NULL,
-                        spread DECIMAL(20, 5) NOT NULL DEFAULT 0.0003,
+                        spread DECIMAL(20, 5) NOT NULL,
                         UNIQUE KEY uq_signal_potention_signal_id (signal_id),
                         CONSTRAINT fk_signal_potention_signal
                             FOREIGN KEY (signal_id) REFERENCES signals(id)
@@ -892,15 +892,7 @@ class MarketDataRepository:
                 )
                 self._migrate_signal_potention_schema(cursor)
                 self._migrate_candle_timestamps(cursor)
-                cursor.execute(
-                    """
-                    INSERT IGNORE INTO signal_potention (signal_id)
-                    SELECT id FROM signals
-                    WHERE `signal` IN ('short', 'long')
-                      AND NOT (product = %s AND algorithm_name = %s)
-                    """,
-                    ("XAU/USD", "Chat-gpt6/XAUUSDStrategyV1"),
-                )
+                self._sync_signal_potention_spreads(cursor)
                 self.signal_potential_calculator.update_pending(cursor)
                 connection.commit()
             finally:
@@ -1036,7 +1028,7 @@ class MarketDataRepository:
             "saldo_10aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "saldo_20_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "100zl_deal": "DECIMAL(20, 5) NULL DEFAULT NULL",
-            "spread": "DECIMAL(20, 5) NOT NULL DEFAULT 0.0003",
+            "spread": "DECIMAL(20, 5) NOT NULL",
         }
         cursor.execute("SHOW COLUMNS FROM signal_potention")
         column_types = {
@@ -1063,6 +1055,49 @@ class MarketDataRepository:
             cursor.execute(
                 f"ALTER TABLE signal_potention {modified_columns}"
             )
+        cursor.execute(
+            "ALTER TABLE signal_potention ALTER COLUMN spread DROP DEFAULT"
+        )
+
+    def _sync_signal_potention_spreads(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Uzupełnia brakujące wiersze potencjału i aktualizuje spread instrumentu."""
+        configured_spreads = (
+            self.signal_potential_calculator.SPREADS_BY_PRODUCT
+        )
+        products = tuple(configured_spreads)
+        case_expression = "CASE s.product " + " ".join(
+            "WHEN %s THEN %s" for _ in products
+        ) + " END"
+        case_parameters = tuple(
+            value
+            for product, spread in configured_spreads.items()
+            for value in (product, spread)
+        )
+        product_placeholders = ", ".join("%s" for _ in products)
+        product_parameters = (*case_parameters, *products)
+
+        cursor.execute(
+            f"""
+            INSERT IGNORE INTO signal_potention (signal_id, spread)
+            SELECT s.id, {case_expression}
+            FROM signals AS s
+            WHERE s.`signal` IN ('short', 'long')
+                AND s.product IN ({product_placeholders})
+            """,
+            product_parameters,
+        )
+        cursor.execute(
+            f"""
+            UPDATE signal_potention AS p
+            JOIN signals AS s ON s.id = p.signal_id
+            SET p.spread = {case_expression}
+            WHERE s.`signal` IN ('short', 'long')
+                AND s.product IN ({product_placeholders})
+            """,
+            product_parameters,
+        )
 
     def _migrate_candle_timestamps(
         self, cursor: mysql.connector.cursor.MySQLCursor
@@ -1502,7 +1537,7 @@ class MarketDataRepository:
             """,
             (
                 cursor.lastrowid,
-                SignalPotentialCalculator.SPREAD_PRICE,
+                SignalPotentialCalculator.spread_for_product("EURUSD/USD"),
             ),
         )
 
@@ -1584,7 +1619,9 @@ class MarketDataRepository:
                 """,
                 (
                     cursor.lastrowid,
-                    SignalPotentialCalculator.SPREAD_PRICE,
+                    SignalPotentialCalculator.spread_for_product(
+                        signal.instrument
+                    ),
                 ),
             )
         return signal_was_inserted
@@ -1651,6 +1688,11 @@ class MarketDataRepository:
             allow_nan=False,
             separators=(",", ":"),
         )
+        potential_spread = (
+            SignalPotentialCalculator.spread_for_product(product)
+            if save_signal and direction != "NONE"
+            else None
+        )
 
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
@@ -1703,6 +1745,17 @@ class MarketDataRepository:
                     ),
                 )
                 inserted = cursor.rowcount == 1
+                if inserted and potential_spread is not None:
+                    cursor.execute(
+                        """
+                        INSERT INTO signal_potention (signal_id, spread)
+                        VALUES (%s, %s)
+                        """,
+                        (
+                            cursor.lastrowid,
+                            potential_spread,
+                        ),
+                    )
                 if (
                     inserted
                     and evaluation_id is not None
