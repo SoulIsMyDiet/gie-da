@@ -376,14 +376,11 @@ void StockPriceMonitor::setNotificationStatus(const std::string& status) {
 /**
  * Serializuje pojedyncze odtwarzania, aby dźwięki monitora nie przerywały się.
  * Sieć i oczekiwanie między powiadomieniami nie zajmują blokady dźwięku.
- * @param signalSaved Czy odtworzyć dźwięk zapisu zamiast dźwięku luki.
  * @return true, jeśli odtwarzanie zakończyło się powodzeniem.
  */
-bool StockPriceMonitor::playAudio(bool signalSaved) {
+bool StockPriceMonitor::playSignalSavedAudio() {
     AcquireSRWLockExclusive(&audioLock_);
-    const bool played = signalSaved
-        ? AudioSignal::playSignalSaved()
-        : AudioSignal::play();
+    const bool played = AudioSignal::playSignalSaved();
     ReleaseSRWLockExclusive(&audioLock_);
     return played;
 }
@@ -416,7 +413,7 @@ void StockPriceMonitor::runNotifications() {
                     if (WaitForSingleObject(stopEvent_, 0) != WAIT_TIMEOUT) {
                         return;
                     }
-                    if (!playAudio(true)) {
+                    if (!playSignalSavedAudio()) {
                         error = "Nie udało się odtworzyć dźwięku powiadomienia Groka.";
                         succeeded = false;
                         break;
@@ -439,7 +436,7 @@ void StockPriceMonitor::runNotifications() {
                 if (WaitForSingleObject(stopEvent_, 0) != WAIT_TIMEOUT) {
                     return;
                 }
-                if (!playAudio(true)) {
+                if (!playSignalSavedAudio()) {
                     usdmxnError =
                         "Nie udało się odtworzyć dźwięku sygnału USD/MXN.";
                     usdmxnSucceeded = false;
@@ -479,7 +476,7 @@ void StockPriceMonitor::runNotifications() {
                     usdjpySucceeded = false;
                     break;
                 }
-                if (!playAudio(true)) {
+                if (!playSignalSavedAudio()) {
                     usdjpyError =
                         "Nie udało się odtworzyć dźwięku sygnału USD/JPY.";
                     usdjpySucceeded = false;
@@ -590,8 +587,6 @@ void StockPriceMonitor::run() {
         std::chrono::duration<double>(
             std::chrono::steady_clock::now() - backfillStartedAt)
             .count();
-    const bool startupGapSoundPlayed =
-        backfillResult.detectedGapCount == 0 || playAudio(false);
     AcquireSRWLockExclusive(&statusLock_);
     if (!backfillResult.latestCandle.datetime.empty()) {
         oneMinuteCandle_ = std::move(backfillResult.latestCandle);
@@ -600,9 +595,6 @@ void StockPriceMonitor::run() {
         backfillResult, backfillSucceeded ? std::string{} : backfillError);
     if (!deferredBackfillStatus.empty()) {
         backfillStatus_ += " " + deferredBackfillStatus;
-    }
-    if (!startupGapSoundPlayed) {
-        backfillStatus_ += " Nie udało się odtworzyć sygnału dźwiękowego.";
     }
     ReleaseSRWLockExclusive(&statusLock_);
     if (!PostMessageA(notificationWindow_, candleUpdateMessage, 0, 0)) {
@@ -703,12 +695,9 @@ bool StockPriceMonitor::updateCandle() {
             }
         }
     }
-    if (saved && newlyDetectedGapCount > 0 && !playAudio(false)) {
-        updateStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
-    }
     if (saved) {
         for (std::size_t index = 0; index < savedSignalCount; ++index) {
-            if (!playAudio(true)) {
+            if (!playSignalSavedAudio()) {
                 updateStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
                 break;
             }
@@ -772,7 +761,6 @@ void StockPriceMonitor::updateAdditionalProducts() {
 
     std::string additionalStatus;
     std::size_t savedSignalCount = 0;
-    bool anyGapDetected = false;
     for (const std::string& symbol : openSymbols) {
         if (backfilledSymbols_.find(symbol) == backfilledSymbols_.end()) {
             CandleBackfillResult backfillResult;
@@ -780,8 +768,6 @@ void StockPriceMonitor::updateAdditionalProducts() {
             const bool backfillSucceeded =
                 CandleBackfillClient::synchronize(
                     symbol, backfillResult, backfillError);
-            anyGapDetected =
-                anyGapDetected || backfillResult.detectedGapCount > 0;
             if (!backfillSucceeded) {
                 if (!additionalStatus.empty()) {
                     additionalStatus += " | ";
@@ -832,7 +818,6 @@ void StockPriceMonitor::updateAdditionalProducts() {
             error,
             &candleSavedDespiteError);
         savedSignalCount += signalSaveCount;
-        anyGapDetected = anyGapDetected || detectedGapCount > 0;
         if (!saveSucceeded && !candleSavedDespiteError) {
             if (!additionalStatus.empty()) {
                 additionalStatus += " | ";
@@ -870,11 +855,8 @@ void StockPriceMonitor::updateAdditionalProducts() {
         additionalStatus += ".";
     }
 
-    if (anyGapDetected && !playAudio(false)) {
-        additionalStatus += " Nie udało się odtworzyć sygnału dźwiękowego.";
-    }
     for (std::size_t index = 0; index < savedSignalCount; ++index) {
-        if (!playAudio(true)) {
+        if (!playSignalSavedAudio()) {
             additionalStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
             break;
         }

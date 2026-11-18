@@ -82,13 +82,6 @@ bool playBeeps(DWORD beepCount, double frequency, DWORD durationMs, DWORD gapMs)
 } // namespace
 
 /**
- * Odtwarza trzy piknięcia używane jako powiadomienie o brakujących świecach.
- */
-bool AudioSignal::play() {
-    return playBeeps(3, 440.0, 350, 150);
-}
-
-/**
  * Odtwarza dwa piknięcia po potwierdzonym zapisie sygnału do bazy.
  */
 bool AudioSignal::playSignalSaved() {

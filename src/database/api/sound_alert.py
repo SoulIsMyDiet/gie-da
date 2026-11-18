@@ -1,16 +1,13 @@
-"""
-Backend
-Moduł do generowania sygnałów dźwiękowych przy wykryciu luk w świecach.
-"""
+"""Odtwarza krótkie dźwięki dla powiadomień i błędów API."""
 
 import platform
 import sys
 import time
 
 
-def play_gap_alert(number_of_beeps: int = 3, frequency: int = 1000, duration_ms: int = 200) -> None:
+def play_alert(number_of_beeps: int = 3, frequency: int = 1000, duration_ms: int = 200) -> None:
     """
-    Emituje sygnał dźwiękowy (pikniecia) przy wykryciu luki w świecach.
+    Odtwarza wskazaną liczbę piknięć dla powiadomienia lub błędu API.
     
     Parametry:
     - number_of_beeps: liczba piknięć (domyślnie 3)

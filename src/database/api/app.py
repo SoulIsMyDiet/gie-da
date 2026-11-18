@@ -157,7 +157,7 @@ from market_products import (  # noqa: E402
     is_market_open,
     is_monitored_product,
 )
-from sound_alert import play_gap_alert  # noqa: E402
+from sound_alert import play_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
@@ -1780,7 +1780,7 @@ class MarketDataRepository:
                     )
                     # Sygnał dźwiękowy dla błędu połączenia
                     Thread(
-                        target=play_gap_alert,
+                        target=play_alert,
                         kwargs={"number_of_beeps": 4, "frequency": 1500},
                         daemon=True,
                     ).start()
@@ -2126,8 +2126,6 @@ async def lifespan(application: FastAPI):
                     f"[Startup] {symbol}: znaleziono {total_count} brakujących świec, "
                     f"ładuję {len(missing_times)} najnowszych..."
                 )
-                # Sygnał dźwiękowy gdy są brakujące świece
-                Thread(target=play_gap_alert, kwargs={"number_of_beeps": 2}, daemon=True).start()
             else:
                 print(f"[Startup] {symbol}: brak brakujących świec")
         except Exception as error:
@@ -2565,7 +2563,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     if _run_xauusd_strategy(candle.datetime.astimezone(timezone.utc)):
                         signal_save_count += 1
                         Thread(
-                            target=play_gap_alert,
+                            target=play_alert,
                             kwargs={"number_of_beeps": 2, "duration_ms": 100},
                             daemon=True,
                         ).start()
@@ -2605,10 +2603,6 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
             media_type="text/plain; charset=utf-8",
         )
     
-    # Front - Sygnał dźwiękowy (3 piknięcia) gdy została wykryta luka w świecach
-    if new_gap_count > 0:
-        Thread(target=play_gap_alert, kwargs={"number_of_beeps": 3}, daemon=True).start()
-
     return Response(
         content=f"{new_gap_count}\n{signal_save_count}",
         media_type="text/plain; charset=utf-8",

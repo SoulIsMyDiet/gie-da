@@ -77,11 +77,10 @@ private:
     void setNotificationStatus(const std::string& status);
 
     /**
-     * Odtwarza dźwięk bez przerywania innego dźwięku tego monitora.
-     * @param signalSaved Czy odtworzyć dźwięk zapisu zamiast dźwięku luki.
+     * Odtwarza dźwięk zapisu sygnału bez przerywania innego dźwięku monitora.
      * @return true, jeśli odtwarzanie zakończyło się powodzeniem.
      */
-    bool playAudio(bool signalSaved);
+    bool playSignalSavedAudio();
 
     /**
      * Pobiera świecę EURUSD i uruchamia przypisane jej algorytmy sygnałów.
