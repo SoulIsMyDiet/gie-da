@@ -17,7 +17,7 @@ constexpr int pageButtonHeight = 36;
 constexpr int detailsButtonHeight = 22;
 constexpr int pageContentBottomMargin = pageButtonHeight + 32;
 constexpr int pageLabelHeight = 20;
-constexpr int signalColumnWidths[] = {22, 18, 14, 30, 16};
+constexpr int signalColumnWidths[] = {18, 11, 9, 20, 16, 14, 12};
 
 struct StyledText {
     std::wstring value;
@@ -317,13 +317,13 @@ void SignalsPage::positionControls() {
     const LONG buttonHeight =
         std::min<LONG>(detailsButtonHeight, std::max<LONG>(1, rowHeight - 2));
     LONG buttonX = 0;
-    for (std::size_t column = 0; column < 4; ++column) {
+    for (std::size_t column = 0; column < 6; ++column) {
         buttonX += clientWidth * signalColumnWidths[column] / 100;
     }
     buttonX += 4;
     const LONG buttonWidth =
         std::max<LONG>(
-            1, clientWidth * signalColumnWidths[4] / 100 - 8);
+            1, clientWidth * signalColumnWidths[6] / 100 - 8);
     for (std::size_t index = 0; index < detailsButtons_.size(); ++index) {
         const LONG rowTop = rowHeight * static_cast<LONG>(index + 1);
         const LONG buttonTop = rowTop + (rowHeight - buttonHeight) / 2;
@@ -334,7 +334,7 @@ void SignalsPage::positionControls() {
 }
 
 /**
- * Rysuje czas, produkt, cenę i algorytm; przyciski szczegółów są osobnymi kontrolkami.
+ * Rysuje dane sygnałów i koloruje wynik; szczegóły otwierają osobne przyciski.
  */
 void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
     if (detailsVisible_) {
@@ -375,7 +375,8 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
         1, (tableArea.bottom - tableArea.top) /
                static_cast<LONG>(signals_.size() + 1));
     const wchar_t* columnNames[] = {
-        L"Czas (Polska)", L"Produkt", L"Cena", L"Algorytm", L""
+        L"Czas (Polska)", L"Produkt", L"Cena", L"Algorytm",
+        L"Decyzja AI", L"Max zysk (po 20 min)", L""
     };
     const UINT textFormat =
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
@@ -385,7 +386,7 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
     LONG rowTop = tableArea.top;
     LONG columnLeft = tableArea.left;
     const LONG totalWidth = tableArea.right - tableArea.left;
-    for (std::size_t column = 0; column < 5; ++column) {
+    for (std::size_t column = 0; column < 7; ++column) {
         const LONG columnWidth =
             totalWidth * signalColumnWidths[column] / 100;
         RECT cell{columnLeft + 2, rowTop, columnLeft + columnWidth - 2,
@@ -401,12 +402,27 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
             signal.product,
             signal.price,
             signal.algorithmName,
+            signal.aiDecision,
+            signal.maxProfitAfter20Minutes.empty()
+                ? "--"
+                : signal.maxProfitAfter20Minutes,
         };
         columnLeft = tableArea.left;
-        for (std::size_t column = 0; column < 4; ++column) {
+        for (std::size_t column = 0; column < 6; ++column) {
             std::wstring wideValue;
             if (!convertUtf8ToWide(values[column], wideValue)) {
                 wideValue = L"Nieprawidłowy tekst";
+            }
+            if (column == 5) {
+                const int sign = decimalSign(signal.maxProfitAfter20Minutes);
+                SetTextColor(
+                    deviceContext,
+                    sign > 0 ? RGB(0, 128, 0)
+                    : sign < 0 ? RGB(200, 0, 0)
+                    : sign == 0 ? RGB(128, 128, 128)
+                                : RGB(0, 0, 0));
+            } else {
+                SetTextColor(deviceContext, RGB(0, 0, 0));
             }
             const LONG columnWidth =
                 totalWidth * signalColumnWidths[column] / 100;
@@ -419,6 +435,7 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
         rowTop += rowHeight;
     }
 
+    SetTextColor(deviceContext, RGB(0, 0, 0));
     const std::wstring pageLabel =
         L"Strona " + std::to_wstring(currentPage_ + 1);
     RECT pageBounds = clientArea;

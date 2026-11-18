@@ -845,13 +845,13 @@ bool splitCandleGapRow(std::string_view row, CandleGapReportEntry& gap) {
 }
 
 /**
- * Sprawdza i rozdziela wiersz raportu zawierający dziesięć pól sygnału.
+ * Sprawdza i rozdziela wiersz raportu zawierający jedenaście pól sygnału.
  */
 bool splitSignalReportRow(
     std::string_view row, SignalReportEntry& signal) {
-    std::string_view fields[10];
+    std::string_view fields[11];
     std::size_t fieldStart = 0;
-    for (std::size_t index = 0; index < 9; ++index) {
+    for (std::size_t index = 0; index < 10; ++index) {
         const std::size_t separator = row.find('\t', fieldStart);
         if (separator == std::string_view::npos) {
             return false;
@@ -862,10 +862,10 @@ bool splitSignalReportRow(
     if (row.find('\t', fieldStart) != std::string_view::npos) {
         return false;
     }
-    fields[9] = row.substr(fieldStart);
+    fields[10] = row.substr(fieldStart);
 
-    for (std::size_t index = 0; index < 10; ++index) {
-        if (fields[index].empty() ||
+    for (std::size_t index = 0; index < 11; ++index) {
+        if ((index != 10 && fields[index].empty()) ||
             fields[index].size() > (index == 9 ? 8192 : 512)) {
             return false;
         }
@@ -881,6 +881,7 @@ bool splitSignalReportRow(
     signal.transactionId.assign(fields[7]);
     signal.candlesCount.assign(fields[8]);
     signal.signalParameters.assign(fields[9]);
+    signal.maxProfitAfter20Minutes.assign(fields[10]);
     return true;
 }
 

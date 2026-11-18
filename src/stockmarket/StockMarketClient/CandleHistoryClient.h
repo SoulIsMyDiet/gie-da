@@ -44,6 +44,7 @@ struct SignalReportEntry {
     std::string transactionId;
     std::string candlesCount;
     std::string signalParameters;
+    std::string maxProfitAfter20Minutes;
 };
 
 /**
@@ -258,7 +259,7 @@ public:
         std::string& error);
 
     /**
-     * Pobiera stronę 15 najnowszych wpisów tabeli signals.
+     * Pobiera 15 najnowszych sygnałów wraz z decyzją AI i wynikiem po 20 minutach.
      * @param page Numer strony liczony od zera.
      * @param signals Otrzymuje wpisy sygnałów z bazy.
      * @param hasNextPage Otrzymuje informację, czy istnieje kolejna strona.

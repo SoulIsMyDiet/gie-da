@@ -2300,7 +2300,7 @@ class MarketDataRepository:
     def fetch_signal_page(
         self, page: int
     ) -> tuple[list[tuple[str, ...]], bool]:
-        """Pobiera 15 najnowszych sygnałów wraz z parametrami JSON."""
+        """Pobiera sygnały, decyzję AI i wynik potencjału po 20 świecach."""
         page_size = 15
         offset = page * page_size
         connection = mysql.connector.connect(**self.database_settings)
@@ -2310,18 +2310,20 @@ class MarketDataRepository:
                 cursor.execute(
                     """
                     SELECT
-                        id,
-                        `datetime`,
-                        product,
-                        CAST(price AS CHAR),
-                        `signal`,
-                        algorithm_name,
-                        COALESCE(CAST(ai_decision AS CHAR), 'NULL'),
-                        COALESCE(CAST(transaction_id AS CHAR), '--'),
-                        candles_count,
-                        CAST(signal_parameters AS CHAR)
-                    FROM signals
-                    ORDER BY `datetime` DESC, id DESC
+                        s.id,
+                        s.`datetime`,
+                        s.product,
+                        CAST(s.price AS CHAR),
+                        s.`signal`,
+                        s.algorithm_name,
+                        COALESCE(CAST(s.ai_decision AS CHAR), 'NULL'),
+                        COALESCE(CAST(s.transaction_id AS CHAR), '--'),
+                        s.candles_count,
+                        CAST(s.signal_parameters AS CHAR),
+                        COALESCE(CAST(p.`100zl_deal` AS CHAR), '')
+                    FROM signals AS s
+                    LEFT JOIN signal_potention AS p ON p.signal_id = s.id
+                    ORDER BY s.`datetime` DESC, s.id DESC
                     LIMIT %s OFFSET %s
                     """,
                     (page_size + 1, offset),
@@ -2340,6 +2342,7 @@ class MarketDataRepository:
                         transaction_id,
                         str(candles_count),
                         signal_parameters,
+                        max_profit_after_20_minutes,
                     )
                     for (
                         signal_id,
@@ -2352,6 +2355,7 @@ class MarketDataRepository:
                         transaction_id,
                         candles_count,
                         signal_parameters,
+                        max_profit_after_20_minutes,
                     ) in rows[:page_size]
                 ], has_next_page
             finally:
@@ -3366,7 +3370,7 @@ def signal_report(
     request: Request,
     page: int = Query(ge=0, le=1000000),
 ) -> Response:
-    """Zwraca stronę 15 najnowszych sygnałów jako dane TSV."""
+    """Zwraca sygnały, decyzję AI i wynik po 20 świecach jako dane TSV."""
     try:
         rows, has_next_page = request.app.state.repository.fetch_signal_page(page)
     except mysql.connector.Error as error:
