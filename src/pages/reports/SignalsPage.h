@@ -10,6 +10,8 @@
 
 class SignalsPage {
 public:
+    ~SignalsPage();
+
     /**
      * Tworzy przyciski paginacji widoku sygnałów.
      * @param instance Instancja aplikacji Windows.
@@ -92,4 +94,6 @@ private:
     SignalPotentialDetails details_;
     std::string detailsStatus_;
     std::string status_;
+    HFONT buttonFont_ = nullptr;
+    int buttonFontHeight_ = 0;
 };

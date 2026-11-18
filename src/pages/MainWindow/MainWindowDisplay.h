@@ -12,9 +12,13 @@ public:
     /**
      * Rysuje sentencję dnia na stronie głównej.
      * @param deviceContext Kontekst rysowania głównego okna.
+     * @param window Okno wyznaczające skalę tekstu.
      * @param clientArea Obszar dostępny dla strony głównej.
      * @param dailySentence Sentencja lub informacja o błędzie jej pobierania.
      */
     static void draw(
-        HDC deviceContext, RECT& clientArea, const std::string& dailySentence);
+        HDC deviceContext,
+        HWND window,
+        RECT& clientArea,
+        const std::string& dailySentence);
 };

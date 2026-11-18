@@ -1,4 +1,5 @@
 #include "MainWindowDisplay.h"
+#include "../WindowScale.h"
 
 #include <string>
 
@@ -47,11 +48,22 @@ void drawCenteredWideText(
  * Rysuje sentencję dnia pośrodku obszaru strony głównej.
  */
 void MainWindowDisplay::draw(
-    HDC deviceContext, RECT& clientArea, const std::string& dailySentence) {
+    HDC deviceContext,
+    HWND window,
+    RECT& clientArea,
+    const std::string& dailySentence) {
     std::wstring wideDailySentence;
     if (!convertUtf8ToWide(dailySentence, wideDailySentence)) {
         wideDailySentence = L"Nie można wyświetlić sentencji.";
     }
+    HFONT sentenceFont = CreateFontW(
+        -WindowScale::size(window, 16), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+        FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    const HGDIOBJ previousFont = sentenceFont == nullptr
+        ? nullptr
+        : SelectObject(deviceContext, sentenceFont);
+
     RECT sentenceBounds = clientArea;
     DrawTextW(
         deviceContext, wideDailySentence.c_str(),
@@ -71,4 +83,9 @@ void MainWindowDisplay::draw(
     drawCenteredWideText(
         deviceContext, wideDailySentence, sentenceBounds,
         DT_CENTER | DT_WORDBREAK);
+
+    if (sentenceFont != nullptr) {
+        SelectObject(deviceContext, previousFont);
+        DeleteObject(sentenceFont);
+    }
 }

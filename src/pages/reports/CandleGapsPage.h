@@ -10,6 +10,8 @@
 
 class CandleGapsPage {
 public:
+    ~CandleGapsPage();
+
     /**
      * Tworzy przyciski paginacji widoku brakujących świec.
      * @param instance Instancja aplikacji Windows.
@@ -70,4 +72,6 @@ private:
     std::size_t currentPage_ = 0;
     std::vector<CandleGapReportEntry> gaps_;
     std::string status_;
+    HFONT buttonFont_ = nullptr;
+    int buttonFontHeight_ = 0;
 };

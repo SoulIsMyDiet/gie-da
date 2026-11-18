@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include "CandleGapsPage.h"
+#include "../WindowScale.h"
 
 #include <algorithm>
 #include <string>
@@ -48,6 +49,15 @@ void drawCell(HDC deviceContext, const std::wstring& text, RECT bounds) {
 } // namespace
 
 /**
+ * Zwalnia czcionkę przypisaną kontrolkom widoku luk.
+ */
+CandleGapsPage::~CandleGapsPage() {
+    if (buttonFont_ != nullptr) {
+        DeleteObject(buttonFont_);
+    }
+}
+
+/**
  * Tworzy przyciski paginacji widoku brakujących świec.
  */
 bool CandleGapsPage::create(HINSTANCE instance, HWND parent) {
@@ -55,7 +65,8 @@ bool CandleGapsPage::create(HINSTANCE instance, HWND parent) {
     previousPageButton_ = CreateWindowExW(
         0, L"BUTTON", L"Poprzednia",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, pageButtonWidth, pageButtonHeight,
+        0, 0, WindowScale::size(parent_, pageButtonWidth),
+        WindowScale::size(parent_, pageButtonHeight),
         parent_, reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(previousPageButtonId)),
         instance, nullptr);
@@ -66,7 +77,8 @@ bool CandleGapsPage::create(HINSTANCE instance, HWND parent) {
     nextPageButton_ = CreateWindowExW(
         0, L"BUTTON", L"Następna",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, pageButtonWidth, pageButtonHeight,
+        0, 0, WindowScale::size(parent_, pageButtonWidth),
+        WindowScale::size(parent_, pageButtonHeight),
         parent_, reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(nextPageButtonId)),
         instance, nullptr);
@@ -140,20 +152,26 @@ void CandleGapsPage::positionControls() {
     GetClientRect(parent_, &clientArea);
     const int clientWidth = clientArea.right - clientArea.left;
     const int clientHeight = clientArea.bottom - clientArea.top;
-    const int sideMargin = 8;
+    const int buttonWidth = WindowScale::size(parent_, pageButtonWidth);
+    const int buttonHeight = WindowScale::size(parent_, pageButtonHeight);
+    const int sideMargin = WindowScale::size(parent_, 8);
+    const int bottomMargin = WindowScale::size(parent_, 16);
     const int previousX = sideMargin;
     const int nextX = std::max(
-        sideMargin, clientWidth - pageButtonWidth - sideMargin);
+        sideMargin, clientWidth - buttonWidth - sideMargin);
     const int buttonY = std::max(
-        0, clientHeight - pageButtonHeight - 16);
+        0, clientHeight - buttonHeight - bottomMargin);
+    WindowScale::updateFont(
+        parent_, buttonFont_, buttonFontHeight_, 14,
+        {previousPageButton_, nextPageButton_});
 
     if (previousPageButton_ != nullptr) {
         MoveWindow(previousPageButton_, previousX, buttonY,
-                   pageButtonWidth, pageButtonHeight, TRUE);
+                   buttonWidth, buttonHeight, TRUE);
     }
     if (nextPageButton_ != nullptr) {
         MoveWindow(nextPageButton_, nextX, buttonY,
-                   pageButtonWidth, pageButtonHeight, TRUE);
+                   buttonWidth, buttonHeight, TRUE);
     }
 }
 
@@ -169,15 +187,15 @@ void CandleGapsPage::draw(HDC deviceContext, RECT& clientArea) const {
         if (!convertUtf8ToWide(message, wideMessage)) {
             wideMessage = L"Nie można wyświetlić tabeli brakujących świec.";
         }
-        DrawTextW(
-            deviceContext, wideMessage.c_str(),
-            static_cast<int>(wideMessage.size()), &clientArea,
+        WindowScale::drawText(
+            deviceContext, parent_, wideMessage, clientArea,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         return;
     }
 
     HFONT tableFont = CreateFontW(
-        -12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        -WindowScale::size(parent_, 12), 0, 0, 0, FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (tableFont == nullptr) {
@@ -189,7 +207,8 @@ void CandleGapsPage::draw(HDC deviceContext, RECT& clientArea) const {
 
     const HGDIOBJ previousFont = SelectObject(deviceContext, tableFont);
     RECT tableArea = clientArea;
-    tableArea.bottom = std::max(tableArea.top, tableArea.bottom - 20);
+    tableArea.bottom = std::max(
+        tableArea.top, tableArea.bottom - WindowScale::size(parent_, 20));
     const LONG rowHeight = std::max<LONG>(
         1, (tableArea.bottom - tableArea.top) /
                static_cast<LONG>(gaps_.size() + 1));
@@ -208,7 +227,8 @@ void CandleGapsPage::draw(HDC deviceContext, RECT& clientArea) const {
     const LONG totalWidth = tableArea.right - tableArea.left;
     for (std::size_t column = 0; column < 5; ++column) {
         const LONG columnWidth = totalWidth * columnWidths[column] / 100;
-        RECT cell{columnLeft + 4, rowTop, columnLeft + columnWidth - 4,
+        const LONG padding = WindowScale::size(parent_, 4);
+        RECT cell{columnLeft + padding, rowTop, columnLeft + columnWidth - padding,
                   rowTop + rowHeight};
         DrawTextW(
             deviceContext, columnNames[column], -1, &cell, textFormat);
@@ -231,7 +251,8 @@ void CandleGapsPage::draw(HDC deviceContext, RECT& clientArea) const {
                 wideValue = L"Nieprawidłowy tekst";
             }
             const LONG columnWidth = totalWidth * columnWidths[column] / 100;
-            RECT cell{columnLeft + 4, rowTop, columnLeft + columnWidth - 4,
+            const LONG padding = WindowScale::size(parent_, 4);
+            RECT cell{columnLeft + padding, rowTop, columnLeft + columnWidth - padding,
                       rowTop + rowHeight};
             drawCell(deviceContext, wideValue, cell);
             columnLeft += columnWidth;

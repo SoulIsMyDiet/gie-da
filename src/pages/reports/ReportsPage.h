@@ -10,6 +10,8 @@
 
 class ReportsPage {
 public:
+    ~ReportsPage();
+
     /**
      * Tworzy przyciski paginacji należące do strony raportów.
      * @param instance Instancja aplikacji Windows.
@@ -70,4 +72,6 @@ private:
     std::size_t currentPage_ = 0;
     std::vector<CandleReportEntry> candles_;
     std::string status_;
+    HFONT buttonFont_ = nullptr;
+    int buttonFontHeight_ = 0;
 };

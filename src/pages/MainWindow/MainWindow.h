@@ -16,7 +16,12 @@
 class MainWindow {
 public:
     /**
-     * Registers and creates the main window, then displays it.
+     * Zwalnia czcionkę używaną przez przyciski głównego okna.
+     */
+    ~MainWindow();
+
+    /**
+     * Rejestruje i tworzy główne okno, a następnie je wyświetla.
      */
     bool create(HINSTANCE instance, int showCommand);
 
@@ -103,6 +108,8 @@ private:
     HWND reportsButton_ = nullptr;
     HWND candleGapsButton_ = nullptr;
     HWND signalsButton_ = nullptr;
+    HFONT navigationButtonFont_ = nullptr;
+    int navigationButtonFontHeight_ = 0;
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;

@@ -4,6 +4,7 @@
 #include "DailySentenceClient.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
+#include "../WindowScale.h"
 
 #include <algorithm>
 #include <system_error>
@@ -20,11 +21,19 @@ constexpr int reportsButtonWidth = 140;
 constexpr int reportsButtonHeight = 36;
 constexpr int reportsButtonGap = 12;
 constexpr int reportsButtonBottomMargin = 16;
+constexpr int initialWindowWidth = 1280;
+constexpr int initialWindowHeight = 720;
 
 } // namespace
 
+MainWindow::~MainWindow() {
+    if (navigationButtonFont_ != nullptr) {
+        DeleteObject(navigationButtonFont_);
+    }
+}
+
 /**
- * Registers the window class, creates the main window, and makes it visible.
+ * Rejestruje klasę, tworzy główne okno w podwójnym rozmiarze i je wyświetla.
  */
 bool MainWindow::create(HINSTANCE instance, int showCommand) {
     instance_ = instance;
@@ -38,8 +47,8 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
     windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 
     if (!RegisterClassW(&windowClass)) {
-        MessageBoxA(nullptr, "Could not register the window class.",
-                    "Error", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Nie udało się zarejestrować klasy okna.",
+                    L"Błąd", MB_ICONERROR);
         return false;
     }
 
@@ -48,10 +57,12 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
         windowClassName,
         L"Raport sygnałów",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 640, 360,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        initialWindowWidth, initialWindowHeight,
         nullptr, nullptr, instance_, this);
     if (handle_ == nullptr) {
-        MessageBoxA(nullptr, "Could not create the window.", "Error", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Nie udało się utworzyć okna.",
+                    L"Błąd", MB_ICONERROR);
         return false;
     }
 
@@ -163,8 +174,8 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
  */
 bool MainWindow::onCreate() {
     if (!createReportsButton()) {
-        MessageBoxA(handle_, "Could not create the Reports button.",
-                    "Error", MB_ICONERROR);
+        MessageBoxW(handle_, L"Nie udało się utworzyć przycisku raportów.",
+                    L"Błąd", MB_ICONERROR);
         return false;
     }
     if (!createCandleGapsButton()) {
@@ -192,6 +203,11 @@ bool MainWindow::onCreate() {
                     L"Błąd", MB_ICONERROR);
         return false;
     }
+
+    positionReportsButton();
+    reportsPage_.positionControls();
+    candleGapsPage_.positionControls();
+    signalsPage_.positionControls();
 
     if (!candleMonitor_.start(handle_)) {
         MessageBoxW(handle_, L"Nie udało się uruchomić pobierania świecy.",
@@ -309,31 +325,39 @@ void MainWindow::positionReportsButton() {
     GetClientRect(handle_, &clientArea);
     const int clientWidth = clientArea.right - clientArea.left;
     const int clientHeight = clientArea.bottom - clientArea.top;
+    const int buttonGap = WindowScale::size(handle_, reportsButtonGap);
+    const int buttonHeight = WindowScale::size(handle_, reportsButtonHeight);
+    const int bottomMargin =
+        WindowScale::size(handle_, reportsButtonBottomMargin);
+    const int buttonBaseWidth = WindowScale::size(handle_, reportsButtonWidth);
     const int availableButtonWidth =
-        std::max(1, (clientWidth - reportsButtonGap * 2) / 3);
-    const int buttonWidth = std::min(reportsButtonWidth, availableButtonWidth);
-    const int buttonsWidth = buttonWidth * 3 + reportsButtonGap * 2;
-    const int buttonHeight = std::min(reportsButtonHeight, clientHeight);
+        std::max(1, (clientWidth - buttonGap * 2) / 3);
+    const int buttonWidth = std::min(buttonBaseWidth, availableButtonWidth);
+    const int buttonsWidth = buttonWidth * 3 + buttonGap * 2;
+    const int visibleButtonHeight = std::min(buttonHeight, clientHeight);
     const int firstButtonX = std::max(0, (clientWidth - buttonsWidth) / 2);
     const int buttonY = std::max(
-        0, clientHeight - buttonHeight - reportsButtonBottomMargin);
+        0, clientHeight - visibleButtonHeight - bottomMargin);
+    WindowScale::updateFont(
+        handle_, navigationButtonFont_, navigationButtonFontHeight_, 14,
+        {reportsButton_, candleGapsButton_, signalsButton_});
 
     if (reportsButton_ != nullptr) {
         MoveWindow(
-            reportsButton_, firstButtonX, buttonY,
-            buttonWidth, buttonHeight, TRUE);
+            reportsButton_, firstButtonX, buttonY, buttonWidth,
+            visibleButtonHeight, TRUE);
     }
     if (candleGapsButton_ != nullptr) {
         MoveWindow(
             candleGapsButton_,
-            firstButtonX + buttonWidth + reportsButtonGap,
-            buttonY, buttonWidth, buttonHeight, TRUE);
+            firstButtonX + buttonWidth + buttonGap,
+            buttonY, buttonWidth, visibleButtonHeight, TRUE);
     }
     if (signalsButton_ != nullptr) {
         MoveWindow(
             signalsButton_,
-            firstButtonX + (buttonWidth + reportsButtonGap) * 2,
-            buttonY, buttonWidth, buttonHeight, TRUE);
+            firstButtonX + (buttonWidth + buttonGap) * 2,
+            buttonY, buttonWidth, visibleButtonHeight, TRUE);
     }
 }
 
@@ -401,7 +425,8 @@ void MainWindow::onPaint() {
     GetClientRect(handle_, &clientArea);
     clientArea.bottom = std::max(
         clientArea.top,
-        clientArea.bottom - reportsButtonHeight - reportsButtonBottomMargin * 2);
+        clientArea.bottom - WindowScale::size(
+            handle_, reportsButtonHeight + reportsButtonBottomMargin * 2));
     if (reportsPage_.isVisible()) {
         reportsPage_.draw(deviceContext, clientArea);
     } else if (candleGapsPage_.isVisible()) {
@@ -414,7 +439,8 @@ void MainWindow::onPaint() {
             const std::lock_guard<std::mutex> lock(dailySentenceMutex_);
             dailySentence = dailySentence_;
         }
-        MainWindowDisplay::draw(deviceContext, clientArea, dailySentence);
+        MainWindowDisplay::draw(
+            deviceContext, handle_, clientArea, dailySentence);
     }
     EndPaint(handle_, &paint);
 }

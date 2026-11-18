@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include "SignalsPage.h"
+#include "../WindowScale.h"
 
 #include <algorithm>
 #include <string>
@@ -17,7 +18,7 @@ constexpr int pageButtonHeight = 36;
 constexpr int detailsButtonHeight = 22;
 constexpr int pageContentBottomMargin = pageButtonHeight + 32;
 constexpr int pageLabelHeight = 20;
-constexpr int signalColumnWidths[] = {18, 11, 9, 20, 16, 14, 12};
+constexpr int signalColumnWidths[] = {18, 10, 8, 19, 16, 17, 12};
 
 struct StyledText {
     std::wstring value;
@@ -66,11 +67,12 @@ LONG drawWrappedParagraph(
     LONG top,
     const std::vector<StyledText>& fragments,
     HFONT regularFont,
-    HFONT boldFont) {
+    HFONT boldFont,
+    LONG lineSpacing) {
     TEXTMETRICW textMetrics{};
     SelectObject(deviceContext, regularFont);
     GetTextMetricsW(deviceContext, &textMetrics);
-    const LONG lineHeight = textMetrics.tmHeight + 6;
+    const LONG lineHeight = textMetrics.tmHeight + lineSpacing;
     LONG x = bounds.left;
     LONG y = top;
 
@@ -162,6 +164,15 @@ int decimalSign(const std::string& value) {
 } // namespace
 
 /**
+ * Zwalnia czcionkę przypisaną przyciskom widoku sygnałów.
+ */
+SignalsPage::~SignalsPage() {
+    if (buttonFont_ != nullptr) {
+        DeleteObject(buttonFont_);
+    }
+}
+
+/**
  * Tworzy przyciski paginacji widoku sygnałów.
  */
 bool SignalsPage::create(HINSTANCE instance, HWND parent) {
@@ -170,7 +181,8 @@ bool SignalsPage::create(HINSTANCE instance, HWND parent) {
     previousPageButton_ = CreateWindowExW(
         0, L"BUTTON", L"Poprzednia",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, pageButtonWidth, pageButtonHeight,
+        0, 0, WindowScale::size(parent_, pageButtonWidth),
+        WindowScale::size(parent_, pageButtonHeight),
         parent_, reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(previousPageButtonId)),
         instance, nullptr);
@@ -181,7 +193,8 @@ bool SignalsPage::create(HINSTANCE instance, HWND parent) {
     nextPageButton_ = CreateWindowExW(
         0, L"BUTTON", L"Następna",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, pageButtonWidth, pageButtonHeight,
+        0, 0, WindowScale::size(parent_, pageButtonWidth),
+        WindowScale::size(parent_, pageButtonHeight),
         parent_, reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(nextPageButtonId)),
         instance, nullptr);
@@ -194,7 +207,8 @@ bool SignalsPage::create(HINSTANCE instance, HWND parent) {
     backButton_ = CreateWindowExW(
         0, L"BUTTON", L"Powrót",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, pageButtonWidth, pageButtonHeight,
+        0, 0, WindowScale::size(parent_, pageButtonWidth),
+        WindowScale::size(parent_, pageButtonHeight),
         parent_, reinterpret_cast<HMENU>(
             static_cast<INT_PTR>(backButtonId)),
         instance_, nullptr);
@@ -289,41 +303,60 @@ void SignalsPage::positionControls() {
     GetClientRect(parent_, &clientArea);
     const int clientWidth = clientArea.right - clientArea.left;
     const int clientHeight = clientArea.bottom - clientArea.top;
-    const int sideMargin = 8;
+    const int navigationButtonWidth =
+        WindowScale::size(parent_, pageButtonWidth);
+    const int navigationButtonHeight =
+        WindowScale::size(parent_, pageButtonHeight);
+    const int sideMargin = WindowScale::size(parent_, 8);
+    const int bottomMargin = WindowScale::size(parent_, 16);
     const int buttonY = std::max(
-        0, clientHeight - pageButtonHeight - 16);
+        0, clientHeight - navigationButtonHeight - bottomMargin);
 
     if (backButton_ != nullptr) {
         MoveWindow(
-            backButton_, std::max(0, (clientWidth - pageButtonWidth) / 2),
-            buttonY, pageButtonWidth, pageButtonHeight, TRUE);
+            backButton_,
+            std::max(0, (clientWidth - navigationButtonWidth) / 2),
+            buttonY, navigationButtonWidth, navigationButtonHeight, TRUE);
     }
     if (previousPageButton_ != nullptr) {
         MoveWindow(
             previousPageButton_, sideMargin, buttonY,
-            pageButtonWidth, pageButtonHeight, TRUE);
+            navigationButtonWidth, navigationButtonHeight, TRUE);
     }
     if (nextPageButton_ != nullptr) {
         MoveWindow(
             nextPageButton_,
-            std::max(sideMargin, clientWidth - pageButtonWidth - sideMargin),
-            buttonY, pageButtonWidth, pageButtonHeight, TRUE);
+            std::max(
+                sideMargin,
+                clientWidth - navigationButtonWidth - sideMargin),
+            buttonY, navigationButtonWidth, navigationButtonHeight, TRUE);
     }
 
+    std::vector<HWND> controls{
+        previousPageButton_, nextPageButton_, backButton_};
+    controls.insert(
+        controls.end(), detailsButtons_.begin(), detailsButtons_.end());
+    WindowScale::updateFont(
+        parent_, buttonFont_, buttonFontHeight_, 14, controls);
+
     const LONG contentBottom = std::max(
-        0, clientHeight - pageContentBottomMargin - pageLabelHeight);
+        0, clientHeight - WindowScale::size(parent_, pageContentBottomMargin) -
+               WindowScale::size(parent_, pageLabelHeight));
     const LONG rowHeight = std::max<LONG>(
         1, contentBottom / static_cast<LONG>(signals_.size() + 1));
     const LONG buttonHeight =
-        std::min<LONG>(detailsButtonHeight, std::max<LONG>(1, rowHeight - 2));
+        std::min<LONG>(
+            WindowScale::size(parent_, detailsButtonHeight),
+            std::max<LONG>(1, rowHeight - WindowScale::size(parent_, 2)));
     LONG buttonX = 0;
     for (std::size_t column = 0; column < 6; ++column) {
         buttonX += clientWidth * signalColumnWidths[column] / 100;
     }
-    buttonX += 4;
+    buttonX += WindowScale::size(parent_, 4);
     const LONG buttonWidth =
         std::max<LONG>(
-            1, clientWidth * signalColumnWidths[6] / 100 - 8);
+            1, clientWidth * signalColumnWidths[6] / 100 -
+                   WindowScale::size(parent_, 8));
     for (std::size_t index = 0; index < detailsButtons_.size(); ++index) {
         const LONG rowTop = rowHeight * static_cast<LONG>(index + 1);
         const LONG buttonTop = rowTop + (rowHeight - buttonHeight) / 2;
@@ -350,15 +383,15 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
         if (!convertUtf8ToWide(message, wideMessage)) {
             wideMessage = L"Nie można wyświetlić tabeli sygnałów.";
         }
-        DrawTextW(
-            deviceContext, wideMessage.c_str(),
-            static_cast<int>(wideMessage.size()), &clientArea,
+        WindowScale::drawText(
+            deviceContext, parent_, wideMessage, clientArea,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         return;
     }
 
     HFONT tableFont = CreateFontW(
-        -11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        -WindowScale::size(parent_, 11), 0, 0, 0, FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (tableFont == nullptr) {
@@ -370,7 +403,8 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
 
     const HGDIOBJ previousFont = SelectObject(deviceContext, tableFont);
     RECT tableArea = clientArea;
-    tableArea.bottom = std::max(tableArea.top, tableArea.bottom - 20);
+    tableArea.bottom = std::max(
+        tableArea.top, tableArea.bottom - WindowScale::size(parent_, 20));
     const LONG rowHeight = std::max<LONG>(
         1, (tableArea.bottom - tableArea.top) /
                static_cast<LONG>(signals_.size() + 1));
@@ -389,7 +423,8 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
     for (std::size_t column = 0; column < 7; ++column) {
         const LONG columnWidth =
             totalWidth * signalColumnWidths[column] / 100;
-        RECT cell{columnLeft + 2, rowTop, columnLeft + columnWidth - 2,
+        const LONG padding = WindowScale::size(parent_, 2);
+        RECT cell{columnLeft + padding, rowTop, columnLeft + columnWidth - padding,
                   rowTop + rowHeight};
         DrawTextW(deviceContext, columnNames[column], -1, &cell, textFormat);
         columnLeft += columnWidth;
@@ -426,7 +461,8 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
             }
             const LONG columnWidth =
                 totalWidth * signalColumnWidths[column] / 100;
-            RECT cell{columnLeft + 2, rowTop, columnLeft + columnWidth - 2,
+            const LONG padding = WindowScale::size(parent_, 2);
+            RECT cell{columnLeft + padding, rowTop, columnLeft + columnWidth - padding,
                       rowTop + rowHeight};
             drawCell(deviceContext, wideValue, cell);
             columnLeft += columnWidth;
@@ -567,34 +603,37 @@ void SignalsPage::drawDetails(
         if (!convertUtf8ToWide(detailsStatus_, message)) {
             message = L"Nie udało się pobrać szczegółów sygnału.";
         }
-        DrawTextW(
-            deviceContext, message.c_str(), static_cast<int>(message.size()),
-            &clientArea, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+        WindowScale::drawText(
+            deviceContext, parent_, message, clientArea,
+            DT_CENTER | DT_VCENTER | DT_WORDBREAK);
         return;
     }
 
     const int sign = decimalSign(details_.deal100Pln);
     if (details_.deal100Pln.empty() || details_.saldo20.empty() ||
         details_.maxCandle.empty() || details_.spread.empty()) {
-        DrawTextW(
-            deviceContext,
+        WindowScale::drawText(
+            deviceContext, parent_,
             L"Wynik będzie dostępny po zebraniu danych z 20 kolejnych świec.",
-            -1, &clientArea, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+            clientArea, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
         return;
     }
     if (sign == 2) {
-        DrawTextW(
-            deviceContext, L"Wartość wyniku sygnału jest nieprawidłowa.", -1,
-            &clientArea, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+        WindowScale::drawText(
+            deviceContext, parent_,
+            L"Wartość wyniku sygnału jest nieprawidłowa.", clientArea,
+            DT_CENTER | DT_VCENTER | DT_WORDBREAK);
         return;
     }
 
     HFONT regularFont = CreateFontW(
-        -14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        -WindowScale::size(parent_, 14), 0, 0, 0, FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     HFONT boldFont = CreateFontW(
-        -14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        -WindowScale::size(parent_, 14), 0, 0, 0, FW_BOLD,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (regularFont == nullptr || boldFont == nullptr) {
@@ -613,7 +652,8 @@ void SignalsPage::drawDetails(
     const HGDIOBJ previousFont = SelectObject(deviceContext, boldFont);
     SetTextColor(deviceContext, RGB(0, 0, 0));
     RECT titleBounds = clientArea;
-    titleBounds.bottom = titleBounds.top + 44;
+    titleBounds.bottom =
+        titleBounds.top + WindowScale::size(parent_, 44);
     DrawTextW(
         deviceContext, L"Szczegóły sygnału", -1, &titleBounds,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -639,9 +679,9 @@ void SignalsPage::drawDetails(
     }
 
     RECT textBounds = clientArea;
-    textBounds.left += 24;
-    textBounds.right -= 24;
-    LONG nextLine = titleBounds.bottom + 20;
+    textBounds.left += WindowScale::size(parent_, 24);
+    textBounds.right -= WindowScale::size(parent_, 24);
+    LONG nextLine = titleBounds.bottom + WindowScale::size(parent_, 20);
     if (sign > 0) {
         nextLine = drawWrappedParagraph(
             deviceContext, textBounds, nextLine,
@@ -650,15 +690,16 @@ void SignalsPage::drawDetails(
              {L"; wystąpiło w", false},
              {minute + L".", true},
              {L"minucie.", false}},
-            regularFont, boldFont);
+            regularFont, boldFont, WindowScale::size(parent_, 6));
         nextLine = drawWrappedParagraph(
-            deviceContext, textBounds, nextLine + 12,
+            deviceContext, textBounds,
+            nextLine + WindowScale::size(parent_, 12),
             {{L"Przy inwestycji 100 zł zysk wyniósł", false},
              {deal, true, resultColor},
              {L"przy spreadzie wynoszącym", false},
              {spread, true},
              {L".", false}},
-            regularFont, boldFont);
+            regularFont, boldFont, WindowScale::size(parent_, 6));
     } else if (sign < 0) {
         nextLine = drawWrappedParagraph(
             deviceContext, textBounds, nextLine,
@@ -667,22 +708,23 @@ void SignalsPage::drawDetails(
              {L"; wystąpiło w", false},
              {minute + L".", true},
              {L"minucie.", false}},
-            regularFont, boldFont);
+            regularFont, boldFont, WindowScale::size(parent_, 6));
         drawWrappedParagraph(
-            deviceContext, textBounds, nextLine + 12,
+            deviceContext, textBounds,
+            nextLine + WindowScale::size(parent_, 12),
             {{L"Przy inwestycji 100 zł strata wyniosła", false},
              {deal, true, resultColor},
              {L"przy spreadzie wynoszącym", false},
              {spread, true},
              {L".", false}},
-            regularFont, boldFont);
+            regularFont, boldFont, WindowScale::size(parent_, 6));
     } else {
         drawWrappedParagraph(
             deviceContext, textBounds, nextLine,
             {{L"Sygnał nie odnotował ani zysku, ani straty w najlepszym możliwym przypadku w ciągu 20 najbliższych minut przy spreadzie wynoszącym", false},
              {spread, true},
              {L".", false}},
-            regularFont, boldFont);
+            regularFont, boldFont, WindowScale::size(parent_, 6));
     }
 
     SelectObject(deviceContext, previousFont);
