@@ -37,14 +37,16 @@ kierunków, progi, parametry transakcji i przyczynę wyniku NONE.
 
 API zapisuje w `signals.signal_parameters` wyłącznie `price`, `signal`,
 `timestamp`, `instrument` i `reason`; pełna diagnostyka pozostaje w wyniku
-strategii, a `source_timestamp` wskazuje epokę UTC otwarcia świecy M1. Tabela
+strategii. W zapisie powód jest skrócony do krótkiej informacji o wyniku,
+a `source_timestamp` wskazuje epokę UTC otwarcia świecy M1. Tabela
 `algorithm_evaluations` trwale zapisuje każdą ewaluację, również NONE pominięte
 w `signals`, więc restart API nie powoduje ponownej oceny tej samej świecy.
 Nowy rekord sygnału i oczekujące powiadomienie trafiają do bazy w jednej
-transakcji. Klient C++ odtwarza dwa krótkie piknięcia, a następnie potwierdza
-powiadomienie; przy błędzie pobieranie jest ponawiane. To zapewnia dostarczenie
-co najmniej raz: awaria po odtworzeniu, ale przed potwierdzeniem, może spowodować
-powtórne piknięcie.
+transakcji. Powiadomienie dźwiękowe trafia do outboxa tylko dla LONG lub SHORT;
+zapis NONE nie generuje dźwięku. Klient C++ odtwarza dwa krótkie piknięcia,
+a następnie potwierdza powiadomienie; przy błędzie pobieranie jest ponawiane.
+To zapewnia dostarczenie co najmniej raz: awaria po odtworzeniu, ale przed
+potwierdzeniem, może spowodować powtórne piknięcie.
 
 Zapis wyników NONE można wyłączyć, zmieniając wyłącznie
 `SAVE_NONE_SIGNALS = True` na `False` w `config.py`. Nie zmienia to zapisu

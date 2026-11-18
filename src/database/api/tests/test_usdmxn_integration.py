@@ -21,11 +21,13 @@ os.environ.setdefault("MYSQL_DATABASE", "test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (  # noqa: E402
+    CandleBatch,
     CandleRecord,
     GROK45_USDMXN_STRATEGY_NAME,
     MarketDataRepository,
     acknowledge_usdmxn_notification,
     save_candle,
+    save_candle_batch,
     usdmxn_notifications,
 )
 from fastapi import Request  # noqa: E402
@@ -179,6 +181,61 @@ class USDMXNIntegrationTests(unittest.TestCase):
         self.assertEqual(response.body, b"0\n0")
         state.usdmxn_storage.save.assert_called_once()
         state.grok45_usdmxn_storage.save.assert_called_once()
+
+    def test_batch_saves_closed_usd_fx_candles_and_evaluates_strategies(self) -> None:
+        """Paczka świec uruchamia USD/MXN i USD/JPY bez dźwięków historycznych."""
+        opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=2)
+        usd_mxn = live_candle(opened)
+        usd_jpy = CandleRecord(
+            symbol="USD/JPY",
+            datetime=opened,
+            open="150.0",
+            high="150.1",
+            low="149.9",
+            close="150.05",
+            volume=None,
+        )
+        state = new_state(opened)
+        state.repository.save_candles.return_value = (0, 2, "", 0)
+        state.repository.fetch_candle_history.return_value = []
+        state.repository.fetch_recent_candle_history.side_effect = (
+            lambda symbol, _limit, _cutoff: [
+                {
+                    "timestamp_utc": opened,
+                    "open": 17.0 if symbol == "USD/MXN" else 150.0,
+                    "high": 17.1 if symbol == "USD/MXN" else 150.1,
+                    "low": 16.9 if symbol == "USD/MXN" else 149.9,
+                    "close": 17.05 if symbol == "USD/MXN" else 150.05,
+                    "volume": None,
+                }
+            ]
+        )
+        state.usdjpy_strategy = Mock()
+        state.usdjpy_strategy.evaluate.return_value = {
+            "signal": "NONE",
+            "candle_open_epoch": int(opened.timestamp()),
+            "signal_parameters": {"reason": "warmup"},
+        }
+        state.usdjpy_storage = Mock()
+        state.usdjpy_storage.save.return_value = True
+        request = create_request(state)
+        batch = CandleBatch(candles=[usd_mxn, usd_jpy])
+
+        with patch("app.is_monitored_product", return_value=True):
+            response = save_candle_batch(batch, request)
+
+        self.assertEqual(response.status_code, 200)
+        state.usdmxn_strategy.evaluate.assert_called_once()
+        state.grok45_usdmxn_strategy.evaluate.assert_called_once()
+        state.usdjpy_strategy.evaluate.assert_called_once()
+        for storage in (
+            state.usdmxn_storage,
+            state.grok45_usdmxn_storage,
+            state.usdjpy_storage,
+        ):
+            self.assertFalse(
+                storage.save.call_args.kwargs["enqueue_notification"]
+            )
 
     def test_recent_history_reconstructs_warsaw_winter_and_summer_offsets(self) -> None:
         """Odczyt uwzględnia zapisane CET/CEST bez traktowania czasu jako UTC."""

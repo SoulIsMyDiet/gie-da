@@ -26,7 +26,8 @@ Przy braku warunków wynik to `NONE`. Pełny wynik strategii zawiera sygnał, ce
 czas otwarcia jako Unix timestamp, wszystkie wartości wskaźników, progi,
 diagnostykę każdego warunku i dostępne dane świecy. Adapter zapisuje do
 `signals.signal_parameters` wyłącznie `price`, `signal`, `timestamp`,
-`instrument` i `reason`. Zakładany maksymalny czas utrzymania pozycji to
+`instrument` i krótki `reason`; pełna diagnostyka pozostaje w wyniku strategii.
+Zakładany maksymalny czas utrzymania pozycji to
 20 minut. Wynik funkcji również udostępnia
 `timestamp` jako epokę UTC czasu otwarcia; pole `candle_close_time` jest
 pomocniczym czasem zamknięcia dla istniejącego zapisu API.

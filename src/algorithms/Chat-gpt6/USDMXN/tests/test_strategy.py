@@ -250,7 +250,7 @@ class StrategyTests(unittest.TestCase):
                 "signal": "NONE",
                 "timestamp": 1,
                 "instrument": "USDMXN",
-                "reason": "Warunki LONG ani SHORT nie zostały spełnione.",
+                "reason": "Brak sygnału; warunki blokują wejście.",
                 "indicators": {"ema9": 17.0},
             },
         }
@@ -272,7 +272,7 @@ class StrategyTests(unittest.TestCase):
             100,
             record_evaluation=True,
             save_signal=False,
-            enqueue_notification=True,
+            enqueue_notification=False,
         )
 
 

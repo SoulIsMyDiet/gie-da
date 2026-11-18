@@ -293,8 +293,16 @@ class USDJPYStrategyTests(unittest.TestCase):
         for field in ("price", "signal", "timestamp", "instrument", "reason"):
             self.assertEqual(
                 saved_result["signal_parameters"][field],
-                result["signal_parameters"][field],
+                (
+                    "Warunki LONG zostały spełnione."
+                    if field == "reason"
+                    else result["signal_parameters"][field]
+                ),
             )
+        self.assertNotEqual(
+            saved_result["signal_parameters"]["reason"],
+            result["signal_parameters"]["reason"],
+        )
         self.assertEqual(
             saved_result["timestamp"],
             result["candle_close_time"],
@@ -327,6 +335,11 @@ class USDJPYStrategyTests(unittest.TestCase):
         self.assertTrue(
             repository.save_algorithm_signal.call_args.kwargs[
                 "record_evaluation"
+            ]
+        )
+        self.assertFalse(
+            repository.save_algorithm_signal.call_args.kwargs[
+                "enqueue_notification"
             ]
         )
 

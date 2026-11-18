@@ -257,7 +257,7 @@ def test_none_storage_flag_is_central_and_signal_name_is_independent() -> None:
             "signal": "NONE",
             "timestamp": 1,
             "instrument": "USDMXN",
-            "reason": "Warunki LONG ani SHORT nie zostały spełnione.",
+            "reason": "Brak sygnału; warunki blokują wejście.",
             "indicators": {"ema_fast": 17.0},
         },
     }
@@ -281,7 +281,7 @@ def test_none_storage_flag_is_central_and_signal_name_is_independent() -> None:
         100,
         record_evaluation=True,
         save_signal=False,
-        enqueue_notification=True,
+        enqueue_notification=False,
     )
 
 

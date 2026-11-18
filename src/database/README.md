@@ -54,23 +54,31 @@ Po każdej nowej zamkniętej świecy `USD/MXN` API uruchamia strategię
 `Chat-gpt6/USDMXN/USDMXNStrategyV1`. Odczyt ograniczony do ostatnich 1200 świec
 odtwarza czas UTC z `datetime` i `utc_offset_minutes`; pełny wynik LONG, SHORT
 lub NONE jest ograniczany do `price`, `signal`, `timestamp`, `instrument` i
-`reason` w `signal_parameters` zgodnie z konfiguracją. Tabela
+krótkiego `reason` w `signal_parameters`; szczegółowa diagnostyka pozostaje
+w wyniku strategii. Tabela
 `algorithm_evaluations` trwale oznacza każdą ewaluację, także NONE pominięte
 w `signals`, i blokuje jej powtórzenie po restarcie. Rekord sygnału i oczekujące
 powiadomienie są zapisywane w jednej transakcji. Aplikacja desktopowa odtwarza
 dwa krótkie piknięcia, a po ich odtworzeniu potwierdza zdarzenie; w razie błędu
 ponawia pobranie. Dostarczenie jest typu co najmniej raz, więc awaria między
-odtworzeniem a potwierdzeniem może powtórzyć dźwięk. Zapis NONE można wyłączyć
-flagą `SAVE_NONE_SIGNALS` w `src/algorithms/Chat-gpt6/USDMXN/config.py`.
+odtworzeniem a potwierdzeniem może powtórzyć dźwięk. Dźwięk jest dodawany do
+outboxa tylko dla LONG i SHORT; NONE nadal może być zapisany bez powiadomienia.
+Paczki `/api/candles/batch` również uruchamiają obie strategie USD/MXN dla
+zamkniętych świec, ale nie odtwarzają dźwięków dla historycznych danych.
+Zapis NONE można wyłączyć flagą `SAVE_NONE_SIGNALS` w
+`src/algorithms/Chat-gpt6/USDMXN/config.py`.
 
 Po każdej nowej zamkniętej świecy `USD/JPY` API uruchamia niezależną strategię
 `Chat-gpt6/USDJPY/USDJPYStrategyV1`. Historia jest ograniczona do 1200 świec,
 a zamknięte M5 powstają wyłącznie z pięciu kolejnych świec M1. Pełny wynik
 LONG, SHORT albo NONE trafia do `signal_parameters` jako `price`, `signal`,
-`timestamp`, `instrument` i `reason`; ewaluacja jest chroniona
-markerem `algorithm_evaluations`. Powiadomienia po zapisie korzystają z tego
-samego outboxa i mechanizmu dwóch piknięć co pozostałe strategie. Zapisywanie
-NONE można wyłączyć przez `SAVE_NONE_SIGNALS` w `USDJPY/config.py`.
+`timestamp`, `instrument` i krótki `reason`; pełna diagnostyka pozostaje
+w wyniku strategii, a ewaluacja jest chroniona
+markerem `algorithm_evaluations`. Powiadomienia LONG i SHORT po zapisie
+korzystają z tego samego outboxa i mechanizmu dwóch piknięć co pozostałe
+strategie. Paczki `/api/candles/batch` także uruchamiają strategię USD/JPY dla
+zamkniętych świec, bez dźwięków dla historycznych danych. Zapisywanie NONE
+można wyłączyć przez `SAVE_NONE_SIGNALS` w `USDJPY/config.py`.
 
 Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
 `signal`, epokę `timestamp`, `instrument` oraz `parameters` z EMA9, ATR14,
@@ -114,7 +122,7 @@ ORDER BY candle_datetime_utc;
 W aplikacji desktopowej przycisk „Luki świec” obok „Raporty” otwiera stronicowany
 podgląd całej tabeli, w tym wpisów już uzupełnionych.
 
-Przycisk „Raporty” otwiera tabelę 20 najnowszych świec. Przyciski „Poprzednia” i „Następna” pozwalają przechodzić pomiędzy stronami, a „Strona główna” wraca do głównego widoku. Lista jest pobierana z lokalnego API pod adresem `/api/candles/report`; nowe świece są zapisywane przez `/api/candles`.
+Przycisk „Raporty” otwiera tabelę 20 najnowszych świec. Przyciski „Poprzednia” i „Następna” pozwalają przechodzić pomiędzy stronami, a „Strona główna” wraca do głównego widoku. Lista jest pobierana z lokalnego API pod adresem `/api/candles/report`; nowe świece są zapisywane przez `/api/candles` lub paczkowo przez `/api/candles/batch`.
 
 Przycisk „Sygnały” obok widoków świec i luk otwiera stronicowany podgląd 15 wpisów tabeli `signals` na stronę. Widok pokazuje czas, produkt, cenę i algorytm; przycisk „Szczegóły” pobiera dla wybranego `signal_id` saldo z 20 świec, numer świecy maksymalnego wyniku, wynik transakcji dla 100 zł i spread z tabeli `signal_potention`.
 

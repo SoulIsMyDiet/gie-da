@@ -2181,6 +2181,197 @@ def open_products() -> Response:
     )
 
 
+def _process_closed_strategy_candle(
+    request: Request,
+    candle: CandleRecord,
+    now_utc: datetime,
+    *,
+    enqueue_notifications: bool,
+) -> None:
+    """Ocenia zamkniętą świecę USD/MXN lub USD/JPY dla właściwych strategii.
+
+    Args:
+        request: Żądanie API z repozytorium i strategiami w stanie aplikacji.
+        candle: Zapisana świeca M1.
+        now_utc: Bieżący czas UTC używany do sprawdzenia, czy świeca jest zamknięta.
+        enqueue_notifications: Czy nowe sygnały mogą dodać powiadomienie do outboxa.
+
+    Raises:
+        mysql.connector.Error: Gdy odczyt lub zapis w bazie się nie powiedzie.
+        RuntimeError: Gdy historia USD/JPY nie zawiera ocenianej świecy.
+        ValueError: Gdy strategia odrzuci dane świecy lub wynik.
+    """
+    repository = request.app.state.repository
+    candle_timestamp = candle.datetime.astimezone(timezone.utc)
+    if (
+        candle.symbol not in {USDMXN_DATABASE_SYMBOL, USDJPY_DATABASE_SYMBOL}
+        or candle_timestamp + timedelta(minutes=1) > now_utc
+        or not repository._is_market_open(candle.symbol, candle_timestamp)
+    ):
+        return
+
+    if candle.symbol == USDMXN_DATABASE_SYMBOL:
+        strategy_specs = (
+            (
+                "usdmxn",
+                USDMXN_STRATEGY_NAME,
+                USDMXN_HISTORY_LIMIT,
+                usdmxn_strategy,
+                usdmxn_storage,
+                USDMXN_BEEP_ENABLED,
+            ),
+            (
+                "grok45_usdmxn",
+                GROK45_USDMXN_STRATEGY_NAME,
+                GROK45_USDMXN_HISTORY_LIMIT,
+                grok45_usdmxn_strategy,
+                grok45_usdmxn_storage,
+                GROK45_USDMXN_BEEP_ENABLED,
+            ),
+        )
+        pending_strategies = []
+        source_timestamp = int(candle_timestamp.timestamp())
+        for (
+            state_prefix,
+            algorithm_name,
+            history_limit,
+            default_strategy,
+            default_storage,
+            beep_enabled,
+        ) in strategy_specs:
+            last_processed = getattr(
+                request.app.state,
+                f"{state_prefix}_last_processed_timestamp",
+                None,
+            )
+            if last_processed is not None and candle_timestamp <= last_processed:
+                continue
+            if repository.has_algorithm_evaluation(
+                USDMXN_DATABASE_SYMBOL,
+                algorithm_name,
+                source_timestamp,
+            ):
+                setattr(
+                    request.app.state,
+                    f"{state_prefix}_last_processed_timestamp",
+                    candle_timestamp,
+                )
+                continue
+            pending_strategies.append(
+                (
+                    state_prefix,
+                    history_limit,
+                    getattr(
+                        request.app.state,
+                        f"{state_prefix}_strategy",
+                        default_strategy,
+                    ),
+                    getattr(
+                        request.app.state,
+                        f"{state_prefix}_storage",
+                        default_storage,
+                    ),
+                    beep_enabled,
+                )
+            )
+
+        if not pending_strategies:
+            return
+        history_limit = max(spec[1] for spec in pending_strategies)
+        candles = repository.fetch_recent_candle_history(
+            USDMXN_DATABASE_SYMBOL,
+            history_limit,
+            candle_timestamp,
+        )
+        if not candles or candles[-1]["timestamp_utc"] != candle_timestamp:
+            logger.error(
+                "Historia USD/MXN nie zawiera właśnie zapisanej świecy %s; "
+                "pominięto obie ewaluacje.",
+                candle_timestamp.isoformat(),
+            )
+            return
+
+        strategy_error = None
+        for (
+            state_prefix,
+            _history_limit,
+            strategy,
+            storage,
+            beep_enabled,
+        ) in pending_strategies:
+            try:
+                result = strategy.evaluate(candles, now=now_utc)
+                storage.save(
+                    result,
+                    len(candles),
+                    enqueue_notification=(
+                        enqueue_notifications and beep_enabled
+                    ),
+                )
+                setattr(
+                    request.app.state,
+                    f"{state_prefix}_last_processed_timestamp",
+                    candle_timestamp,
+                )
+            except (mysql.connector.Error, ValueError) as error:
+                logger.exception(
+                    "Nie udało się wykonać strategii %s dla świecy USD/MXN %s.",
+                    state_prefix,
+                    candle_timestamp.isoformat(),
+                )
+                if strategy_error is None:
+                    strategy_error = error
+        if strategy_error is not None:
+            raise strategy_error
+        return
+
+    state_prefix = "usdjpy"
+    last_processed = getattr(
+        request.app.state,
+        f"{state_prefix}_last_processed_timestamp",
+        None,
+    )
+    if last_processed is not None and candle_timestamp <= last_processed:
+        return
+    source_timestamp = int(candle_timestamp.timestamp())
+    strategy = getattr(request.app.state, f"{state_prefix}_strategy", usdjpy_strategy)
+    storage = getattr(request.app.state, f"{state_prefix}_storage", usdjpy_storage)
+    if repository.has_algorithm_evaluation(
+        USDJPY_DATABASE_SYMBOL,
+        USDJPY_STRATEGY_NAME,
+        source_timestamp,
+    ):
+        setattr(
+            request.app.state,
+            f"{state_prefix}_last_processed_timestamp",
+            candle_timestamp,
+        )
+        return
+
+    candles = repository.fetch_recent_candle_history(
+        USDJPY_DATABASE_SYMBOL,
+        USDJPY_HISTORY_LIMIT,
+        candle_timestamp,
+    )
+    if not candles or candles[-1]["timestamp_utc"] != candle_timestamp:
+        logger.error(
+            "Historia USD/JPY nie zawiera właśnie zapisanej świecy %s.",
+            candle_timestamp.isoformat(),
+        )
+        raise RuntimeError("Historia USD/JPY nie zawiera świecy do ewaluacji.")
+    result = strategy.evaluate(candles, now=now_utc)
+    storage.save(
+        result,
+        len(candles),
+        enqueue_notification=enqueue_notifications and USDJPY_BEEP_ENABLED,
+    )
+    setattr(
+        request.app.state,
+        f"{state_prefix}_last_processed_timestamp",
+        candle_timestamp,
+    )
+
+
 @app.post("/api/candles", response_class=Response)
 def save_candle(candle: CandleRecord, request: Request) -> Response:
     """Zapisuje świecę i zwraca liczbę nowo wykrytych brakujących minut."""
@@ -2349,234 +2540,12 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                             request.app.state.chat_dax40_last_processed_timestamp = (
                                 candle_timestamp
                             )
-            if (
-                candle.symbol == "USD/MXN"
-                and candle.datetime.astimezone(timezone.utc)
-                    + timedelta(minutes=1) <= datetime.now(timezone.utc)
-            ):
-                candle_timestamp = candle.datetime.astimezone(timezone.utc)
-                last_chat_usdmxn_candle = getattr(
-                    request.app.state,
-                    "usdmxn_last_processed_timestamp",
-                    None,
-                )
-                last_grok_usdmxn_candle = getattr(
-                    request.app.state,
-                    "grok45_usdmxn_last_processed_timestamp",
-                    None,
-                )
-                if any(
-                    last_processed is None or candle_timestamp > last_processed
-                    for last_processed in (
-                        last_chat_usdmxn_candle,
-                        last_grok_usdmxn_candle,
-                    )
-                ):
-                    signal_repository = request.app.state.repository
-                    source_timestamp = int(candle_timestamp.timestamp())
-                    strategy_specs = (
-                        (
-                            "usdmxn",
-                            USDMXN_STRATEGY_NAME,
-                            USDMXN_HISTORY_LIMIT,
-                            usdmxn_strategy,
-                            usdmxn_storage,
-                            USDMXN_BEEP_ENABLED,
-                        ),
-                        (
-                            "grok45_usdmxn",
-                            GROK45_USDMXN_STRATEGY_NAME,
-                            GROK45_USDMXN_HISTORY_LIMIT,
-                            grok45_usdmxn_strategy,
-                            grok45_usdmxn_storage,
-                            GROK45_USDMXN_BEEP_ENABLED,
-                        ),
-                    )
-                    pending_strategies = []
-                    for (
-                        state_prefix,
-                        algorithm_name,
-                        _history_limit,
-                        default_strategy,
-                        default_storage,
-                        beep_enabled,
-                    ) in strategy_specs:
-                        last_processed = getattr(
-                            request.app.state,
-                            f"{state_prefix}_last_processed_timestamp",
-                            None,
-                        )
-                        if (
-                            last_processed is not None
-                            and candle_timestamp <= last_processed
-                        ):
-                            continue
-                        if signal_repository.has_algorithm_evaluation(
-                            USDMXN_DATABASE_SYMBOL,
-                            algorithm_name,
-                            source_timestamp,
-                        ):
-                            setattr(
-                                request.app.state,
-                                f"{state_prefix}_last_processed_timestamp",
-                                candle_timestamp,
-                            )
-                            continue
-                        pending_strategies.append(
-                            (
-                                state_prefix,
-                                getattr(
-                                    request.app.state,
-                                    f"{state_prefix}_strategy",
-                                    default_strategy,
-                                ),
-                                getattr(
-                                    request.app.state,
-                                    f"{state_prefix}_storage",
-                                    default_storage,
-                                ),
-                                beep_enabled,
-                            )
-                        )
-
-                    if pending_strategies:
-                        history_limit = max(
-                            spec[2] for spec in strategy_specs
-                        )
-                        usdmxn_candles = (
-                            signal_repository.fetch_recent_candle_history(
-                                USDMXN_DATABASE_SYMBOL,
-                                history_limit,
-                                candle_timestamp,
-                            )
-                        )
-                        if (
-                            usdmxn_candles
-                            and usdmxn_candles[-1]["timestamp_utc"]
-                            == candle_timestamp
-                        ):
-                            strategy_error = None
-                            for (
-                                state_prefix,
-                                current_strategy,
-                                current_storage,
-                                beep_enabled,
-                            ) in pending_strategies:
-                                try:
-                                    result = current_strategy.evaluate(
-                                        usdmxn_candles,
-                                        now=datetime.now(timezone.utc),
-                                    )
-                                    current_storage.save(
-                                        result,
-                                        len(usdmxn_candles),
-                                        enqueue_notification=beep_enabled,
-                                    )
-                                    setattr(
-                                        request.app.state,
-                                        f"{state_prefix}_last_processed_timestamp",
-                                        candle_timestamp,
-                                    )
-                                except (mysql.connector.Error, ValueError) as error:
-                                    logger.exception(
-                                        "Nie udało się wykonać strategii %s dla "
-                                        "świecy USD/MXN %s.",
-                                        state_prefix,
-                                        candle_timestamp.isoformat(),
-                                    )
-                                    if strategy_error is None:
-                                        strategy_error = error
-                            if strategy_error is not None:
-                                raise strategy_error
-                        else:
-                            logger.error(
-                                "Historia USD/MXN nie zawiera właśnie "
-                                "zapisanej świecy %s; pominięto obie ewaluacje.",
-                                candle_timestamp.isoformat(),
-                            )
-            if (
-                candle.symbol == USDJPY_DATABASE_SYMBOL
-                and candle.datetime.astimezone(timezone.utc)
-                    + timedelta(minutes=1) <= datetime.now(timezone.utc)
-            ):
-                candle_timestamp = candle.datetime.astimezone(timezone.utc)
-                state_prefix = "usdjpy"
-                last_processed = getattr(
-                    request.app.state,
-                    f"{state_prefix}_last_processed_timestamp",
-                    None,
-                )
-                if last_processed is None or candle_timestamp > last_processed:
-                    source_timestamp = int(candle_timestamp.timestamp())
-                    strategy = getattr(
-                        request.app.state,
-                        f"{state_prefix}_strategy",
-                        usdjpy_strategy,
-                    )
-                    storage = getattr(
-                        request.app.state,
-                        f"{state_prefix}_storage",
-                        usdjpy_storage,
-                    )
-                    if request.app.state.repository.has_algorithm_evaluation(
-                        USDJPY_DATABASE_SYMBOL,
-                        USDJPY_STRATEGY_NAME,
-                        source_timestamp,
-                    ):
-                        setattr(
-                            request.app.state,
-                            f"{state_prefix}_last_processed_timestamp",
-                            candle_timestamp,
-                        )
-                    else:
-                        usdjpy_candles = (
-                            request.app.state.repository.fetch_recent_candle_history(
-                                USDJPY_DATABASE_SYMBOL,
-                                USDJPY_HISTORY_LIMIT,
-                                candle_timestamp,
-                            )
-                        )
-                        if (
-                            usdjpy_candles
-                            and usdjpy_candles[-1]["timestamp_utc"]
-                            == candle_timestamp
-                        ):
-                            try:
-                                result = strategy.evaluate(
-                                    usdjpy_candles,
-                                    now=datetime.now(timezone.utc),
-                                )
-                                storage.save(
-                                    result,
-                                    len(usdjpy_candles),
-                                    enqueue_notification=USDJPY_BEEP_ENABLED,
-                                )
-                                setattr(
-                                    request.app.state,
-                                    f"{state_prefix}_last_processed_timestamp",
-                                    candle_timestamp,
-                                )
-                            except (
-                                mysql.connector.Error,
-                                RuntimeError,
-                                ValueError,
-                            ):
-                                logger.exception(
-                                    "Nie udało się wykonać strategii USDJPY "
-                                    "dla świecy %s.",
-                                    candle_timestamp.isoformat(),
-                                )
-                                raise
-                        else:
-                            logger.error(
-                                "Historia USDJPY nie zawiera właśnie zapisanej "
-                                "świecy %s; pominięto ewaluację.",
-                                candle_timestamp.isoformat(),
-                            )
-                            raise RuntimeError(
-                                "Historia USDJPY nie zawiera świecy "
-                                "przekazanej do ewaluacji."
-                            )
+            _process_closed_strategy_candle(
+                request,
+                candle,
+                datetime.now(timezone.utc),
+                enqueue_notifications=True,
+            )
             if (
                 candle.symbol == "ES"
                 and saved_candle_count
@@ -2698,7 +2667,7 @@ def save_grok45_signal(
 
 @app.post("/api/candles/batch", response_class=Response)
 def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
-    """Zapisuje maksymalnie 1000 otwartych minut i zwraca liczbę zapisanych."""
+    """Zapisuje paczkę świec i ocenia zamknięte USD/MXN oraz USD/JPY."""
     unsupported_symbols = sorted(
         {
             candle.symbol
@@ -2732,10 +2701,39 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                 _grok45_candles_from_history(candle_history)
             )
             request.app.state.strategy_ready = True
+            batch_strategy_candles = sorted(
+                (
+                    candle
+                    for candle in batch.candles
+                    if candle.symbol
+                    in {USDMXN_DATABASE_SYMBOL, USDJPY_DATABASE_SYMBOL}
+                ),
+                key=lambda candle: (
+                    candle.symbol,
+                    candle.datetime.astimezone(timezone.utc),
+                ),
+            )
+            for candle in batch_strategy_candles:
+                _process_closed_strategy_candle(
+                    request,
+                    candle,
+                    datetime.now(timezone.utc),
+                    enqueue_notifications=False,
+                )
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
             detail="Nie udało się zapisać świec w bazie MySQL.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się ocenić strategii dla świecy z paczki.",
         ) from error
     return Response(
         content=f"{saved_candle_count}\n{latest_saved_time}",

@@ -66,12 +66,15 @@ class USDMXNSignalStorage:
             candles_count,
             record_evaluation=True,
             save_signal=should_save_signal(result),
-            enqueue_notification=enqueue_notification,
+            enqueue_notification=(
+                enqueue_notification
+                and str(result.get("signal", "")).upper() in {"LONG", "SHORT"}
+            ),
         )
 
     @staticmethod
     def _compact_signal_parameters(payload: Any) -> dict[str, Any]:
-        """Zwraca tylko pola wymagane w tabeli ``signals``.
+        """Zwraca wymagane pola, zastępując długi powód krótkim opisem wyniku.
 
         Raises:
             ValueError: Gdy wynik strategii nie zawiera pełnego pakietu danych.
@@ -81,4 +84,13 @@ class USDMXNSignalStorage:
             field not in payload for field in required_fields
         ):
             raise ValueError("Wynik USDMXN nie zawiera wymaganych pól JSON.")
-        return {field: payload[field] for field in required_fields}
+        compact_payload = {field: payload[field] for field in required_fields}
+        signal_reasons = {
+            "NONE": "Warunki LONG ani SHORT nie zostały spełnione.",
+            "LONG": "Warunki LONG zostały spełnione.",
+            "SHORT": "Warunki SHORT zostały spełnione.",
+        }
+        compact_payload["reason"] = signal_reasons.get(
+            str(payload["signal"]).upper(), payload["reason"]
+        )
+        return compact_payload
