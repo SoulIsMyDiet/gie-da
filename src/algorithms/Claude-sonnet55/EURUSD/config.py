@@ -125,7 +125,7 @@ COOLDOWN_MINUTES = 10  # Czekaj po sygnale LONG/SHORT
 # ============================================================================
 # ZAPIS SYGNAŁÓW I TESTING
 # ============================================================================
-SAVE_NONE_SIGNALS = True  # TYMCZASOWE - zmień na False aby nie zapisywać NONE
+SAVE_NONE_SIGNALS = False
 STRATEGY_NAME = "Claude-sonnet55/EURUSD/MicroTransactions"
 
 # ============================================================================

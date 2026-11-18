@@ -1682,7 +1682,7 @@ class MarketDataRepository:
                     )
 
             inserted = False
-            if save_signal:
+            if save_signal and direction != "NONE":
                 cursor.execute(
                     """
                     INSERT IGNORE INTO signals

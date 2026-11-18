@@ -6,7 +6,7 @@ from dataclasses import dataclass
 # Backend: wspólne ustawienia integracji zapisu i uruchamiania strategii.
 DB_SYMBOL = "XAU/USD"
 STRATEGY_NAME = "Chat-gpt6/XAUUSDStrategyV1"
-SAVE_NONE_SIGNALS = True
+SAVE_NONE_SIGNALS = False
 HISTORY_LIMIT = 2500
 BEEP_ENABLED = True
 

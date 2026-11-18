@@ -106,7 +106,7 @@ COOLDOWN_MINUTES = 10
 MAX_SIGNALS_PER_DAY = 12
 
 # TYMCZASOWE - docelowo False.
-SAVE_NONE_SIGNALS = True
+SAVE_NONE_SIGNALS = False
 BEEP_ENABLED = True
 
 # Uzupełniaj wyłącznie w razie potrzeby, używając czasu lokalnego Warszawy:
