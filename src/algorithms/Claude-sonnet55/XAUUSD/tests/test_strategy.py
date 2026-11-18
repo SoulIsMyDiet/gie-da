@@ -52,7 +52,7 @@ def test_configuration_matches_storage_contract():
     assert config.PRICE_DECIMALS == 2
     assert config.SIGNAL_PRICE_DECIMALS == 5
     assert config.ASSUMED_COST_USD == 0.40
-    assert config.SAVE_NONE_SIGNALS is True
+    assert config.SAVE_NONE_SIGNALS is False
     assert config.BEEP_ENABLED is True
 
 

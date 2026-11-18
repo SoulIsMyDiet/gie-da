@@ -12,7 +12,7 @@ ARCHITEKTURA
    - Wszystkie parametry i stałe (konfigurowalne)
    - Strefy czasowe (UTC, Warszawa)
    - Parametry wskaźników, setupów, scoringu
-   - Flaga SAVE_NONE_SIGNALS dla testów
+   - Flaga SAVE_NONE_SIGNALS do kontroli zapisu, domyślnie False
 
 2. indicators.py
    - SMA, EMA, RSI (Wilder), ATR (Wilder)
@@ -91,7 +91,7 @@ ZAŁOŻENIA ALGORYTMU
 ✓ Setup autoselect: Algoritm wybiera na podstawie ER (trend vs range vs uncertain)
 ✓ Idempotentność: UPSERT na (product, algorithm_name, source_timestamp)
 ✓ Cooldown: 10 minut między sygnałami (do implementacji w produkcji)
-✓ Sygnały NONE: Zapisuje jeśli SAVE_NONE_SIGNALS=True (tymczasowo)
+✓ Zapis sygnałów: zapisuje tylko LONG/SHORT; NONE pomijane przy SAVE_NONE_SIGNALS=False
 ✓ Dźwięki: Thread-safe, nie przerywa działania algorytmu
 ✓ Logging: Python logging (nie print, poza JSON output)
 
@@ -207,7 +207,7 @@ Jeśli ten sam sygnał dla tej samej świecy zostanie uruchomiony ponownie:
 PRODUCTION CHECKLIST
 ====================
 
-[ ] SAVE_NONE_SIGNALS = False (po testach)
+[x] SAVE_NONE_SIGNALS = False (zapis NONE wyłączony)
 [ ] Ustawić NEWS_BLACKOUTS jeśli potrzebne
 [ ] Dostroić parametry ATR, scoring na backtescie
 [ ] Zmienne środowiskowe w .env

@@ -292,7 +292,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         repository = MarketDataRepository.__new__(MarketDataRepository)
         repository.database_settings = {}
         signal = {
-            "signal": "NONE",
+            "signal": "LONG",
             "price": 18001.0,
             "timestamp": "2026-01-12T09:01:00+01:00",
             "candle_open_epoch": 1768204860,
@@ -312,7 +312,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         self.assertIn("INSERT IGNORE INTO signals", connection.cursor_instance.query)
         self.assertIn("%s", connection.cursor_instance.query)
         self.assertEqual(connection.cursor_instance.parameters[1], "GER30")
-        self.assertEqual(connection.cursor_instance.parameters[3], "none")
+        self.assertEqual(connection.cursor_instance.parameters[3], "long")
         self.assertEqual(
             connection.cursor_instance.parameters[4],
             "Chat-gpt6/DAX40/DAX40StrategyV1",

@@ -720,7 +720,7 @@ class StorageTests(unittest.TestCase):
         opened = datetime(2026, 1, 12, 8, 4, tzinfo=UTC)
         closed_local = datetime(2026, 1, 12, 9, 5, tzinfo=WARSAW)
         signal = {
-            "signal": "NONE",
+            "signal": "LONG",
             "price": 18000.0,
             "candle_open_time": opened.astimezone(WARSAW).isoformat(),
             "candle_open_epoch": int(opened.timestamp()),
@@ -736,7 +736,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(connection.rollbacks, 0)
         self.assertIn("INSERT IGNORE INTO signals", connection.cursor_instance.query)
         self.assertEqual(values[0], datetime(2026, 1, 12, 9, 5))
-        self.assertEqual(values[3], "none")
+        self.assertEqual(values[3], "long")
         self.assertEqual(values[7], int(opened.timestamp()))
         payload = json.loads(values[6])
         self.assertEqual(payload["params"]["atr14_points"], 2.5)

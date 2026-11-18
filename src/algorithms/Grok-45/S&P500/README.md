@@ -51,9 +51,9 @@ Nie umieszczaj hasła w kodzie ani w poleceniu zapisanym w historii.
 
 JSON jest wypisywany na stdout, a diagnostyka na stderr. Kod procesu 0 oznacza
 nowy zapis z włączonym dźwiękiem, 4 zapis z wyłączonym dźwiękiem, 3 brak
-zapisu, a 1 błąd. `SAVE_NONE_SIGNALS = True` zapisuje także NONE; ustawienie
-`False` wyłącza ich zapis. Sygnały są idempotentne dzięki unikalnemu kluczowi.
-Przy wyłączonym zapisie NONE jego analiza nie pozostawia trwałego śladu.
+zapisu, a 1 błąd. `SAVE_NONE_SIGNALS = False` pomija wyniki NONE; w tabeli
+`signals` zapisywane są tylko LONG i SHORT. Sygnały są idempotentne dzięki
+unikalnemu kluczowi.
 
 Po zatwierdzeniu nowego zapisu lokalny tryb wydaje dwa dźwięki. Błąd dźwięku
 jest logowany i nie cofa zapisu. LONG/SHORT tworzy również `signal_potention`

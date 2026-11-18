@@ -50,7 +50,7 @@ def test_configuration_matches_confirmed_usdjpy_settings():
     assert config.SIGNAL_PRICE_DECIMALS == 5
     assert config.PIP_SIZE == 0.01
     assert config.ASSUMED_COST_PIPS == 0.8
-    assert config.SAVE_NONE_SIGNALS is True
+    assert config.SAVE_NONE_SIGNALS is False
     assert config.BEEP_ENABLED is True
 
 

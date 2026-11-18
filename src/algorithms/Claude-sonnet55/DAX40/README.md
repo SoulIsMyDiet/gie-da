@@ -66,11 +66,11 @@ restarcie bez dodatkowej tabeli.
 
 Sygnał oraz pełne parametry JSON są zapisywane w jednym INSERT i transakcji.
 `source_timestamp` to epoch UTC czasu otwarcia świecy; unikalny klucz bazy chroni
-przed duplikatami. Zapis `NONE` włącza jedna flaga `SAVE_NONE_SIGNALS` w `config.py`.
+przed duplikatami. `SAVE_NONE_SIGNALS=False` w `config.py` pomija wyniki NONE,
+więc do tabeli trafiają wyłącznie rekordy LONG i SHORT.
 Nowy zapis zwraca do C++ istniejący znacznik `signal_saved`; aplikacja Windows
-odtwarza dwa krótkie piknięcia dla każdego nowego wpisu (także `NONE` przy
-włączonej fladze zapisu), nigdy dla duplikatu. Flaga `BEEP_ENABLED` włącza lub
-wyłącza to powiadomienie. API pomija
+odtwarza dwa krótkie piknięcia dla każdego nowego wpisu LONG/SHORT, nigdy dla
+duplikatu. Flaga `BEEP_ENABLED` włącza lub wyłącza to powiadomienie. API pomija
 ponowne analizowanie już przetworzonej minuty w trakcie działania procesu.
 
 ## Uruchomienie i testy

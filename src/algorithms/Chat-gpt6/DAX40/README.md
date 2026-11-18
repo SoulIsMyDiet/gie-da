@@ -44,8 +44,8 @@ generować od kolejnej nowej zamkniętej świecy.
 Sygnały trafiają do istniejącej tabeli `signals`; wszystkie wskaźniki i
 diagnostyka są w kolumnie JSON `signal_parameters`. Idempotencję zapewnia
 unikalny klucz `(product, algorithm_name, source_timestamp)`. Parametr
-`SAVE_NONE_SIGNALS` znajduje się wyłącznie w `config.py`; ustawienie go na
-`False` wyłącza zapis NONE. Po każdym nowym zapisie API zwraca liczbę nowych
+`SAVE_NONE_SIGNALS` w `config.py` ma wartość `False`, więc wyniki NONE nie są
+zapisywane. Po każdym nowym zapisie API zwraca liczbę nowych
 rekordów, a aplikacja C++ odtwarza dwa krótkie piknięcia dla każdego z nich.
 Duplikat nie powoduje nowego sygnału dźwiękowego.
 

@@ -65,7 +65,7 @@ Wszystkie parametry znajdują się w `config.py`:
 - **Wskaźniki**: `EMA_SHORT`, `EMA_MEDIUM`, `EMA_LONG`, `RSI_PERIOD`, `ATR_PERIOD`
 - **Scoring**: `CORE_SETUP_POINTS`, bonusy
 - **Zarządzanie**: `SL_MULTIPLIER`, `TP_MULTIPLIER`, `MAX_HOLD_MINUTES`
-- **Testing**: `SAVE_NONE_SIGNALS` (True = zapisuje sygnały NONE)
+- **Zapis sygnałów**: `SAVE_NONE_SIGNALS=False`; do bazy trafiają tylko LONG/SHORT
 
 ## Format wyjścia (JSON)
 

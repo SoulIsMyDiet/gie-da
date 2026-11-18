@@ -62,11 +62,9 @@ powiadomienie są zapisywane w jednej transakcji. Aplikacja desktopowa odtwarza
 dwa krótkie piknięcia, a po ich odtworzeniu potwierdza zdarzenie; w razie błędu
 ponawia pobranie. Dostarczenie jest typu co najmniej raz, więc awaria między
 odtworzeniem a potwierdzeniem może powtórzyć dźwięk. Dźwięk jest dodawany do
-outboxa tylko dla LONG i SHORT; NONE nadal może być zapisany bez powiadomienia.
+outboxa tylko dla LONG i SHORT; wyniki NONE nie trafiają do tabeli `signals`.
 Paczki `/api/candles/batch` również uruchamiają obie strategie USD/MXN dla
 zamkniętych świec, ale nie odtwarzają dźwięków dla historycznych danych.
-Zapis NONE można wyłączyć flagą `SAVE_NONE_SIGNALS` w
-`src/algorithms/Chat-gpt6/USDMXN/config.py`.
 
 Po każdej nowej zamkniętej świecy `USD/JPY` API uruchamia niezależną strategię
 `Chat-gpt6/USDJPY/USDJPYStrategyV1`. Historia jest ograniczona do 1200 świec,
@@ -76,15 +74,14 @@ LONG, SHORT albo NONE trafia do `signal_parameters` jako `price`, `signal`,
 w wyniku strategii, a ewaluacja jest chroniona
 markerem `algorithm_evaluations`. Powiadomienia LONG i SHORT po zapisie
 korzystają z tego samego outboxa i mechanizmu dwóch piknięć co pozostałe
-strategie. Paczki `/api/candles/batch` także uruchamiają strategię USD/JPY dla
-zamkniętych świec, bez dźwięków dla historycznych danych. Zapisywanie NONE
-można wyłączyć przez `SAVE_NONE_SIGNALS` w `USDJPY/config.py`.
+strategie. Wyniki NONE nie są zapisywane do `signals`. Paczki
+`/api/candles/batch` także uruchamiają strategię USD/JPY dla zamkniętych świec,
+bez dźwięków dla historycznych danych.
 
 Równolegle API uruchamia dla zamkniętych świec USD/JPY strategię
 `Claude-sonnet55/USDJPYStrategyV1`, także podczas przetwarzania paczek.
-Strategia zapisuje sygnały NONE zgodnie z `SAVE_NONE_SIGNALS`; odpowiedź
-zwiększa licznik dźwięku tylko dla LONG/SHORT. API używa trybu bez lokalnego
-dźwięku, aby uniknąć piknięć przy zapisie NONE.
+Wyniki NONE nie są zapisywane do `signals`; odpowiedź zwiększa licznik dźwięku
+tylko dla LONG/SHORT. API używa trybu bez lokalnego dźwięku.
 
 Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
 `signal`, epokę `timestamp`, `instrument` oraz `parameters` z EMA9, ATR14,
@@ -94,9 +91,8 @@ algorytmu nie są zapisywane, a istniejące rekordy pozostają bez zmian.
 Po każdej zamkniętej świecy XAU/USD API uruchamia strategie
 `Chat-gpt6/XAUUSD/XAUUSDStrategyV1` i
 `Claude-sonnet55/XAUUSD/XAUUSDStrategyV1`. Dotyczy to zarówno pojedynczych
-zapisów, jak i świec dostarczonych w paczce `/api/candles/batch`. Obie strategie
-zapisują sygnały `NONE`, jeśli włączona jest flaga `SAVE_NONE_SIGNALS`;
-powiadomienie dźwiękowe jest naliczane wyłącznie dla sygnałów LONG i SHORT.
+zapisów, jak i świec dostarczonych w paczce `/api/candles/batch`. Obie strategie zapisują wyłącznie sygnały LONG i SHORT; powiadomienie
+dźwiękowe jest naliczane wyłącznie dla zapisanych sygnałów.
 Uzupełnianie historii w paczce nie odtwarza dźwięków.
 
 Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączone,

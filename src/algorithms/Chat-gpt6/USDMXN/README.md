@@ -48,9 +48,9 @@ a następnie potwierdza powiadomienie; przy błędzie pobieranie jest ponawiane.
 To zapewnia dostarczenie co najmniej raz: awaria po odtworzeniu, ale przed
 potwierdzeniem, może spowodować powtórne piknięcie.
 
-Zapis wyników NONE można wyłączyć, zmieniając wyłącznie
-`SAVE_NONE_SIGNALS = True` na `False` w `config.py`. Nie zmienia to zapisu
-sygnałów LONG ani SHORT.
+Wyniki NONE mogą być zwracane przez analizę, ale `SAVE_NONE_SIGNALS = False`
+w `config.py` pomija je przy zapisie. Do tabeli trafiają wyłącznie sygnały
+LONG i SHORT.
 
 Testy uruchom poleceniem:
 

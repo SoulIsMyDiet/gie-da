@@ -83,7 +83,7 @@ def test_payload_key_order_rounding_polish_and_valid_json():
 def test_save_commits_warsaw_close_and_reads_json_with_polish_text(monkeypatch):
     """Zapisuje sygnał transakcyjnie i odczytuje jego tekst z bazy."""
     storage, connections = _mock_storage(monkeypatch, connections=2)
-    assert storage.save_signal(_result(), 120)
+    assert storage.save_signal(_result("LONG"), 120)
     connection, cursor = connections[0]
     query, values = cursor.execute.call_args.args
     assert "INSERT INTO signals" in query
@@ -424,11 +424,10 @@ def test_empty_database_run_once_returns_without_raising(caplog):
     assert "nie zawiera świec" in caplog.text
 
 
-@pytest.mark.parametrize("beep_enabled,expected_code", [(True, 0), (False, 4)])
-def test_api_mode_saves_none_without_playing_sound(
-    monkeypatch, capsys, beep_enabled, expected_code
+def test_api_mode_reports_none_as_not_saved_without_playing_sound(
+    monkeypatch, capsys
 ):
-    """Tryb API zapisuje NONE bez lokalnego dźwięku i zachowuje kod statusu."""
+    """Tryb API zwraca NONE, ale informuje, że nie zapisano go do bazy."""
     opened_epoch = int(OPENED.timestamp())
     generated = _result("NONE")
     storage = Mock()
@@ -436,17 +435,17 @@ def test_api_mode_saves_none_without_playing_sound(
     monkeypatch.setattr(
         trigger,
         "analyze_candle",
-        Mock(return_value=(generated, True)),
+        Mock(return_value=(generated, False)),
     )
     beep = Mock()
     monkeypatch.setattr(trigger, "play_signal_beep", beep)
-    monkeypatch.setattr(config, "BEEP_ENABLED", beep_enabled)
+    monkeypatch.setattr(config, "BEEP_ENABLED", True)
 
     result = trigger.main(
         ["--api-candle-open-epoch", str(opened_epoch)]
     )
 
-    assert result == expected_code
+    assert result == 3
     beep.assert_not_called()
     assert json.loads(capsys.readouterr().out)["signal"] == "NONE"
 
@@ -459,7 +458,7 @@ def test_api_batch_keeps_results_and_reports_partial_failure(
         {
             "candle_open_epoch": int(OPENED.timestamp()),
             "signal": "NONE",
-            "saved": True,
+            "saved": False,
         },
         {
             "candle_open_epoch": int(

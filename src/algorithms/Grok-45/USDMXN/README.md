@@ -38,8 +38,9 @@ Strategia korzysta z istniejącego API, repozytorium, tabeli `candles`,
 `signals` i powiadomień outbox USD/MXN. Nie tworzy połączenia z bazą ani
 niezależnego mechanizmu dźwięku. Ten sam zamknięty timestamp może być oceniony
 przez obie strategie, ponieważ ich markery są rozdzielone nazwą algorytmu.
-Zapis `NONE` można wyłączyć przez ustawienie `SAVE_NONE_SIGNALS = False` w
-`config.py` (TODO: docelowo ustawić na `False`).
+Strategia może zwracać `NONE` podczas analizy, ale `SAVE_NONE_SIGNALS = False`
+sprawia, że takie wyniki nie są zapisywane. W tabeli `signals` pozostają tylko
+rekordy LONG i SHORT.
 
 Uruchom testy:
 

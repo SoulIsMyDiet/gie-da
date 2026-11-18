@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Główny plik wykonujacy algorytm ma sie nazywac DAX40StrategyV1 a wszytkie pliki zwiazane z tym algorytmem maja sie znalesc w folderze src/alghorithms/Claude-sonnet55/DAX40
 
-# prosze aby tymczasowo algorytm zapisywal do tabeli signals równiez te sygnały o statusie "NONE" (poza 'SHORT' i 'LONG') abym zobaczyl czy algorytm w ogole działa. jednak w taki sposob by mozna bylo szybko wycofac te zmiane bo docelowo bedziemy zapisywac do tabeli signals tylke te sygnaly o statusie 'SHORT' lub 'LONG'
+# Do tabeli signals zapisujemy wyłącznie wyniki LONG i SHORT.
 
 # datetime w tabeli candles zawiera date otwarcia swiecy naszego czasu polskiego popros copilota o zapisanie wszytkich parametrów wskaznikow do signal_parameters.
 

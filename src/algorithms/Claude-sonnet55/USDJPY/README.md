@@ -102,8 +102,8 @@ do 5 miejsc, poziomy TP/SL do 3, a wskaźniki do 5. TP bazuje na 2 ATR, SL na
 Pętla analizuje każdą nową zamkniętą świecę i czeka maksymalnie 20 sekund na
 jej zapis. Brakującą minutę loguje i pomija; nie generuje dla niej sygnału na
 starych danych. Wyniki `NONE`, w tym `outside_session`, są tymczasowo
-zapisywane przez `SAVE_NONE_SIGNALS=True`. Poza rzeczywistymi godzinami rynku
-pętla nie analizuje świec.
+pomijane przy zapisie przez `SAVE_NONE_SIGNALS=False`. Poza rzeczywistymi
+godzinami rynku pętla nie analizuje świec.
 
 ## Zapis i kodowanie
 

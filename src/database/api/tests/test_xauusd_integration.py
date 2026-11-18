@@ -41,16 +41,16 @@ def request_and_candle(opened, symbol="XAU/USD", saved=1):
 @pytest.mark.parametrize(
     "chat_result,claude_result,expected,chat_beep",
     [
-        (("NONE", True), ("NONE", True), b"0\n0", False),
-        (("LONG", True), ("NONE", True), b"0\n1", True),
-        (("NONE", True), ("SHORT", True), b"0\n1", False),
+        (("NONE", False), ("NONE", False), b"0\n0", False),
+        (("LONG", True), ("NONE", False), b"0\n1", True),
+        (("NONE", False), ("SHORT", True), b"0\n1", False),
         (("LONG", False), ("NONE", False), b"0\n0", False),
     ],
 )
 def test_closed_candle_counts_only_actionable_signals(
     chat_result, claude_result, expected, chat_beep
 ):
-    """NONE jest zapisywany, ale tylko LONG/SHORT zwiększa licznik dźwięku."""
+    """NONE nie jest zapisywany; API liczy wyłącznie nowe sygnały LONG/SHORT."""
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, candle, repository = request_and_candle(opened)
     repository.save_candle.return_value = (0, 1, "", 0)

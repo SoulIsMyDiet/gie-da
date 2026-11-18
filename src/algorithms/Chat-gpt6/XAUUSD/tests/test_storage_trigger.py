@@ -23,7 +23,7 @@ def modules(monkeypatch):
     """Ładuje moduły z atrapami konfiguracji i generatora bez kolizji importów."""
     config = SimpleNamespace(
         DB_SYMBOL="XAU/USD", STRATEGY_NAME="Chat-gpt6/XAUUSDStrategyV1",
-        HISTORY_LIMIT=2500, SAVE_NONE_SIGNALS=True, BEEP_ENABLED=True,
+        HISTORY_LIMIT=2500, SAVE_NONE_SIGNALS=False, BEEP_ENABLED=True,
         CONFIG=SimpleNamespace(
             ema_fast=9, ema_middle=21, atr_period=14, rsi_period=14,
         ),
@@ -257,13 +257,13 @@ def test_real_generator_trigger_and_storage_together(monkeypatch):
          "close": Decimal("2501"), "volume": Decimal("10")}
     ]
     output, saved = trigger.analyze_candle(storage, OPENED, OPENED + timedelta(minutes=1))
-    assert saved and output["signal"] == "NONE"
+    assert not saved and output["signal"] == "NONE"
     assert output["candle_open_epoch"] == int(OPENED.timestamp())
-    payload = json.loads(cursor.execute.call_args.args[1][6])
-    assert set(payload) == {"price", "signal", "timestamp", "instrument", "parameters"}
-    assert payload["timestamp"] == int(OPENED.timestamp())
-    assert payload["signal"] == output["signal"]
-    connection.commit.assert_called_once()
+    assert not any(
+        "INSERT INTO signals" in call.args[0]
+        for call in cursor.execute.call_args_list
+    )
+    connection.commit.assert_not_called()
 
 
 def test_real_cli_rejects_forming_candle_without_database():

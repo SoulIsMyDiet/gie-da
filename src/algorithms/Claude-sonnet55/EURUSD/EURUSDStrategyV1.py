@@ -98,7 +98,7 @@ logger = logging.getLogger(__name__)
 
 # Główny plik wykonujacy algorytm ma sie nazywac EURUSDStrategyV1 a wszytkie pliki zwiazane z tym algorytmem maja sie znalesc w folderze src/alghorithms/Claude-sonnet55/EURUSD
 
-# prosze aby tymczasowo algorytm zapisywal do tabeli signals równiez te sygnały o statusie "NONE" (poza 'SHORT' i 'LONG') abym zobaczyl czy algorytm w ogole działa. jednak w taki sposob by mozna bylo szybko wycofac te zmiane bo docelowo bedziemy zapisywac do tabeli signals tylke te sygnaly o statusie 'SHORT' lub 'LONG'
+# Wyniki NONE są diagnostyczne; do tabeli signals zapisujemy tylko LONG i SHORT.
 
 # Do napisania kodu uzywam copilota, ale Ciebie poprosze o przygotowanie instrukcji dla copilota aby taki algorytm napisał.
 
@@ -514,9 +514,7 @@ def main():
         print(json.dumps(signal_result, indent=2))
 
         # Zapisz do bazy
-        if signal_result["signal"] in ("LONG", "SHORT") or (
-            signal_result["signal"] == "NONE" and strategy.db  # Jeśli ma być zapisany
-        ):
+        if signal_result["signal"] in ("LONG", "SHORT"):
             try:
                 was_saved = strategy.db.save_signal(signal_result, len(candles))
                 if was_saved:

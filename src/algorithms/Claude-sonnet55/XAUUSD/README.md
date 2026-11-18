@@ -52,7 +52,7 @@ ciągłym segmencie; nie ma wypełniania ani interpolowania brakujących świec.
 Sygnały są dozwolone od poniedziałku do piątku od 08:15 czasu londyńskiego do
 17:00 ET, z piątkowym limitem 21:00 czasu polskiego oraz 30-minutowym buforem
 przed przerwą rynku. Pętla nie podejmuje decyzji dla świecy poza sesją.
-`SAVE_NONE_SIGNALS=True` oznacza, że także wyniki NONE są zapisywane.
+`SAVE_NONE_SIGNALS=False` oznacza, że wyniki NONE nie są zapisywane.
 
 ## Setupy
 

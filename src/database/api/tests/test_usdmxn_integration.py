@@ -592,6 +592,67 @@ class USDMXNIntegrationTests(unittest.TestCase):
         )
         repository.acknowledge_usdmxn_notification.assert_called_once_with(11)
 
+    def test_none_is_marked_evaluated_without_inserting_signal(self) -> None:
+        """Trwale oznacza ewaluację NONE, ale pomija tabelę signals."""
+        class FakeCursor:
+            rowcount = 1
+            lastrowid = 71
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def execute(self, query, parameters) -> None:
+                self.calls.append((query, parameters))
+
+            def close(self) -> None:
+                pass
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.cursor_value = FakeCursor()
+                self.committed = False
+
+            def cursor(self):
+                return self.cursor_value
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                raise AssertionError("Nieoczekiwany rollback.")
+
+            def close(self) -> None:
+                pass
+
+        opened = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+        connection = FakeConnection()
+        repository = MarketDataRepository.__new__(MarketDataRepository)
+        repository.database_settings = {}
+        signal = {
+            "signal": "NONE",
+            "price": 17.05,
+            "timestamp": (opened + timedelta(minutes=1)).isoformat(),
+            "candle_open_epoch": int(opened.timestamp()),
+            "signal_parameters": {"reason": "warmup"},
+        }
+
+        with patch("app.mysql.connector.connect", return_value=connection):
+            inserted = repository.save_algorithm_signal(
+                "USD/MXN",
+                "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                signal,
+                600,
+                record_evaluation=True,
+            )
+
+        self.assertFalse(inserted)
+        self.assertTrue(connection.committed)
+        self.assertEqual(len(connection.cursor_value.calls), 1)
+        self.assertIn(
+            "INSERT IGNORE INTO algorithm_evaluations",
+            connection.cursor_value.calls[0][0],
+        )
+
     def test_signal_json_and_timestamp_are_saved_without_truncating_parameters(self) -> None:
         """Istniejący zapis przekazuje kompletny JSON i epokę otwarcia."""
         class FakeCursor:
@@ -630,12 +691,12 @@ class USDMXNIntegrationTests(unittest.TestCase):
             "instrument": "USDMXN",
             "price": 17.05,
             "timestamp": int(opened.timestamp()),
-            "signal": "NONE",
+            "signal": "LONG",
             "reason": "warmup",
             "indicators": {"ema9_m1": None},
         }
         result = {
-            "signal": "NONE",
+            "signal": "LONG",
             "price": 17.05,
             "timestamp": close_time.astimezone(
                 timezone(timedelta(hours=1))

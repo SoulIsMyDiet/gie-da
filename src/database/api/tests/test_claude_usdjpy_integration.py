@@ -144,7 +144,7 @@ def test_batch_process_returns_one_result_per_candle():
     expected = {
         "candle_open_epoch": int(opened.timestamp()),
         "signal": "NONE",
-        "saved": True,
+        "saved": False,
     }
     completed = SimpleNamespace(
         returncode=0,
@@ -232,7 +232,7 @@ def test_batch_runs_claude_for_closed_usdjpy_candles():
             {
                 "candle_open_epoch": int(opened.timestamp()),
                 "signal": "NONE",
-                "saved": True,
+                "saved": False,
             }
         ],
     ) as claude:

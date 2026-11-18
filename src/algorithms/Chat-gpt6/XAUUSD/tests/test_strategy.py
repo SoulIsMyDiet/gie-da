@@ -20,7 +20,7 @@ def test_integration_configuration():
     """Sprawdza uzgodniony kontrakt ustawień integracji i symbol rynku."""
     assert config.DB_SYMBOL == "XAU/USD"
     assert config.STRATEGY_NAME == "Chat-gpt6/XAUUSDStrategyV1"
-    assert config.SAVE_NONE_SIGNALS is True
+    assert config.SAVE_NONE_SIGNALS is False
     assert config.HISTORY_LIMIT == 2500
     assert config.BEEP_ENABLED is True
     assert config.CONFIG.market_symbol == config.DB_SYMBOL

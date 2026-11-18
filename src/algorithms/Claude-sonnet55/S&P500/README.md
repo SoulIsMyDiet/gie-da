@@ -64,10 +64,9 @@ to epoch UTC otwarcia. Unikalny klucz `(product, algorithm_name, source_timestam
 chroni przed duplikatem. Pełny wynik i `params` trafiają do
 `signal_parameters` JSON.
 
-`SAVE_NONE_SIGNALS = True` tymczasowo zapisuje wyniki NONE w oknie sygnałów;
-poza oknem API nie uruchamia analizy. Przełączenie flagi na `False` wyłącza
-zapis NONE. Po udanym zapisie C++ odtwarza dwa dźwięki, także dla NONE przy
-włączonej fladze; duplikat jest cichy. `BEEP_ENABLED` pozwala wyłączyć dźwięk.
+`SAVE_NONE_SIGNALS = False` pomija wyniki NONE; w tabeli `signals` zapisywane
+są wyłącznie LONG i SHORT. Po udanym zapisie C++ odtwarza dwa dźwięki;
+duplikat jest cichy. `BEEP_ENABLED` pozwala wyłączyć dźwięk.
 LONG/SHORT tworzy również wiersz `signal_potention` z kosztem z konfiguracji
 w tej samej transakcji. Raport potencjału nie jest backtestem: nie symuluje
 SL/TP, a jego wyliczenie `100zl_deal` nie uwzględnia specyfikacji futures.

@@ -187,7 +187,7 @@ class SP500Storage:
 
         Argumenty: result to pełny wynik generate_signal, candles_count to liczba świec.
         Wyjątki: ValueError dla błędnego wyniku, pozostałe błędy bazy są propagowane.
-        Wyłączony zapis NONE jest jedynym miejscem stosowania tej tymczasowej flagi.
+        Flaga konfiguracji pomija wynik NONE, gdy zapis jest wyłączony.
         """
         price = validated_price(result)
         signal = result["signal"].upper()
