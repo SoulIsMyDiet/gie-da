@@ -158,6 +158,64 @@ def test_single_missing_minute_is_counted_but_not_blocked():
     )
 
 
+def test_two_consecutive_missing_minutes_exceed_the_gap_limit():
+    """Blokuje dwa kolejne braki wśród oczekiwanych minut handlowych."""
+    start = datetime(2026, 1, 5, 20, 20, tzinfo=UTC)
+    candles = _candles(60, start)
+    del candles[8:10]
+
+    missing, longest = signal_logic._missing_state(
+        candles, candles[-1]["timestamp_utc"]
+    )
+
+    assert missing == 2
+    assert longest == 2
+    assert longest > config.MAX_CONSECUTIVE_MISSING
+
+
+def test_short_segment_reports_warmup_even_when_other_filters_apply():
+    """Dodaje warmup do NONE na początku nowego segmentu."""
+    opened = datetime(2026, 1, 11, 22, 0, tzinfo=UTC)
+    result = signal_logic.generate_signal(
+        _candles(1, opened), now=opened + timedelta(minutes=1)
+    )
+
+    assert result["signal"] == "NONE"
+    assert "warmup" in result["blocked_by"]
+
+
+def test_atr_anomaly_starts_a_fifteen_minute_spike_cooldown():
+    """Rozpoznaje pojedynczy zakres 5× i kończy cooldown dokładnie po 15 minutach."""
+    opened = datetime(2026, 1, 5, 13, 0, tzinfo=UTC)
+    candles = _candles(75, opened)
+    for candle in candles:
+        candle["open"] = candle["close"]
+        candle["high"] = candle["close"] + 0.005
+        candle["low"] = candle["close"] - 0.005
+    candles[59]["high"] = candles[59]["close"] + 0.025
+    candles[59]["low"] = candles[59]["close"] - 0.025
+    rows = indicators.build_m1_indicators(pd.DataFrame(candles))
+    spike_series = signal_logic._range_spike_series(rows)
+    spike_time = candles[59]["timestamp_utc"]
+
+    cooldown_at_spike = signal_logic._recent_spike_times(
+        rows.iloc[:60], spike_series.iloc[:60], spike_time
+    )
+    cooldown_after_14 = signal_logic._recent_spike_times(
+        rows.iloc[:74],
+        spike_series.iloc[:74],
+        spike_time + timedelta(minutes=14),
+    )
+    cooldown_after_15 = signal_logic._recent_spike_times(
+        rows, spike_series, spike_time + timedelta(minutes=15)
+    )
+
+    assert spike_series.iloc[59] < config.RANGE_SPIKE_MAX_RATIO
+    assert cooldown_at_spike == [spike_time]
+    assert cooldown_after_14 == [spike_time]
+    assert cooldown_after_15 == []
+
+
 def test_forming_candle_is_removed_and_closed_timestamp_is_exact():
     """Nie używa formowanej świecy, a wynik zapisuje czas zamknięcia w epoch."""
     opened = datetime(2026, 1, 5, 22, 0, tzinfo=UTC)
@@ -266,6 +324,43 @@ def test_manual_holiday_and_news_blackouts_are_used(monkeypatch):
         ],
     )
     assert "news" in schedule.blackout_codes(event_time)
+
+
+def test_scheduled_publication_and_fixing_blackouts_follow_local_zones(monkeypatch):
+    """Rozpoznaje wydarzenia w ET/JST i uwzględnia daty z konfiguracji."""
+    us_data = datetime(2026, 3, 23, 8, 32, tzinfo=schedule.NEW_YORK)
+    tokyo_fixing = datetime(2026, 3, 23, 9, 55, tzinfo=schedule.TOKYO)
+    fomc = datetime(2026, 3, 23, 14, 10, tzinfo=schedule.NEW_YORK)
+    boj = datetime(2026, 3, 23, 10, 0, tzinfo=schedule.TOKYO)
+    monkeypatch.setattr(schedule, "FOMC_DATES", {fomc.date()})
+    monkeypatch.setattr(schedule, "HIGH_IMPACT_DAYS", {boj.date()})
+
+    assert "us_0830" in schedule.blackout_codes(us_data)
+    assert "tokyo_fixing" in schedule.blackout_codes(tokyo_fixing)
+    assert "fomc" in schedule.blackout_codes(fomc)
+    assert "high_impact_day" in schedule.blackout_codes(boj)
+
+
+def test_zero_volume_and_constant_prices_return_none_without_exception():
+    """Obsługuje zerowy wolumen i stałe ceny bez błędu dzielenia."""
+    opened = datetime(2026, 1, 5, 13, 26, tzinfo=UTC)
+    candles = _candles(100, opened)
+    for candle in candles:
+        candle.update(
+            open=155.0,
+            high=155.0,
+            low=155.0,
+            close=155.0,
+            volume=0.0,
+        )
+
+    result = signal_logic.generate_signal(
+        candles, now=opened + timedelta(minutes=100)
+    )
+
+    assert result["signal"] == "NONE"
+    assert "low_relative_volume" in result["blocked_by"]
+    assert "atr_out_of_range" in result["blocked_by"]
 
 
 def test_result_reason_for_no_setup_is_exact_polish_sentence():

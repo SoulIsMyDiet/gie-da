@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 import sys
+from pathlib import Path
 from threading import Event
 from typing import Callable
 
@@ -62,7 +63,7 @@ def analyze_candle(
     return result, storage.save_signal(result, len(candles))
 
 
-def _initial_cursor(storage: USDJPYStorage, state_path) -> int | None:
+def _initial_cursor(storage: USDJPYStorage, state_path: Path) -> int | None:
     """Wznawia pracę z najpóźniejszego wiarygodnego stanu lokalnego lub bazy."""
     state_cursor = read_loop_state(state_path)
     processed_close = storage.latest_processed_close_epoch()
@@ -85,7 +86,7 @@ def _initial_cursor(storage: USDJPYStorage, state_path) -> int | None:
 def run_loop(
     storage: USDJPYStorage | None = None,
     stop_event: Event | None = None,
-    state_path=None,
+    state_path: Path | None = None,
     now_provider: Callable[[], datetime] | None = None,
     wait: Callable[[float], None] | None = None,
 ) -> None:
@@ -97,7 +98,7 @@ def run_loop(
     wait = wait or (lambda seconds: stop_event.wait(seconds))
     cursor = None
     cursor_initialized = False
-    retry_seconds = 1.0
+    retry_seconds = config.RETRY_INITIAL_SECONDS
     while not stop_event.is_set():
         try:
             if not cursor_initialized:
@@ -119,20 +120,17 @@ def run_loop(
             next_open = datetime.fromtimestamp(next_open_epoch, UTC)
             if not is_trading_minute(next_open):
                 future = expected_candle_opens(
-                    next_open, next_open + timedelta(days=8)
+                    next_open,
+                    next_open + timedelta(days=config.MARKET_CLOSED_SEARCH_DAYS),
                 )
                 if not future:
-                    wait(60.0)
+                    wait(config.MARKET_CLOSED_RECHECK_SECONDS)
                     continue
                 next_open = future[0]
                 next_open_epoch = int(next_open.timestamp())
                 cursor = next_open_epoch - config.CANDLE_DURATION_SECONDS
                 write_loop_state(state_path, cursor)
-                delay = max(
-                    1.0,
-                    min(60.0, (next_open - now).total_seconds()),
-                )
-                wait(delay)
+                wait(max(0.0, (next_open - now).total_seconds()))
                 continue
 
             closed_at = next_open + timedelta(seconds=config.CANDLE_DURATION_SECONDS)
@@ -167,7 +165,7 @@ def run_loop(
                 write_loop_state(state_path, cursor)
             else:
                 wait(config.POLL_INTERVAL_SECONDS)
-            retry_seconds = 1.0
+            retry_seconds = config.RETRY_INITIAL_SECONDS
         except KeyboardInterrupt:
             logger.info("Pętla strategii USD/JPY została zatrzymana.")
             return
@@ -177,13 +175,19 @@ def run_loop(
                 retry_seconds,
             )
             wait(retry_seconds)
-            retry_seconds = min(config.RETRY_MAX_SECONDS, retry_seconds * 2)
+            retry_seconds = min(
+                config.RETRY_MAX_SECONDS,
+                retry_seconds * config.RETRY_BACKOFF_MULTIPLIER,
+            )
         except Exception:
             logger.exception(
                 "Błąd pętli USD/JPY; ponowienie za %.1f s.", retry_seconds
             )
             wait(retry_seconds)
-            retry_seconds = min(config.RETRY_MAX_SECONDS, retry_seconds * 2)
+            retry_seconds = min(
+                config.RETRY_MAX_SECONDS,
+                retry_seconds * config.RETRY_BACKOFF_MULTIPLIER,
+            )
 
 
 def run_once(
@@ -197,7 +201,10 @@ def run_once(
         raise ValueError("Czas jednorazowej analizy musi zawierać strefę.")
     latest = storage.latest_candle_open_epoch()
     if latest is None:
-        raise ValueError("Tabela candles nie zawiera świec USD/JPY.")
+        logger.warning(
+            "Tabela candles nie zawiera świec USD/JPY; nie wygenerowano sygnału."
+        )
+        return 2
     opened = datetime.fromtimestamp(latest, UTC)
     result, saved = analyze_candle(storage, opened, now)
     print(

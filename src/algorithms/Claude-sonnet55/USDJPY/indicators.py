@@ -1,10 +1,6 @@
 """Wskaźniki USD/JPY liczone na rzeczywistych świecach bez uzupełniania luk."""
 
-from collections import defaultdict
 from datetime import datetime, timedelta
-from math import isfinite
-from statistics import median
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -25,10 +21,7 @@ from config import (
     RELATIVE_VOLUME_PERIOD,
     RSI_PERIOD,
 )
-from schedule import UTC, segment_id, trading_day_start
-
-Candle = dict[str, Any]
-
+from schedule import UTC, trading_day_start
 
 def ema(values: pd.Series, period: int) -> pd.Series:
     """Oblicza wykładniczą średnią; niepoprawny okres zgłasza ValueError."""
@@ -201,26 +194,3 @@ def anchored_vwap(
         return None, start
     typical = (session["high"] + session["low"] + session["close"]) / 3.0
     return float((typical * volume).sum() / total), start
-
-
-def latest_valid(row: pd.Series, key: str) -> float | None:
-    """Zwraca skończoną wartość wskaźnika albo None."""
-    value = row.get(key)
-    if value is None or pd.isna(value):
-        return None
-    converted = float(value)
-    return converted if isfinite(converted) else None
-
-
-def unique_segments(candles: list[Candle]) -> dict[str, list[Candle]]:
-    """Grupuje świece według identyfikatora segmentu bez tworzenia syntetycznych wierszy."""
-    groups: dict[str, list[Candle]] = defaultdict(list)
-    for candle in candles:
-        groups[segment_id(candle["timestamp_utc"])].append(candle)
-    return dict(groups)
-
-
-def median_or_none(values: list[float]) -> float | None:
-    """Zwraca medianę niepustej listy skończonych liczb."""
-    valid = [value for value in values if isfinite(value)]
-    return float(median(valid)) if valid else None

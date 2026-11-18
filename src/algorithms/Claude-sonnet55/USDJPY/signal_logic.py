@@ -152,6 +152,24 @@ def _range_spike_series(rows: pd.DataFrame) -> pd.Series:
     return result
 
 
+def _recent_spike_times(
+    rows: pd.DataFrame, spike_series: pd.Series, latest_open: datetime
+) -> list[datetime]:
+    """Zwraca skoki zakresu lub anomalie ATR z aktywnego okna cooldownu."""
+    recent_after = latest_open - timedelta(
+        minutes=config.SPIKE_COOLDOWN_MINUTES
+    )
+    ranges = rows["high"] - rows["low"]
+    atr_anomalies = ranges > config.CANDLE_RANGE_ATR_MAX * rows["atr14"]
+    ratio_spikes = spike_series.to_numpy() > config.RANGE_SPIKE_MAX_RATIO
+    events = ratio_spikes | atr_anomalies.fillna(False).to_numpy()
+    return [
+        stamp
+        for stamp, is_spike in zip(rows["timestamp_utc"], events)
+        if is_spike and recent_after < stamp <= latest_open
+    ]
+
+
 def _time_filters(opened: datetime) -> list[str]:
     """Zwraca wszystkie harmonogramowe blokady dla czasu zamknięcia świecy."""
     closed = opened + timedelta(seconds=config.CANDLE_DURATION_SECONDS)
@@ -277,7 +295,9 @@ def _detect_setups(
     close_5m = _finite(m5.get("close")) if m5 is not None else None
     ema_5m = _finite(m5.get("ema20_5m")) if m5 is not None else None
     slope_5m = _finite(m5.get("ema20_5m_slope")) if m5 is not None else None
-    candle_close = current["timestamp_utc"] + timedelta(minutes=1)
+    candle_close = current["timestamp_utc"] + timedelta(
+        seconds=config.CANDLE_DURATION_SECONDS
+    )
     m5_age = (
         (
             candle_close
@@ -539,7 +559,7 @@ def _build_params(
     """Buduje wszystkie wskaźniki i dane diagnostyczne wyniku."""
     current = rows.iloc[-1]
     stamp = current["timestamp_utc"]
-    closed = stamp + timedelta(minutes=1)
+    closed = stamp + timedelta(seconds=config.CANDLE_DURATION_SECONDS)
     tokyo = stamp.astimezone(TOKYO)
     london = stamp.astimezone(LONDON)
     new_york = stamp.astimezone(NEW_YORK)
@@ -566,14 +586,7 @@ def _build_params(
         else:
             trend = "FLAT"
     range_high, range_low, range_width, tokyo_count, tokyo_coverage = tokyo_range
-    recent_spikes = spike_series.loc[
-        spike_series.index >= stamp - timedelta(minutes=config.SPIKE_COOLDOWN_MINUTES)
-    ]
-    last_spike = [
-        spike_time
-        for spike_time, ratio in recent_spikes.items()
-        if _finite(ratio) is not None and float(ratio) > config.RANGE_SPIKE_MAX_RATIO
-    ]
+    last_spike = _recent_spike_times(rows, spike_series, stamp)
     current_range_ratio = _finite(spike_series.iloc[-1]) if len(spike_series) else None
     params = {
         "atr14_pips": atr / config.PIP_SIZE if atr is not None else None,
@@ -806,7 +819,7 @@ def generate_signal(
     if pullback_window:
         required_warmups.append(config.WARMUP_PULLBACK)
     required_warmups.append(config.WARMUP_REVERSION)
-    if not blocked and len(rows) < min(required_warmups):
+    if len(rows) < min(required_warmups):
         blocked.append("warmup")
 
     candidates = []
@@ -830,7 +843,7 @@ def generate_signal(
             elif (
                 pullback_window
                 and len(rows) < config.WARMUP_PULLBACK
-                and (er is None or er > config.REVERSION_ER_MAX)
+                and (er is None or er >= config.UNCLEAR_ER_MAX)
             ):
                 blocked.append("warmup")
             elif er is not None and config.UNCLEAR_ER_MIN < er < config.UNCLEAR_ER_MAX:

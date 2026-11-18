@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from config import (
     BLACKOUTS,
-    DB_SYMBOL,
+    CANDLE_DURATION_SECONDS,
     EARLY_CLOSE_DATES,
     FOMC_DATES,
     FOMC_TIME_ET,
@@ -72,7 +72,7 @@ def expected_candle_opens(start: datetime, end: datetime) -> list[datetime]:
     while current < end_utc:
         if is_trading_minute(current):
             result.append(current)
-        current += timedelta(minutes=1)
+        current += timedelta(seconds=CANDLE_DURATION_SECONDS)
     return result
 
 

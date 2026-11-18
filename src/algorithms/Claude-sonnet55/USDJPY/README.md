@@ -26,6 +26,9 @@ python -m pip install -r src/database/api/requirements.txt
 
 `python src/algorithms/Claude-sonnet55/USDJPY/USDJPYStrategyV1.py` wykonuje
 jedną analizę najnowszej zamkniętej świecy i wypisuje JSON na stdout.
+Jeśli tabela `candles` nie zawiera jeszcze świecy USD/JPY, tryb jednorazowy
+zapisuje ostrzeżenie i kończy się kodem 2; nie tworzy fikcyjnego sygnału bez
+ceny i czasu zamknięcia świecy.
 `python src/algorithms/Claude-sonnet55/USDJPY/USDJPYStrategyV1.py --loop`
 uruchamia pętlę; `python src/algorithms/Claude-sonnet55/USDJPY/trigger.py`
 uruchamia tę samą pętlę domyślnie. Zatrzymanie odbywa się przez Ctrl+C.

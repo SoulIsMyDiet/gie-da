@@ -103,6 +103,7 @@ def build_signal_parameters(result: dict[str, Any]) -> dict[str, Any]:
         "max_hold_minutes": int(result["max_hold_minutes"]),
         "candle_open_time": str(result["candle_open_time"]),
         "blocked_by": list(result.get("blocked_by", [])),
+        "reasons": list(result.get("reasons", [])),
     }
     for key, value in params.items():
         if key in payload:
@@ -168,7 +169,7 @@ class USDJPYStorage:
     def load_context(
         self, cutoff: datetime, limit: int | None = None
     ) -> list[dict[str, Any]]:
-        """Pobiera do limit świec do wskazanego otwarcia w kolejności chronologicznej."""
+        """Pobiera ostatnie świece do odcięcia, korygując UTC po pobraniu."""
         if cutoff.tzinfo is None or cutoff.utcoffset() is None:
             raise ValueError("Czas odcięcia historii musi zawierać strefę.")
         history_limit = config.HISTORY_LIMIT if limit is None else limit
@@ -179,6 +180,9 @@ class USDJPYStorage:
         ):
             raise ValueError("Limit historii musi być dodatnią liczbą całkowitą.")
         cutoff_utc = cutoff.astimezone(UTC).replace(tzinfo=None)
+        local_cutoff_bound = cutoff_utc + timedelta(
+            minutes=config.MAX_LOCAL_UTC_OFFSET_MINUTES
+        )
         connection = self._connect()
         cursor = None
         try:
@@ -187,18 +191,27 @@ class USDJPYStorage:
                 """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
                    FROM candles
                    WHERE symbol = %s
-                     AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) <= %s
-                   ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC
+                     AND `datetime` <= %s
+                     AND utc_offset_minutes BETWEEN %s AND %s
+                   ORDER BY `datetime` DESC, utc_offset_minutes DESC
                    LIMIT %s""",
-                (config.DB_SYMBOL, cutoff_utc, history_limit),
+                (
+                    config.DB_SYMBOL,
+                    local_cutoff_bound,
+                    -config.MAX_VALID_UTC_OFFSET_MINUTES,
+                    config.MAX_VALID_UTC_OFFSET_MINUTES,
+                    history_limit + config.CANDLE_QUERY_OVERFETCH,
+                ),
             )
             result = []
-            for row in reversed(cursor.fetchall()):
+            for row in cursor.fetchall():
                 opened_utc = (
                     row["datetime"] - timedelta(
                         minutes=int(row["utc_offset_minutes"])
                     )
                 ).replace(tzinfo=UTC)
+                if opened_utc.replace(tzinfo=None) > cutoff_utc:
+                    continue
                 result.append(
                     {
                         "timestamp_utc": opened_utc,
@@ -213,7 +226,8 @@ class USDJPYStorage:
                         ),
                     }
                 )
-            return result
+            result.sort(key=lambda candle: candle["timestamp_utc"])
+            return result[-history_limit:]
         finally:
             try:
                 if cursor is not None:
@@ -223,31 +237,30 @@ class USDJPYStorage:
 
     def has_candle(self, opened_epoch: int) -> bool:
         """Sprawdza, czy baza zawiera świecę o podanym otwarciu UTC."""
-        opened_utc = datetime.fromtimestamp(opened_epoch, UTC).replace(tzinfo=None)
+        opened_utc = datetime.fromtimestamp(opened_epoch, UTC)
+        opened_local = opened_utc.astimezone(WARSAW)
         row = self._fetchone(
             """SELECT 1 FROM candles
                WHERE symbol = %s
-                 AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) = %s
+                 AND `datetime` = %s
+                 AND utc_offset_minutes = %s
                LIMIT 1""",
-            (config.DB_SYMBOL, opened_utc),
+            (
+                config.DB_SYMBOL,
+                opened_local.replace(tzinfo=None),
+                int(opened_local.utcoffset().total_seconds() // 60),
+            ),
         )
         return row is not None
 
     def latest_candle_open_epoch(self) -> int | None:
         """Zwraca otwarcie najnowszej świecy USD/JPY jako epokę UTC."""
-        row = self._fetchone(
-            """SELECT `datetime`, utc_offset_minutes FROM candles
-               WHERE symbol = %s
-               ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC
-               LIMIT 1""",
-            (config.DB_SYMBOL,),
+        candles = self.load_context(datetime.now(UTC), limit=1)
+        return (
+            int(candles[-1]["timestamp_utc"].timestamp())
+            if candles
+            else None
         )
-        if row is None:
-            return None
-        opened_utc = (
-            row[0] - timedelta(minutes=int(row[1]))
-        ).replace(tzinfo=UTC)
-        return int(opened_utc.timestamp())
 
     def latest_processed_close_epoch(self) -> int | None:
         """Zwraca epokę zamknięcia ostatniej oceny tej strategii."""

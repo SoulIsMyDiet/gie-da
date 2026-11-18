@@ -40,6 +40,7 @@ def _result(signal: str = "NONE") -> dict:
         "max_hold_minutes": 20,
         "reason": "Zablokowano: trwa przerwa.",
         "blocked_by": ["outside_session"],
+        "reasons": ["Brak transakcji poza sesją."],
         "params": {"ema9": 155.123456, "powod": "Świeca zamknięta."},
     }
 
@@ -84,6 +85,7 @@ def test_payload_key_order_rounding_polish_and_valid_json():
     assert "Zablokowano" in encoded
     assert "Świeca zamknięta." in encoded
     assert json.loads(encoded)["powod"] == "Świeca zamknięta."
+    assert payload["reasons"] == ["Brak transakcji poza sesją."]
 
 
 def test_save_commits_warsaw_open_and_reads_json_with_polish_text(monkeypatch):
@@ -125,6 +127,54 @@ def test_database_connection_uses_utf8mb4(monkeypatch):
         }
     )._connect()
     assert connector.call_args.kwargs["charset"] == "utf8mb4"
+
+
+def test_load_context_uses_datetime_index_and_filters_future_local_rows(monkeypatch):
+    """Sortuje świece po UTC bez funkcji SQL na indeksowanej kolumnie czasu."""
+    storage, connections = _mock_storage(monkeypatch)
+    _, cursor = connections[0]
+    cursor.fetchall.return_value = [
+        {
+            "datetime": datetime(2026, 1, 5, 13, 30),
+            "utc_offset_minutes": 60,
+            "open": 155.4,
+            "high": 155.5,
+            "low": 155.3,
+            "close": 155.45,
+            "volume": 10,
+        },
+        {
+            "datetime": datetime(2026, 1, 5, 13, 0),
+            "utc_offset_minutes": 120,
+            "open": 155.3,
+            "high": 155.4,
+            "low": 155.2,
+            "close": 155.35,
+            "volume": 10,
+        },
+        {
+            "datetime": datetime(2026, 1, 5, 13, 0),
+            "utc_offset_minutes": 60,
+            "open": 155.4,
+            "high": 155.5,
+            "low": 155.3,
+            "close": 155.45,
+            "volume": 10,
+        },
+    ]
+    cutoff = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
+
+    candles = storage.load_context(cutoff, limit=2)
+
+    assert [candle["timestamp_utc"] for candle in candles] == [
+        datetime(2026, 1, 5, 11, 0, tzinfo=UTC),
+        datetime(2026, 1, 5, 12, 0, tzinfo=UTC),
+    ]
+    query, values = cursor.execute.call_args.args
+    assert "DATE_SUB" not in query
+    assert "`datetime` <= %s" in query
+    assert values[1] == datetime(2026, 1, 5, 14, 0)
+    assert values[-1] == 2 + config.CANDLE_QUERY_OVERFETCH
 
 
 def test_duplicate_is_rolled_back_without_confirming_a_save(monkeypatch):
@@ -272,3 +322,14 @@ def test_calibration_suggests_only_and_does_not_mutate_thresholds():
     suggestions = calibrate._suggestions(report)
     assert suggestions
     assert config.ATR_MIN_PIPS == 1.2
+
+
+def test_empty_database_run_once_returns_without_raising(caplog):
+    """Pusta baza kończy jednorazowe uruchomienie czytelnym kodem, bez wyjątku."""
+    storage = Mock()
+    storage.latest_candle_open_epoch.return_value = None
+
+    result = trigger.run_once(storage=storage)
+
+    assert result == 2
+    assert "nie zawiera świec" in caplog.text
