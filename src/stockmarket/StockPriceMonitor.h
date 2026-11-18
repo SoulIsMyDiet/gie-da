@@ -3,7 +3,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <chrono>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -100,6 +102,9 @@ private:
     SRWLOCK audioLock_ = SRWLOCK_INIT;
     std::vector<std::string> monitoredSymbols_;
     std::unordered_set<std::string> backfilledSymbols_;
+    // Ogranicza ponawianie backfillu niezależnie dla każdego instrumentu.
+    std::unordered_map<
+        std::string, std::chrono::steady_clock::time_point> backfillRetryAfter_;
     CandleData oneMinuteCandle_;
     std::string status_ = "Oczekiwanie na świecę 1-minutową...";
     std::string backfillStatus_ = "Sprawdzanie brakujących świec...";

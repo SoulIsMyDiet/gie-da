@@ -20,6 +20,8 @@ constexpr DWORD candleCloseBufferMs = 2000;
 constexpr DWORD notificationPollIntervalMs = 1000;
 constexpr DWORD notificationRetryInitialMs = 2000;
 constexpr DWORD notificationRetryMaximumMs = 30000;
+// Ogranicza ponawianie kosztownego backfillu po błędzie dostawcy danych.
+constexpr auto backfillRetryDelay = std::chrono::minutes(5);
 constexpr ULONGLONG fileTimeTicksPerSecond = 10000000ULL;
 constexpr ULONGLONG fileTimeTicksPerMinute = 60ULL * fileTimeTicksPerSecond;
 constexpr ULONGLONG windowsToUnixEpochTicks = 116444736000000000ULL;
@@ -568,6 +570,10 @@ void StockPriceMonitor::run() {
             symbol, productResult, productError);
         if (productSucceeded) {
             backfilledSymbols_.insert(symbol);
+            backfillRetryAfter_.erase(symbol);
+        } else {
+            backfillRetryAfter_[symbol] =
+                std::chrono::steady_clock::now() + backfillRetryDelay;
         }
         backfillResult.savedCandleCount += productResult.savedCandleCount;
         backfillResult.detectedGapCount += productResult.detectedGapCount;
@@ -763,32 +769,43 @@ void StockPriceMonitor::updateAdditionalProducts() {
     std::size_t savedSignalCount = 0;
     for (const std::string& symbol : openSymbols) {
         if (backfilledSymbols_.find(symbol) == backfilledSymbols_.end()) {
-            CandleBackfillResult backfillResult;
-            std::string backfillError;
-            const bool backfillSucceeded =
-                CandleBackfillClient::synchronize(
-                    symbol, backfillResult, backfillError);
-            if (!backfillSucceeded) {
-                if (!additionalStatus.empty()) {
-                    additionalStatus += " | ";
+            const auto retryAfter = backfillRetryAfter_.find(symbol);
+            const bool retryBackfill =
+                retryAfter == backfillRetryAfter_.end() ||
+                std::chrono::steady_clock::now() >= retryAfter->second;
+            if (retryBackfill) {
+                CandleBackfillResult backfillResult;
+                std::string backfillError;
+                const bool backfillSucceeded =
+                    CandleBackfillClient::synchronize(
+                        symbol, backfillResult, backfillError);
+                if (!backfillSucceeded) {
+                    backfillRetryAfter_[symbol] =
+                        std::chrono::steady_clock::now() +
+                        backfillRetryDelay;
+                    if (!additionalStatus.empty()) {
+                        additionalStatus += " | ";
+                    }
+                    additionalStatus += symbol +
+                        ": błąd uzupełniania historii: " + backfillError;
+                } else {
+                    backfilledSymbols_.insert(symbol);
+                    backfillRetryAfter_.erase(symbol);
+                    if (symbol == "EURUSD/USD" &&
+                        !backfillResult.latestCandle.datetime.empty()) {
+                        AcquireSRWLockExclusive(&statusLock_);
+                        oneMinuteCandle_ =
+                            std::move(backfillResult.latestCandle);
+                        ReleaseSRWLockExclusive(&statusLock_);
+                    }
+                    if (!additionalStatus.empty()) {
+                        additionalStatus += " | ";
+                    }
+                    additionalStatus += symbol +
+                        ": zakończono początkowe uzupełnianie historii.";
+                    continue;
                 }
-                additionalStatus += symbol +
-                    ": błąd uzupełniania historii: " + backfillError;
-                continue;
             }
-            backfilledSymbols_.insert(symbol);
-            if (symbol == "EURUSD/USD" &&
-                !backfillResult.latestCandle.datetime.empty()) {
-                AcquireSRWLockExclusive(&statusLock_);
-                oneMinuteCandle_ = std::move(backfillResult.latestCandle);
-                ReleaseSRWLockExclusive(&statusLock_);
-            }
-            if (!additionalStatus.empty()) {
-                additionalStatus += " | ";
-            }
-            additionalStatus += symbol +
-                ": zakończono początkowe uzupełnianie historii.";
-            continue;
         }
 
         if (symbol == "EURUSD/USD") {
@@ -845,9 +862,13 @@ void StockPriceMonitor::updateAdditionalProducts() {
             if (!CandleBackfillClient::synchronize(
                     symbol, backfillResult, backfillError)) {
                 backfilledSymbols_.erase(symbol);
+                backfillRetryAfter_[symbol] =
+                    std::chrono::steady_clock::now() + backfillRetryDelay;
                 additionalStatus +=
                     "; nie udało się ich uzupełnić: " + backfillError;
             } else {
+                backfilledSymbols_.insert(symbol);
+                backfillRetryAfter_.erase(symbol);
                 additionalStatus +=
                     "; brakujące świece zostały uzupełnione";
             }
