@@ -245,13 +245,30 @@ class StrategyTests(unittest.TestCase):
         result = {
             "signal": "NONE",
             "candle_open_epoch": 1,
+            "signal_parameters": {
+                "price": 17.0,
+                "signal": "NONE",
+                "timestamp": 1,
+                "instrument": "USDMXN",
+                "reason": "Warunki LONG ani SHORT nie zostały spełnione.",
+                "indicators": {"ema9": 17.0},
+            },
         }
         with patch.object(strategy_module, "SAVE_NONE_SIGNALS", False):
             self.assertFalse(storage.save(result, 100))
         repository.save_algorithm_signal.assert_called_once_with(
             "USD/MXN",
             "Chat-gpt6/USDMXN/USDMXNStrategyV1",
-            result,
+            {
+                **result,
+                "signal_parameters": {
+                    "price": 17.0,
+                    "signal": "NONE",
+                    "timestamp": 1,
+                    "instrument": "USDMXN",
+                    "reason": "Warunki LONG ani SHORT nie zostały spełnione.",
+                },
+            },
             100,
             record_evaluation=True,
             save_signal=False,

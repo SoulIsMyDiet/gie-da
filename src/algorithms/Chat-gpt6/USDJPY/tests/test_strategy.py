@@ -273,7 +273,7 @@ class USDJPYStrategyTests(unittest.TestCase):
             )
         calculate.assert_called_once()
 
-    def test_storage_persists_full_json_and_close_timestamp_for_repository(self) -> None:
+    def test_storage_persists_compact_json_and_close_timestamp_for_repository(self) -> None:
         candles = _candles("LONG")
         result = self.strategy.evaluate(
             candles,
@@ -287,9 +287,14 @@ class USDJPYStrategyTests(unittest.TestCase):
 
         saved_result = repository.save_algorithm_signal.call_args.args[2]
         self.assertEqual(
-            saved_result["signal_parameters"],
-            result["signal_parameters"],
+            set(saved_result["signal_parameters"]),
+            {"price", "signal", "timestamp", "instrument", "reason"},
         )
+        for field in ("price", "signal", "timestamp", "instrument", "reason"):
+            self.assertEqual(
+                saved_result["signal_parameters"][field],
+                result["signal_parameters"][field],
+            )
         self.assertEqual(
             saved_result["timestamp"],
             result["candle_close_time"],

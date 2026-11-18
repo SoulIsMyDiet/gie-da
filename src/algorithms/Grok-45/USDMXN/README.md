@@ -22,10 +22,12 @@ LONG wymaga EMA(5) > EMA(13), Close > EMA(5), RSI > 52 i rosnącego, Momentum(5)
 przejścia filtra ATR. SHORT stosuje odpowiednie warunki lustrzane: RSI < 48 i
 malejący, Momentum(5) < -0,08%, `Close < middle LUB (Close < upper i RSI > 35)`.
 
-Przy braku warunków wynik to `NONE`. JSON w `signal_parameters` zawiera sygnał,
-cenę, czas otwarcia jako Unix timestamp, wszystkie wartości wskaźników, progi,
-diagnostykę każdego warunku i dostępne dane świecy. Zakładany maksymalny czas
-utrzymania pozycji to 20 minut. Wynik funkcji również udostępnia
+Przy braku warunków wynik to `NONE`. Pełny wynik strategii zawiera sygnał, cenę,
+czas otwarcia jako Unix timestamp, wszystkie wartości wskaźników, progi,
+diagnostykę każdego warunku i dostępne dane świecy. Adapter zapisuje do
+`signals.signal_parameters` wyłącznie `price`, `signal`, `timestamp`,
+`instrument` i `reason`. Zakładany maksymalny czas utrzymania pozycji to
+20 minut. Wynik funkcji również udostępnia
 `timestamp` jako epokę UTC czasu otwarcia; pole `candle_close_time` jest
 pomocniczym czasem zamknięcia dla istniejącego zapisu API.
 

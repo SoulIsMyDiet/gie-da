@@ -30,13 +30,14 @@ przecięcia RSI14 z poziomu 50 w górę oraz zamknięcia ponad maksimum poprzedn
 
 Stop loss wynosi 1,2 ATR14 M1, take profit 1,5 odległości stop loss, a limit
 czasu utrzymania pozycji to 20 minut. Poziomy są orientacyjne i nie gwarantują
-ceny wykonania. JSON przechowuje pełne wskaźniki, OHLC, warunki obu kierunków,
-progi, parametry transakcji i przyczynę wyniku NONE.
+ceny wykonania. Wynik strategii zawiera pełne wskaźniki, OHLC, warunki obu
+kierunków, progi, parametry transakcji i przyczynę wyniku NONE.
 
 ## Zapis i uruchamianie
 
-API zapisuje pełny dokument JSON do `signals.signal_parameters`, a
-`source_timestamp` wskazuje epokę UTC otwarcia świecy M1. Tabela
+API zapisuje w `signals.signal_parameters` wyłącznie `price`, `signal`,
+`timestamp`, `instrument` i `reason`; pełna diagnostyka pozostaje w wyniku
+strategii, a `source_timestamp` wskazuje epokę UTC otwarcia świecy M1. Tabela
 `algorithm_evaluations` trwale zapisuje każdą ewaluację, również NONE pominięte
 w `signals`, więc restart API nie powoduje ponownej oceny tej samej świecy.
 Nowy rekord sygnału i oczekujące powiadomienie trafiają do bazy w jednej

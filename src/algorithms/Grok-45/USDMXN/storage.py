@@ -61,6 +61,9 @@ class USDMXNSignalStorage:
         repository_result = dict(result)
         repository_result.pop("candle_close_time")
         repository_result["timestamp"] = close_time
+        repository_result["signal_parameters"] = self._compact_signal_parameters(
+            result.get("signal_parameters")
+        )
         return self.repository.save_algorithm_signal(
             DATABASE_SYMBOL,
             STRATEGY_NAME,
@@ -70,3 +73,17 @@ class USDMXNSignalStorage:
             save_signal=should_save_signal(result),
             enqueue_notification=enqueue_notification,
         )
+
+    @staticmethod
+    def _compact_signal_parameters(payload: Any) -> dict[str, Any]:
+        """Zwraca tylko pola wymagane w tabeli ``signals``.
+
+        Raises:
+            ValueError: Gdy wynik strategii nie zawiera pełnego pakietu danych.
+        """
+        required_fields = ("price", "signal", "timestamp", "instrument", "reason")
+        if not isinstance(payload, dict) or any(
+            field not in payload for field in required_fields
+        ):
+            raise ValueError("Wynik Grok-45 USDMXN nie zawiera wymaganych pól JSON.")
+        return {field: payload[field] for field in required_fields}

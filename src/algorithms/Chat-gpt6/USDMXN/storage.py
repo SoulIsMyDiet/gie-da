@@ -55,12 +55,30 @@ class USDMXNSignalStorage:
         """
         if result.get("candle_open_epoch") is None:
             raise ValueError("Wynik USDMXN nie zawiera epoki otwarcia świecy.")
+        payload = result.get("signal_parameters")
+        compact_payload = self._compact_signal_parameters(payload)
+        repository_result = dict(result)
+        repository_result["signal_parameters"] = compact_payload
         return self.repository.save_algorithm_signal(
             DATABASE_SYMBOL,
             STRATEGY_NAME,
-            result,
+            repository_result,
             candles_count,
             record_evaluation=True,
             save_signal=should_save_signal(result),
             enqueue_notification=enqueue_notification,
         )
+
+    @staticmethod
+    def _compact_signal_parameters(payload: Any) -> dict[str, Any]:
+        """Zwraca tylko pola wymagane w tabeli ``signals``.
+
+        Raises:
+            ValueError: Gdy wynik strategii nie zawiera pełnego pakietu danych.
+        """
+        required_fields = ("price", "signal", "timestamp", "instrument", "reason")
+        if not isinstance(payload, dict) or any(
+            field not in payload for field in required_fields
+        ):
+            raise ValueError("Wynik USDMXN nie zawiera wymaganych pól JSON.")
+        return {field: payload[field] for field in required_fields}

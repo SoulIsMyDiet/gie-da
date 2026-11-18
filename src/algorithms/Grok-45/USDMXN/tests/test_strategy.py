@@ -252,7 +252,14 @@ def test_none_storage_flag_is_central_and_signal_name_is_independent() -> None:
         "timestamp": 1,
         "candle_close_time": "2026-01-01T00:01:00+01:00",
         "candle_open_epoch": 1,
-        "signal_parameters": {"signal": "NONE", "timestamp": 1},
+        "signal_parameters": {
+            "price": 17.0,
+            "signal": "NONE",
+            "timestamp": 1,
+            "instrument": "USDMXN",
+            "reason": "Warunki LONG ani SHORT nie zostały spełnione.",
+            "indicators": {"ema_fast": 17.0},
+        },
     }
     with patch.object(strategy_module, "SAVE_NONE_SIGNALS", False):
         assert storage.save(result, 100) is repository.save_algorithm_signal.return_value
@@ -263,7 +270,13 @@ def test_none_storage_flag_is_central_and_signal_name_is_independent() -> None:
             "signal": "NONE",
             "timestamp": result["candle_close_time"],
             "candle_open_epoch": 1,
-            "signal_parameters": {"signal": "NONE", "timestamp": 1},
+            "signal_parameters": {
+                "price": 17.0,
+                "signal": "NONE",
+                "timestamp": 1,
+                "instrument": "USDMXN",
+                "reason": "Warunki LONG ani SHORT nie zostały spełnione.",
+            },
         },
         100,
         record_evaluation=True,

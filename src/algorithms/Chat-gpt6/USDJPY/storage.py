@@ -38,7 +38,11 @@ class USDJPYSignalStorage:
         *,
         enqueue_notification: bool = True,
     ) -> bool:
-        """Zapisuje pełny JSON, pomijając rekord NONE po wyłączeniu flagi."""
+        """Zapisuje skrócony JSON, pomijając NONE po wyłączeniu flagi.
+
+        Raises:
+            ValueError: Gdy wynik nie zawiera wymaganych pól do zapisu.
+        """
         close_time = result.get("candle_close_time")
         open_epoch = result.get("candle_open_epoch")
         payload = result.get("signal_parameters")
@@ -52,6 +56,9 @@ class USDJPYSignalStorage:
 
         repository_result = dict(result)
         repository_result["timestamp"] = close_time
+        repository_result["signal_parameters"] = self._compact_signal_parameters(
+            payload
+        )
         direction = str(result.get("signal", "")).upper()
         return self.repository.save_algorithm_signal(
             str(result.get("database_symbol", "")),
@@ -62,3 +69,11 @@ class USDJPYSignalStorage:
             save_signal=direction != "NONE" or SAVE_NONE_SIGNALS,
             enqueue_notification=enqueue_notification,
         )
+
+    @staticmethod
+    def _compact_signal_parameters(payload: dict[str, Any]) -> dict[str, Any]:
+        """Zwraca tylko pola wymagane w tabeli ``signals``."""
+        required_fields = ("price", "signal", "timestamp", "instrument", "reason")
+        if any(field not in payload for field in required_fields):
+            raise ValueError("Wynik USDJPY nie zawiera wymaganych pól JSON.")
+        return {field: payload[field] for field in required_fields}
