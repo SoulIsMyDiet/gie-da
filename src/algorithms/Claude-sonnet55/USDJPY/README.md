@@ -113,8 +113,10 @@ Strategia używa istniejących kolumn `signals`: `datetime` przechowuje otwarcie
 `source_timestamp` otrzymują odpowiadające im dane. Epoka zamknięcia w
 `source_timestamp` i istniejący klucz unikalny `(product, algorithm_name,
 source_timestamp)` chronią przed duplikatami. Pozostałe wartości, m.in. setup,
-score, TP/SL, uzasadnienia i wskaźniki, trafiają płasko do `signal_parameters`.
-Nie jest potrzebna migracja tabeli.
+score, TP/SL i wskaźniki nie są zapisywane w `signal_parameters`; pole zawiera
+wyłącznie `price`, `signal`, `timestamp`, `instrument` i `reason`. Historia
+wybić rozpoznaje nowe wpisy po `reason` i nadal obsługuje starsze wpisy z kluczem
+`setup`. Nie jest potrzebna migracja tabeli.
 
 JSON jest serializowany z `ensure_ascii=False`, bez `NaN` i `inf`, a połączenie
 MySQL używa `utf8mb4`. Kolejność wymaganych kluczy jest zachowana w serializacji

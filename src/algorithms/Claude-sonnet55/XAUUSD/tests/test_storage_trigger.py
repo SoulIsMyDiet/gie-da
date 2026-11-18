@@ -56,18 +56,16 @@ def _mock_storage(monkeypatch):
 
 
 def test_payload_order_rounding_and_polish_utf8():
-    """Weryfikuje wymagany początek JSON, precyzję oraz polskie znaki."""
+    """Weryfikuje dokładny kształt JSON, precyzję oraz polski tekst."""
     payload = storage_module.build_signal_parameters(_result())
-    assert list(payload)[:12] == [
+    assert list(payload) == [
         "price", "signal", "timestamp", "instrument", "reason",
-        "setup", "score", "tp_price", "sl_price", "max_hold_minutes",
-        "candle_open_time", "blocked_by",
     ]
     assert payload["price"] == 4012.36
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
-    assert "Świeca zamknięta." in encoded
     assert "Zablokowano" in encoded
-    assert json.loads(encoded)["powod"] == "Świeca zamknięta."
+    assert "Świeca zamknięta." not in encoded
+    assert json.loads(encoded) == payload
 
 
 def test_save_commits_naive_warsaw_open_and_reads_json_back(monkeypatch):
@@ -85,7 +83,9 @@ def test_save_commits_naive_warsaw_open_and_reads_json_back(monkeypatch):
     serialized = values[6]
     stored = json.loads(serialized)
     assert stored["reason"] == "Zablokowano: brak warunków do transakcji."
-    assert stored["powod"] == "Świeca zamknięta."
+    assert list(stored) == [
+        "price", "signal", "timestamp", "instrument", "reason"
+    ]
     cursor.fetchone.return_value = (serialized,)
     assert storage.get_processed_signal(result["timestamp"]) == stored
     connection.commit.assert_called_once()
@@ -112,6 +112,31 @@ def test_signal_history_keeps_cross_midnight_cooldown_without_counting_yesterday
     }
     query = cursor.execute.call_args.args[0]
     assert "MAX(source_timestamp)" in query
+
+
+def test_signal_history_reads_range_breakout_from_compact_reason(monkeypatch):
+    """Rozpoznaje sygnał wybicia bez pola setup w kompaktowym JSON."""
+    storage, _, cursor = _mock_storage(monkeypatch)
+    instant = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
+    breakout_timestamp = int(datetime(2026, 1, 5, 11, 30, tzinfo=UTC).timestamp())
+    cursor.fetchall.return_value = [
+        (
+            breakout_timestamp,
+            json.dumps(
+                {
+                    "signal": "SHORT",
+                    "reason": (
+                        "Spełnione warunki setupu RANGE_BREAKOUT (SHORT): "
+                        "wybicie zakresu Azji."
+                    ),
+                }
+            ),
+        ),
+    ]
+
+    history = storage.signal_history(instant)
+
+    assert history["range_breakout_directions_today"] == ["SHORT"]
 
 
 def test_duplicate_is_rolled_back_and_not_reported_as_saved(monkeypatch):

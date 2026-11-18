@@ -25,10 +25,12 @@ Zwrócony przez API licznik nowych zapisów wykorzystuje istniejąca aplikacja
 Windows do odtworzenia dźwięku.
 
 Połączenie korzysta z istniejących zmiennych `MYSQL_HOST`, `MYSQL_PORT`,
-`MYSQL_DATABASE`, `MYSQL_USER` i `MYSQL_PASSWORD`. Wynik, setup, poziomy TP/SL
-oraz diagnostyka trafiają do `signals.signal_parameters` (JSON, UTF-8), a epoka
-zamknięcia świecy jest zapisywana w `source_timestamp`. Osobne kolumny dla setupu
-i poziomów TP/SL nie są używane.
+`MYSQL_DATABASE`, `MYSQL_USER` i `MYSQL_PASSWORD`. `signals.signal_parameters`
+zawiera wyłącznie `price`, `signal`, `timestamp`, `instrument` i `reason`.
+Setup, poziomy TP/SL i diagnostyka nie są serializowane w tym polu; historia
+wybić rozpoznaje nowe rekordy po treści `reason` i nadal obsługuje starszy format
+z kluczem `setup`. Epoka zamknięcia świecy jest zapisywana w `source_timestamp`.
+Osobne kolumny dla setupu i poziomów TP/SL nie są używane.
 Kolumna `signals.datetime` przechowuje naiwny czas otwarcia w Warszawie,
 zgodnie z `candles.datetime`; offset jest już zapisany w tabeli `candles`.
 

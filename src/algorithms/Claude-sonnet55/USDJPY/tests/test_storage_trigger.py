@@ -64,28 +64,20 @@ def _mock_storage(monkeypatch, connections=1):
 
 
 def test_payload_key_order_rounding_polish_and_valid_json():
-    """Sprawdza kolejność przed zapisem, trzy miejsca i polskie znaki UTF-8."""
+    """Sprawdza dokładny kształt JSON, zaokrąglenie i polski tekst."""
     payload = storage_module.build_signal_parameters(_result())
-    assert list(payload)[:12] == [
+    assert list(payload) == [
         "price",
         "signal",
         "timestamp",
         "instrument",
         "reason",
-        "setup",
-        "score",
-        "tp_price",
-        "sl_price",
-        "max_hold_minutes",
-        "candle_open_time",
-        "blocked_by",
     ]
     assert payload["price"] == 155.433
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     assert "Zablokowano" in encoded
-    assert "Świeca zamknięta." in encoded
-    assert json.loads(encoded)["powod"] == "Świeca zamknięta."
-    assert payload["reasons"] == ["Brak transakcji poza sesją."]
+    assert "Świeca zamknięta." not in encoded
+    assert json.loads(encoded) == payload
 
 
 def test_save_commits_warsaw_open_and_reads_json_with_polish_text(monkeypatch):
@@ -101,15 +93,47 @@ def test_save_commits_warsaw_open_and_reads_json_with_polish_text(monkeypatch):
     assert values[4] == config.STRATEGY_NAME
     assert values[5] == 120
     serialized = values[6]
-    assert "Świeca zamknięta." in serialized
+    stored = json.loads(serialized)
+    assert list(stored) == [
+        "price", "signal", "timestamp", "instrument", "reason"
+    ]
+    assert stored["reason"] == "Zablokowano: trwa przerwa."
     connection.commit.assert_called_once()
 
     read_connection, read_cursor = connections[1]
     read_cursor.fetchone.return_value = (serialized,)
-    assert storage.get_processed_signal(_result()["timestamp"])["powod"] == (
-        "Świeca zamknięta."
-    )
+    assert storage.get_processed_signal(_result()["timestamp"]) == stored
     read_connection.close.assert_called_once()
+
+
+def test_signal_history_reads_range_breakout_from_compact_reason(monkeypatch):
+    """Rozpoznaje kierunek wybicia bez dodatkowego klucza setup."""
+    storage, connections = _mock_storage(monkeypatch)
+    instant = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
+    breakout_timestamp = int(datetime(2026, 1, 5, 11, 30, tzinfo=UTC).timestamp())
+    _, cursor = connections[0]
+    cursor.fetchall.return_value = [
+        (
+            breakout_timestamp,
+            json.dumps(
+                {
+                    "signal": "SHORT",
+                    "reason": (
+                        "Spełnione warunki setupu RANGE_BREAKOUT (SHORT): "
+                        "wybicie zakresu tokijskiego."
+                    ),
+                }
+            ),
+        ),
+    ]
+
+    history = storage.signal_history(instant)
+
+    assert history == {
+        "last_signal_epoch": breakout_timestamp,
+        "signals_today": 1,
+        "range_breakout_directions_today": ["SHORT"],
+    }
 
 
 def test_database_connection_uses_utf8mb4(monkeypatch):

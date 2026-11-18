@@ -62,19 +62,6 @@ def _database_settings() -> dict[str, Any]:
     }
 
 
-def _json_value(value: Any) -> Any:
-    """Przygotowuje płaskie dane do JSON i zastępuje NaN oraz inf wartością null."""
-    if isinstance(value, dict):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    if isinstance(value, float):
-        return value if value == value and abs(value) != float("inf") else None
-    if hasattr(value, "item"):
-        return _json_value(value.item())
-    return value
-
-
 def _round_price(value: Any) -> float:
     """Zaokrągla cenę do skali projektu, zgodnie z regułą połowy w górę."""
     quantum = Decimal(1).scaleb(-config.PRICE_DECIMALS)
@@ -82,43 +69,29 @@ def _round_price(value: Any) -> float:
 
 
 def build_signal_parameters(result: dict[str, Any]) -> dict[str, Any]:
-    """Buduje uporządkowany, płaski dokument JSON dla signals.signal_parameters."""
+    """Buduje JSON z pięcioma polami wymaganymi w signals.signal_parameters."""
     required = ("price", "signal", "timestamp", "candle_open_time", "reason")
     if any(key not in result for key in required):
         raise ValueError("Wynik nie zawiera wszystkich wymaganych pól sygnału.")
-    params = result.get("params")
-    if not isinstance(params, dict):
+    if not isinstance(result.get("params"), dict):
         raise ValueError("Wynik strategii nie zawiera słownika params.")
-    payload = {
+    return {
         "price": _round_price(result["price"]),
         "signal": str(result["signal"]).upper(),
         "timestamp": int(result["timestamp"]),
         "instrument": config.INSTRUMENT_PARAMS_NAME,
         "reason": str(result["reason"]),
-        "setup": result.get("setup"),
-        "score": int(result.get("score", 0)),
-        "tp_price": (
-            _round_price(result["tp_price"])
-            if result.get("tp_price") is not None
-            else None
-        ),
-        "sl_price": (
-            _round_price(result["sl_price"])
-            if result.get("sl_price") is not None
-            else None
-        ),
-        "max_hold_minutes": int(result["max_hold_minutes"]),
-        "candle_open_time": str(result["candle_open_time"]),
-        "blocked_by": list(result.get("blocked_by", [])),
-        "reasons": list(result.get("reasons", [])),
     }
-    for key, value in params.items():
-        if key in payload:
-            raise ValueError(f"Parametr {key} powtarza klucz wyniku.")
-        if isinstance(value, (dict, list, tuple)):
-            raise ValueError(f"Parametr {key} musi być wartością płaską.")
-        payload[key] = _json_value(value)
-    return payload
+
+
+def _is_range_breakout_signal(payload: dict[str, Any]) -> bool:
+    """Rozpoznaje wybicie w nowych i starszych zapisach sygnałów."""
+    if payload.get("setup") == "RANGE_BREAKOUT":
+        return True
+    reason = payload.get("reason")
+    return isinstance(reason, str) and reason.startswith(
+        "Spełnione warunki setupu RANGE_BREAKOUT ("
+    )
 
 
 def _decode_json(value: Any) -> dict[str, Any]:
@@ -328,7 +301,7 @@ class USDJPYStorage:
                 if start_epoch <= int(source_timestamp) < end_epoch:
                     today_count += 1
                     payload = _decode_json(serialized)
-                    if payload.get("setup") == "RANGE_BREAKOUT":
+                    if _is_range_breakout_signal(payload):
                         breakout_directions.append(payload.get("signal"))
             return {
                 "last_signal_epoch": int(rows[0][0]) if rows else None,
