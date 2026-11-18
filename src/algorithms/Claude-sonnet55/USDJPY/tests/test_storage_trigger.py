@@ -73,7 +73,7 @@ def test_payload_key_order_rounding_polish_and_valid_json():
         "instrument",
         "reason",
     ]
-    assert payload["price"] == 155.433
+    assert payload["price"] == 155.4327
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     assert "Zablokowano" in encoded
     assert "Świeca zamknięta." not in encoded
@@ -89,7 +89,7 @@ def test_save_commits_warsaw_close_and_reads_json_with_polish_text(monkeypatch):
     assert "INSERT INTO signals" in query
     assert values[0] == datetime(2026, 1, 5, 22, 1)
     assert values[1] == "USD/JPY"
-    assert values[2] == Decimal("155.433")
+    assert values[2] == Decimal("155.43270")
     assert values[4] == config.STRATEGY_NAME
     assert values[5] == 120
     serialized = values[6]

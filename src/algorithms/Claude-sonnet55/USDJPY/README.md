@@ -95,9 +95,9 @@ i `range_spike_ratio`; nie jest to potwierdzenie interwencji MoF.
 
 Sygnał wymaga wyniku co najmniej 70 punktów. ATR, jego relacja do mediany,
 wolumen tickowy, luki, cooldowny, limit dzienny i skok zakresu są filtrami
-konfigurowalnymi. Pip wynosi `0.01`; ceny oraz poziomy TP/SL są zaokrąglane do
-3 miejsc, a wskaźniki do 5. TP bazuje na 2 ATR, SL na 1.5 ATR, a pozycja nie
-może trwać dłużej niż 20 minut.
+konfigurowalnymi. Pip wynosi `0.01`; cena zapisywanego sygnału jest zaokrąglana
+do 5 miejsc, poziomy TP/SL do 3, a wskaźniki do 5. TP bazuje na 2 ATR, SL na
+1.5 ATR, a pozycja nie może trwać dłużej niż 20 minut.
 
 Pętla analizuje każdą nową zamkniętą świecę i czeka maksymalnie 20 sekund na
 jej zapis. Brakującą minutę loguje i pomija; nie generuje dla niej sygnału na

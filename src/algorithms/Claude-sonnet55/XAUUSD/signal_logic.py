@@ -56,6 +56,7 @@ from config import (
     PULLBACK_RSI_SHORT_HIGH,
     PULLBACK_RSI_SHORT_LOW,
     PRICE_DECIMALS,
+    SIGNAL_PRICE_DECIMALS,
     PRE_BREAK_BUFFER_MIN,
     MARKET_CLOSE_ET,
     RANGE_BREAKOUT_BODY_RATIO_MIN,
@@ -774,7 +775,7 @@ def generate_signal(
         reasons.extend(selected["bonuses"])
     result = {
         "instrument": INSTRUMENT_NAME,
-        "price": round(float(latest["close"]), PRICE_DECIMALS),
+        "price": round(float(latest["close"]), SIGNAL_PRICE_DECIMALS),
         "timestamp": close_epoch,
         "candle_open_time": opened.astimezone(WARSAW).isoformat(),
         "signal": direction,

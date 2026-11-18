@@ -47,6 +47,7 @@ def test_configuration_matches_confirmed_usdjpy_settings():
     assert config.INSTRUMENT_NAME == "USDJPY"
     assert config.INSTRUMENT_PARAMS_NAME == "USD/JPY"
     assert config.PRICE_DECIMALS == 3
+    assert config.SIGNAL_PRICE_DECIMALS == 5
     assert config.PIP_SIZE == 0.01
     assert config.ASSUMED_COST_PIPS == 0.8
     assert config.SAVE_NONE_SIGNALS is True
@@ -300,6 +301,9 @@ def test_qualified_setup_returns_long_levels_and_polish_reason(monkeypatch):
     assert result["signal"] == "LONG"
     assert result["setup"] == "TREND_PULLBACK"
     assert result["score"] == 80
+    assert result["price"] == pytest.approx(
+        round(candles[-1]["close"], config.SIGNAL_PRICE_DECIMALS)
+    )
     assert result["tp_price"] > result["price"]
     assert result["sl_price"] < result["price"]
     assert result["reason"].startswith("Spełnione warunki setupu")

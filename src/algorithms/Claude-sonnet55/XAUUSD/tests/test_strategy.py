@@ -50,6 +50,7 @@ def test_configuration_matches_storage_contract():
     assert config.INSTRUMENT_PARAMS_NAME == "XAU/USD"
     assert config.STRATEGY_NAME == "Claude-sonnet55/XAUUSDStrategyV1"
     assert config.PRICE_DECIMALS == 2
+    assert config.SIGNAL_PRICE_DECIMALS == 5
     assert config.ASSUMED_COST_USD == 0.40
     assert config.SAVE_NONE_SIGNALS is True
     assert config.BEEP_ENABLED is True
@@ -159,6 +160,7 @@ def test_result_is_json_safe_closed_and_contains_diagnostics():
     decoded = json.loads(encoded)
     assert decoded["instrument"] == "XAUUSD"
     assert decoded["signal"] == "NONE"
+    assert decoded["price"] == round(rows[-1]["close"], config.SIGNAL_PRICE_DECIMALS)
     assert decoded["timestamp"] == int(now.timestamp())
     assert decoded["candle_open_time"].endswith("+01:00")
     assert "atr14_usd" in decoded["params"]

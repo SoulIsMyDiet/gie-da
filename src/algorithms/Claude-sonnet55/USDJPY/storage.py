@@ -64,7 +64,7 @@ def _database_settings() -> dict[str, Any]:
 
 def _round_price(value: Any) -> float:
     """Zaokrągla cenę do skali projektu, zgodnie z regułą połowy w górę."""
-    quantum = Decimal(1).scaleb(-config.PRICE_DECIMALS)
+    quantum = Decimal(1).scaleb(-config.SIGNAL_PRICE_DECIMALS)
     return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP))
 
 
@@ -338,7 +338,7 @@ class USDJPYStorage:
             raise ValueError("Liczba świec musi być dodatnią liczbą całkowitą.")
         try:
             price = Decimal(str(result["price"])).quantize(
-                Decimal(1).scaleb(-config.PRICE_DECIMALS),
+                Decimal(1).scaleb(-config.SIGNAL_PRICE_DECIMALS),
                 rounding=ROUND_HALF_UP,
             )
             if not price.is_finite() or price <= 0:

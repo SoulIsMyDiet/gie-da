@@ -88,9 +88,11 @@ def _rounded(value: Any, decimals: int = config.INDICATOR_DECIMALS) -> float | N
     return round(number, decimals) if number is not None else None
 
 
-def _round_price(value: float) -> float:
-    """Zaokrągla cenę tak samo jak zapis MySQL, połową w górę."""
-    quantum = Decimal(1).scaleb(-config.PRICE_DECIMALS)
+def _round_price(
+    value: float, decimals: int = config.PRICE_DECIMALS
+) -> float:
+    """Zaokrągla cenę podaną liczbę miejsc, zawsze połową w górę."""
+    quantum = Decimal(1).scaleb(-decimals)
     return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP))
 
 
@@ -911,7 +913,9 @@ def generate_signal(
     local_open = opened.astimezone(WARSAW)
     output = {
         "instrument": config.INSTRUMENT_NAME,
-        "price": _round_price(float(current["close"])),
+        "price": _round_price(
+            float(current["close"]), config.SIGNAL_PRICE_DECIMALS
+        ),
         "timestamp": close_epoch,
         "candle_open_time": local_open.isoformat(),
         "signal": direction,

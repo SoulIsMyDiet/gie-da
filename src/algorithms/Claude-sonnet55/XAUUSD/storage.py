@@ -32,7 +32,7 @@ def build_signal_parameters(result: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(result.get("params"), dict):
         raise ValueError("Wynik strategii nie zawiera słownika params.")
     return {
-        "price": round(float(result["price"]), config.PRICE_DECIMALS),
+        "price": round(float(result["price"]), config.SIGNAL_PRICE_DECIMALS),
         "signal": str(result["signal"]).upper(),
         "timestamp": int(result["timestamp"]),
         "instrument": config.INSTRUMENT_PARAMS_NAME,
@@ -255,7 +255,8 @@ class XAUUSDStorage:
             raise ValueError("Liczba świec musi być dodatnią liczbą całkowitą.")
         try:
             price = Decimal(str(result["price"])).quantize(
-                Decimal(1).scaleb(-config.PRICE_DECIMALS), rounding=ROUND_HALF_UP
+                Decimal(1).scaleb(-config.SIGNAL_PRICE_DECIMALS),
+                rounding=ROUND_HALF_UP,
             )
             if not price.is_finite() or price <= 0:
                 raise ValueError("Cena musi być dodatnia i skończona.")

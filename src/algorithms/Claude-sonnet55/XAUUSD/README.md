@@ -2,7 +2,8 @@
 
 Strategia analizuje wyłącznie zamknięte świece M1 z tabeli `candles`.
 Nie składa zleceń. Wyliczone TP, SL i cena są propozycją, a nie gwarantowaną
-ceną wykonania.
+ceną wykonania. Cena zapisywanego sygnału jest zaokrąglana do 5 miejsc po
+przecinku, a poziomy TP/SL do 2.
 
 ## Integracja i uruchamianie
 
