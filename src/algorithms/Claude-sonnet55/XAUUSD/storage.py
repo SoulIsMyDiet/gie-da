@@ -260,11 +260,12 @@ class XAUUSDStorage:
             if not price.is_finite() or price <= 0:
                 raise ValueError("Cena musi być dodatnia i skończona.")
             opened = utc_time(datetime.fromisoformat(result["candle_open_time"]))
+            closed = opened + timedelta(minutes=1)
             closed_epoch = int(result["timestamp"])
             if (
                 opened.second
                 or opened.microsecond
-                or closed_epoch != int((opened + timedelta(minutes=1)).timestamp())
+                or closed_epoch != int(closed.timestamp())
             ):
                 raise ValueError("Czas świecy nie odpowiada zamkniętej minucie.")
         except (KeyError, TypeError, InvalidOperation, OverflowError) as error:
@@ -286,7 +287,7 @@ class XAUUSDStorage:
                         signal_parameters, source_timestamp)
                        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)""",
                     (
-                        opened.astimezone(WARSAW).replace(tzinfo=None),
+                        closed.astimezone(WARSAW).replace(tzinfo=None),
                         config.DB_SYMBOL,
                         price,
                         signal.lower(),

@@ -347,12 +347,12 @@ class USDJPYStorage:
             if opened.tzinfo is None or opened.utcoffset() is None:
                 raise ValueError("Czas otwarcia świecy musi zawierać strefę.")
             opened = opened.astimezone(UTC)
+            closed = opened + timedelta(seconds=config.CANDLE_DURATION_SECONDS)
             closed_epoch = int(result["timestamp"])
             if (
                 opened.second
                 or opened.microsecond
-                or closed_epoch
-                != int((opened + timedelta(seconds=config.CANDLE_DURATION_SECONDS)).timestamp())
+                or closed_epoch != int(closed.timestamp())
             ):
                 raise ValueError("Czas wyniku nie odpowiada zamkniętej świecy M1.")
         except (KeyError, TypeError, InvalidOperation, OverflowError) as error:
@@ -378,7 +378,7 @@ class USDJPYStorage:
                         signal_parameters, source_timestamp)
                        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)""",
                     (
-                        opened.astimezone(WARSAW).replace(tzinfo=None),
+                        closed.astimezone(WARSAW).replace(tzinfo=None),
                         config.DB_SYMBOL,
                         price,
                         signal.lower(),

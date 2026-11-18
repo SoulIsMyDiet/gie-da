@@ -31,8 +31,8 @@ Setup, poziomy TP/SL i diagnostyka nie są serializowane w tym polu; historia
 wybić rozpoznaje nowe rekordy po treści `reason` i nadal obsługuje starszy format
 z kluczem `setup`. Epoka zamknięcia świecy jest zapisywana w `source_timestamp`.
 Osobne kolumny dla setupu i poziomów TP/SL nie są używane.
-Kolumna `signals.datetime` przechowuje naiwny czas otwarcia w Warszawie,
-zgodnie z `candles.datetime`; offset jest już zapisany w tabeli `candles`.
+Kolumna `signals.datetime` przechowuje naiwny czas zamknięcia świecy
+w Warszawie. W odróżnieniu od niej `candles.datetime` oznacza czas otwarcia.
 
 ## Czas i harmonogram
 

@@ -68,14 +68,14 @@ def test_payload_order_rounding_and_polish_utf8():
     assert json.loads(encoded) == payload
 
 
-def test_save_commits_naive_warsaw_open_and_reads_json_back(monkeypatch):
+def test_save_commits_naive_warsaw_close_and_reads_json_back(monkeypatch):
     """Zapisuje sygnał transakcyjnie i odczytuje JSON z polskimi znakami."""
     storage, connection, cursor = _mock_storage(monkeypatch)
     result = _result()
     assert storage.save_signal(result, 120)
     query, values = cursor.execute.call_args.args
     assert "INSERT INTO signals" in query
-    assert values[0] == datetime(2026, 1, 5, 11, 0)
+    assert values[0] == datetime(2026, 1, 5, 11, 1)
     assert values[1] == "XAU/USD"
     assert values[2] == Decimal("4012.36")
     assert values[4] == config.STRATEGY_NAME

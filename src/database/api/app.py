@@ -1471,8 +1471,11 @@ class MarketDataRepository:
 
     @staticmethod
     def _insert_signal(cursor: mysql.connector.cursor.MySQLCursor, signal: Signal) -> None:
-        """Dodaje sygnał do bieżącej transakcji wraz z jego pakietem JSON."""
+        """Zapisuje sygnał z czasem zamknięcia świecy i jego pakietem JSON."""
         signal_payload = signal.to_payload()
+        local_signal_time = signal.timestamp.astimezone(
+            WARSAW_TIME_ZONE
+        ).replace(tzinfo=None)
         cursor.execute(
             """
             INSERT INTO signals
@@ -1481,7 +1484,7 @@ class MarketDataRepository:
             VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s)
             """,
             (
-                datetime.now(WARSAW_TIME_ZONE).replace(tzinfo=None),
+                local_signal_time,
                 "EURUSD/USD",
                 Decimal(str(signal_payload["price"])),
                 signal.direction.lower(),
@@ -1513,14 +1516,15 @@ class MarketDataRepository:
         signal_timestamp = datetime.fromtimestamp(
             signal.timestamp, timezone.utc
         )
-        local_signal_time = signal_timestamp.astimezone(
+        close_timestamp = signal_timestamp + timedelta(minutes=1)
+        local_signal_time = close_timestamp.astimezone(
             WARSAW_TIME_ZONE
         ).replace(tzinfo=None)
         signal_parameters = json.dumps(
             {
                 "instrument": signal.instrument,
                 "price": float(signal.price),
-                "timestamp": signal.timestamp,
+                "timestamp": int(close_timestamp.timestamp()),
                 "signal": signal.signal,
                 "parameters": signal.parameters,
             },

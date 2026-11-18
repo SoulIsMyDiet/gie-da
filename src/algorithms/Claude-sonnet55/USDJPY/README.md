@@ -107,7 +107,7 @@ pętla nie analizuje świec.
 
 ## Zapis i kodowanie
 
-Strategia używa istniejących kolumn `signals`: `datetime` przechowuje otwarcie
+Strategia używa istniejących kolumn `signals`: `datetime` przechowuje zamknięcie
 świecy w naiwnym czasie Warszawy, `product` ma wartość `USD/JPY`, `price`,
 `signal`, `algorithm_name`, `candles_count`, `signal_parameters` i
 `source_timestamp` otrzymują odpowiadające im dane. Epoka zamknięcia w
