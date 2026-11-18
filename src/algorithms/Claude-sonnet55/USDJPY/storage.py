@@ -21,10 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 def _read_project_environment() -> dict[str, str]:
-    """Odczytuje wyłącznie ustawienia MYSQL_* z lokalnego pliku .env."""
-    env_path = Path(__file__).resolve().parents[4] / ".env"
+    """Odczytuje MYSQL_* z najbliższego pliku .env, jeśli plik istnieje."""
     values = {}
-    if not env_path.is_file():
+    env_path = next(
+        (
+            parent / ".env"
+            for parent in Path(__file__).resolve().parents
+            if (parent / ".env").is_file()
+        ),
+        None,
+    )
+    if env_path is None:
         return values
     for line in env_path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()

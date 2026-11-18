@@ -183,7 +183,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
         state.grok45_usdmxn_storage.save.assert_called_once()
 
     def test_batch_saves_closed_usd_fx_candles_and_evaluates_strategies(self) -> None:
-        """Paczka świec uruchamia USD/MXN i USD/JPY bez dźwięków historycznych."""
+        """Paczka ocenia niezależne strategie USD/JPY bez dźwięków historycznych."""
         opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=2)
         usd_mxn = live_candle(opened)
         usd_jpy = CandleRecord(
@@ -221,10 +221,20 @@ class USDMXNIntegrationTests(unittest.TestCase):
         request = create_request(state)
         batch = CandleBatch(candles=[usd_mxn, usd_jpy])
 
-        with patch("app.is_monitored_product", return_value=True):
+        with patch("app.is_monitored_product", return_value=True), patch(
+            "app._run_claude_usdjpy_batch",
+            return_value=[
+                {
+                    "candle_open_epoch": int(opened.timestamp()),
+                    "signal": "NONE",
+                    "saved": True,
+                }
+            ],
+        ) as claude_usdjpy:
             response = save_candle_batch(batch, request)
 
         self.assertEqual(response.status_code, 200)
+        claude_usdjpy.assert_called_once_with([opened])
         state.usdmxn_strategy.evaluate.assert_called_once()
         state.grok45_usdmxn_strategy.evaluate.assert_called_once()
         state.usdjpy_strategy.evaluate.assert_called_once()

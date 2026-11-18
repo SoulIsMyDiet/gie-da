@@ -129,6 +129,43 @@ def test_database_connection_uses_utf8mb4(monkeypatch):
     assert connector.call_args.kwargs["charset"] == "utf8mb4"
 
 
+def test_environment_reader_handles_container_path_without_env_file(
+    tmp_path, monkeypatch
+):
+    """Brak pliku .env w kontenerze nie blokuje ustawień ze zmiennych środowiska."""
+    algorithm_directory = tmp_path / "app" / "claude_usdjpy_algorithm"
+    algorithm_directory.mkdir(parents=True)
+    monkeypatch.setattr(
+        storage_module,
+        "__file__",
+        str(algorithm_directory / "storage.py"),
+    )
+
+    assert storage_module._read_project_environment() == {}
+
+
+def test_environment_reader_uses_nearest_project_env(tmp_path, monkeypatch):
+    """Odczytuje ustawienia MYSQL wyłącznie z pliku projektu."""
+    project_directory = tmp_path / "project"
+    algorithm_directory = (
+        project_directory / "src" / "algorithms" / "Claude-sonnet55" / "USDJPY"
+    )
+    algorithm_directory.mkdir(parents=True)
+    (project_directory / ".env").write_text(
+        "MYSQL_HOST=db.local\nOTHER_SETTING=ignored\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        storage_module,
+        "__file__",
+        str(algorithm_directory / "storage.py"),
+    )
+
+    assert storage_module._read_project_environment() == {
+        "MYSQL_HOST": "db.local"
+    }
+
+
 def test_load_context_uses_datetime_index_and_filters_future_local_rows(monkeypatch):
     """Sortuje świece po UTC bez funkcji SQL na indeksowanej kolumnie czasu."""
     storage, connections = _mock_storage(monkeypatch)
@@ -310,6 +347,34 @@ def test_loop_logs_and_skips_a_missing_minute(tmp_path, monkeypatch):
     ) == opened_epoch
 
 
+def test_loop_does_not_play_sound_for_saved_none(tmp_path, monkeypatch):
+    """Zapisany NONE przesuwa kursor pętli bez dźwięku."""
+    opened_epoch = int(OPENED.timestamp())
+    storage = Mock()
+    storage.latest_processed_close_epoch.return_value = None
+    storage.latest_candle_open_epoch.return_value = opened_epoch
+    storage.has_candle.side_effect = [True, False]
+    stop_event = Event()
+    monkeypatch.setattr(
+        trigger,
+        "analyze_candle",
+        Mock(return_value=(_result("NONE"), True)),
+    )
+    beep = Mock()
+    monkeypatch.setattr(trigger, "play_signal_beep", beep)
+
+    trigger.run_loop(
+        storage=storage,
+        stop_event=stop_event,
+        state_path=tmp_path / "loop-state.json",
+        now_provider=lambda: OPENED + timedelta(minutes=2),
+        wait=lambda _seconds: stop_event.set(),
+    )
+
+    beep.assert_not_called()
+    assert storage.has_candle.call_count == 2
+
+
 def test_calibration_suggests_only_and_does_not_mutate_thresholds():
     """Kalibracja nie zmienia ręcznie zatwierdzanych parametrów."""
     report = {
@@ -333,3 +398,67 @@ def test_empty_database_run_once_returns_without_raising(caplog):
 
     assert result == 2
     assert "nie zawiera świec" in caplog.text
+
+
+@pytest.mark.parametrize("beep_enabled,expected_code", [(True, 0), (False, 4)])
+def test_api_mode_saves_none_without_playing_sound(
+    monkeypatch, capsys, beep_enabled, expected_code
+):
+    """Tryb API zapisuje NONE bez lokalnego dźwięku i zachowuje kod statusu."""
+    opened_epoch = int(OPENED.timestamp())
+    generated = _result("NONE")
+    storage = Mock()
+    monkeypatch.setattr(trigger, "USDJPYStorage", lambda: storage)
+    monkeypatch.setattr(
+        trigger,
+        "analyze_candle",
+        Mock(return_value=(generated, True)),
+    )
+    beep = Mock()
+    monkeypatch.setattr(trigger, "play_signal_beep", beep)
+    monkeypatch.setattr(config, "BEEP_ENABLED", beep_enabled)
+
+    result = trigger.main(
+        ["--api-candle-open-epoch", str(opened_epoch)]
+    )
+
+    assert result == expected_code
+    beep.assert_not_called()
+    assert json.loads(capsys.readouterr().out)["signal"] == "NONE"
+
+
+def test_api_batch_keeps_results_and_reports_partial_failure(
+    monkeypatch, capsys
+):
+    """Tryb API dla paczki zachowuje wynikowe wpisy i zgłasza częściową awarię."""
+    batch_results = [
+        {
+            "candle_open_epoch": int(OPENED.timestamp()),
+            "signal": "NONE",
+            "saved": True,
+        },
+        {
+            "candle_open_epoch": int(
+                (OPENED + timedelta(minutes=1)).timestamp()
+            ),
+            "error": True,
+        },
+    ]
+    monkeypatch.setattr(trigger, "USDJPYStorage", Mock())
+    monkeypatch.setattr(
+        trigger, "_analyze_api_batch", Mock(return_value=batch_results)
+    )
+    beep = Mock()
+    monkeypatch.setattr(trigger, "play_signal_beep", beep)
+
+    result = trigger.main(
+        [
+            "--api-candle-open-epochs",
+            str(int(OPENED.timestamp())),
+            str(int((OPENED + timedelta(minutes=1)).timestamp())),
+        ]
+    )
+
+    assert result == 5
+    beep.assert_not_called()
+    assert json.loads(capsys.readouterr().out) == {"results": batch_results}

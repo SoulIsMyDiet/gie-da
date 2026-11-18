@@ -63,6 +63,35 @@ def analyze_candle(
     return result, storage.save_signal(result, len(candles))
 
 
+def _analyze_api_batch(
+    storage: USDJPYStorage,
+    candle_open_epochs: list[int],
+    now: datetime,
+) -> list[dict[str, object]]:
+    """Analizuje zamknięte świece z paczki, izolując błędy poszczególnych minut."""
+    results = []
+    for candle_open_epoch in candle_open_epochs:
+        opened = datetime.fromtimestamp(candle_open_epoch, UTC)
+        try:
+            result, saved = analyze_candle(storage, opened, now)
+            results.append(
+                {
+                    "candle_open_epoch": candle_open_epoch,
+                    "signal": result["signal"],
+                    "saved": saved,
+                }
+            )
+        except (mysql.connector.Error, ValueError):
+            logger.exception(
+                "Nie udało się przeanalizować świecy USD/JPY %s z paczki.",
+                opened.isoformat(),
+            )
+            results.append(
+                {"candle_open_epoch": candle_open_epoch, "error": True}
+            )
+    return results
+
+
 def _initial_cursor(storage: USDJPYStorage, state_path: Path) -> int | None:
     """Wznawia pracę z najpóźniejszego wiarygodnego stanu lokalnego lub bazy."""
     state_cursor = read_loop_state(state_path)
@@ -145,7 +174,11 @@ def run_loop(
                 continue
             if storage.has_candle(next_open_epoch):
                 result, saved = analyze_candle(storage, next_open, now)
-                if saved and config.BEEP_ENABLED:
+                if (
+                    saved
+                    and result["signal"] in {"LONG", "SHORT"}
+                    and config.BEEP_ENABLED
+                ):
                     play_signal_beep()
                 logger.info(
                     "Przetworzono USD/JPY %s: %s (%s).",
@@ -211,7 +244,7 @@ def run_once(
         json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
         flush=True,
     )
-    if saved and config.BEEP_ENABLED:
+    if saved and result["signal"] in {"LONG", "SHORT"} and config.BEEP_ENABLED:
         play_signal_beep()
     return 0 if saved else 3
 
@@ -225,18 +258,46 @@ class _ArgumentParser(argparse.ArgumentParser):
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Uruchamia pętlę, analizę pojedynczą albo świecę wskazaną epoką."""
+    """Uruchamia pętlę, analizę pojedynczą albo tryb integracji API."""
     parser = _ArgumentParser(description="Strategia mikrotransakcji USD/JPY.")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--loop", action="store_true")
     group.add_argument("--candle-open-epoch", type=int)
+    group.add_argument("--api-candle-open-epoch", type=int)
+    group.add_argument("--api-candle-open-epochs", nargs="+", type=int)
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
     try:
         args = parser.parse_args(argv)
-        if args.candle_open_epoch is None:
+        if args.api_candle_open_epochs is not None:
+            batch_results = _analyze_api_batch(
+                USDJPYStorage(),
+                args.api_candle_open_epochs,
+                datetime.now(UTC),
+            )
+            print(
+                json.dumps(
+                    {"results": batch_results},
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
+            if any("error" in item for item in batch_results):
+                return 5
+            if not any(item["saved"] for item in batch_results):
+                return 3
+            return 0 if config.BEEP_ENABLED else 4
+        api_mode = args.api_candle_open_epoch is not None
+        candle_open_epoch = (
+            args.api_candle_open_epoch
+            if api_mode
+            else args.candle_open_epoch
+        )
+        if candle_open_epoch is None:
             run_loop()
             return 0
-        opened = datetime.fromtimestamp(args.candle_open_epoch, UTC)
+        opened = datetime.fromtimestamp(candle_open_epoch, UTC)
         result, saved = analyze_candle(USDJPYStorage(), opened)
         print(
             json.dumps(
@@ -247,8 +308,15 @@ def main(argv: list[str] | None = None) -> int:
             ),
             flush=True,
         )
-        if saved and config.BEEP_ENABLED:
+        if (
+            saved
+            and result["signal"] in {"LONG", "SHORT"}
+            and config.BEEP_ENABLED
+            and not api_mode
+        ):
             play_signal_beep()
+        if api_mode and saved:
+            return 0 if config.BEEP_ENABLED else 4
         return 0 if saved else 3
     except KeyboardInterrupt:
         logger.info("Pętla strategii USD/JPY została zatrzymana.")

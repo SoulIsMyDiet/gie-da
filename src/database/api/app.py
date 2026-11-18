@@ -235,6 +235,10 @@ class XAUUSDStrategyError(RuntimeError):
     """Sygnalizuje błąd analizy XAUUSD po zapisaniu świecy."""
 
 
+class ClaudeUSDJPYStrategyError(RuntimeError):
+    """Sygnalizuje błąd procesu strategii Claude USD/JPY."""
+
+
 def _saved_xauusd_signal(
     completed: subprocess.CompletedProcess[str],
     strategy_name: str,
@@ -371,6 +375,182 @@ def _run_claude_xauusd_strategy(
     return _saved_xauusd_signal(
         completed, "Claude-sonnet55/XAUUSDStrategyV1", candle_open_time
     )
+
+
+def _run_claude_usdjpy_strategy(
+    candle_open_time: datetime,
+) -> tuple[str, bool] | None:
+    """Uruchamia Claude USD/JPY dla zamkniętej świecy przez tryb API.
+
+    Returns:
+        Para (kierunek, czy dźwięk jest dozwolony) lub None dla duplikatu.
+
+    Raises:
+        ClaudeUSDJPYStrategyError: Gdy proces nie może zapisać albo zwraca błędny wynik.
+    """
+    algorithm_directory = (
+        Path(__file__).resolve().parent / "claude_usdjpy_algorithm"
+    )
+    if not algorithm_directory.is_dir():
+        algorithm_directory = (
+            Path(__file__).resolve().parents[2]
+            / "algorithms"
+            / "Claude-sonnet55"
+            / "USDJPY"
+        )
+    command = [
+        sys.executable,
+        str(algorithm_directory / "USDJPYStrategyV1.py"),
+        "--api-candle-open-epoch",
+        str(int(candle_open_time.timestamp())),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=SP500_PROCESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ClaudeUSDJPYStrategyError(
+            "Nie udało się uruchomić strategii Claude USD/JPY."
+        ) from error
+
+    if completed.returncode == 3:
+        logger.debug(
+            "Claude USD/JPY nie utworzyła nowego wpisu dla świecy %s.",
+            candle_open_time.isoformat(),
+        )
+        return None
+    if completed.returncode not in {0, 4}:
+        logger.error(
+            "Strategia Claude USD/JPY zakończyła się błędem %s: %s",
+            completed.returncode,
+            completed.stderr.strip(),
+        )
+        raise ClaudeUSDJPYStrategyError(
+            "Strategia Claude USD/JPY zakończyła się błędem."
+        )
+    try:
+        result = json.loads(completed.stdout)
+    except (json.JSONDecodeError, TypeError) as error:
+        logger.error(
+            "Strategia Claude USD/JPY zwróciła błędny JSON dla świecy %s.",
+            candle_open_time.isoformat(),
+        )
+        raise ClaudeUSDJPYStrategyError(
+            "Strategia Claude USD/JPY zwróciła niepoprawny wynik."
+        ) from error
+
+    signal = result.get("signal") if isinstance(result, dict) else None
+    if not isinstance(signal, str) or signal.upper() not in {
+        "LONG",
+        "SHORT",
+        "NONE",
+    }:
+        logger.error(
+            "Strategia Claude USD/JPY nie zwróciła poprawnego sygnału dla %s.",
+            candle_open_time.isoformat(),
+        )
+        raise ClaudeUSDJPYStrategyError(
+            "Strategia Claude USD/JPY nie zwróciła poprawnego sygnału."
+        )
+    return signal.upper(), completed.returncode == 0
+
+
+def _run_claude_usdjpy_batch(
+    candle_open_times: list[datetime],
+) -> list[dict[str, object]]:
+    """Uruchamia raz strategię Claude dla wszystkich zamkniętych świec paczki.
+
+    Returns:
+        Wyniki pojedynczych ewaluacji; błędy świec są logowane i oznaczane w wynikach.
+
+    Raises:
+        ClaudeUSDJPYStrategyError: Gdy proces lub jego zbiorczy wynik jest nieprawidłowy.
+    """
+    algorithm_directory = (
+        Path(__file__).resolve().parent / "claude_usdjpy_algorithm"
+    )
+    if not algorithm_directory.is_dir():
+        algorithm_directory = (
+            Path(__file__).resolve().parents[2]
+            / "algorithms"
+            / "Claude-sonnet55"
+            / "USDJPY"
+        )
+    command = [
+        sys.executable,
+        str(algorithm_directory / "USDJPYStrategyV1.py"),
+        "--api-candle-open-epochs",
+        *(
+            str(int(candle_open_time.timestamp()))
+            for candle_open_time in candle_open_times
+        ),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=SP500_PROCESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ClaudeUSDJPYStrategyError(
+            "Nie udało się uruchomić strategii Claude USD/JPY dla paczki."
+        ) from error
+
+    if completed.returncode not in {0, 3, 4, 5}:
+        logger.error(
+            "Strategia Claude USD/JPY dla paczki zakończyła się błędem %s: %s",
+            completed.returncode,
+            completed.stderr.strip(),
+        )
+        raise ClaudeUSDJPYStrategyError(
+            "Strategia Claude USD/JPY nie przetworzyła paczki."
+        )
+    try:
+        payload = json.loads(completed.stdout)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise ClaudeUSDJPYStrategyError(
+            "Strategia Claude USD/JPY zwróciła niepoprawny wynik paczki."
+        ) from error
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or len(results) != len(candle_open_times):
+        raise ClaudeUSDJPYStrategyError(
+            "Strategia Claude USD/JPY zwróciła niepełny wynik paczki."
+        )
+
+    expected_epochs = [
+        int(candle_open_time.timestamp()) for candle_open_time in candle_open_times
+    ]
+    for expected_epoch, result in zip(expected_epochs, results):
+        if not isinstance(result, dict):
+            raise ClaudeUSDJPYStrategyError(
+                "Wynik świecy Claude USD/JPY ma nieprawidłowy format."
+            )
+        if result.get("candle_open_epoch") != expected_epoch:
+            raise ClaudeUSDJPYStrategyError(
+                "Wynik Claude USD/JPY nie odpowiada kolejności świec paczki."
+            )
+        if result.get("error"):
+            logger.error(
+                "Strategia Claude USD/JPY pominęła świecę %s z błędem.",
+                datetime.fromtimestamp(expected_epoch, timezone.utc).isoformat(),
+            )
+            continue
+        signal = result.get("signal")
+        if (
+            not isinstance(signal, str)
+            or signal not in {"LONG", "SHORT", "NONE"}
+            or not isinstance(result.get("saved"), bool)
+        ):
+            raise ClaudeUSDJPYStrategyError(
+                "Wynik Claude USD/JPY nie zawiera poprawnego sygnału."
+            )
+    return results
 
 
 def _run_sp500_process(candle_open_time: datetime, container_directory: str,
@@ -2449,6 +2629,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
 
     xauusd_error = False
     claude_xauusd_error = False
+    claude_usdjpy_error = False
     try:
         with strategy_lock:
             if not request.app.state.strategy_ready:
@@ -2524,6 +2705,31 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 )
             )
             signal_save_count = int(signal_save_count)
+            if (
+                candle.symbol == USDJPY_DATABASE_SYMBOL
+                and saved_candle_count
+                and candle.datetime.astimezone(timezone.utc)
+                    + timedelta(minutes=1)
+                    <= datetime.now(timezone.utc)
+            ):
+                try:
+                    claude_usdjpy_result = _run_claude_usdjpy_strategy(
+                        candle.datetime.astimezone(timezone.utc)
+                    )
+                    if claude_usdjpy_result is not None:
+                        claude_usdjpy_signal, sound_enabled = (
+                            claude_usdjpy_result
+                        )
+                        if (
+                            claude_usdjpy_signal in {"LONG", "SHORT"}
+                            and sound_enabled
+                        ):
+                            signal_save_count += 1
+                except ClaudeUSDJPYStrategyError:
+                    logger.exception(
+                        "Błąd strategii Claude USD/JPY po zapisaniu świecy."
+                    )
+                    claude_usdjpy_error = True
             if candle.symbol == "GER30":
                 candle_timestamp = candle.datetime.astimezone(timezone.utc)
                 current_minute = datetime.now(timezone.utc).replace(
@@ -2687,6 +2893,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
             for name, enabled in (
                 ("X-XAUUSD-Strategy-Error", xauusd_error),
                 ("X-Claude-XAUUSD-Strategy-Error", claude_xauusd_error),
+                ("X-Claude-USDJPY-Strategy-Error", claude_usdjpy_error),
             )
             if enabled
         } or None,
@@ -2771,6 +2978,33 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                 _grok45_candles_from_history(candle_history)
             )
             request.app.state.strategy_ready = True
+            batch_claude_usdjpy_candles = sorted(
+                (
+                    candle
+                    for candle in batch.candles
+                    if candle.symbol == USDJPY_DATABASE_SYMBOL
+                ),
+                key=lambda candle: candle.datetime.astimezone(timezone.utc),
+            )
+            claude_usdjpy_open_times = []
+            for candle in batch_claude_usdjpy_candles:
+                candle_open_time = candle.datetime.astimezone(timezone.utc)
+                if (
+                    candle_open_time + timedelta(minutes=1)
+                    > datetime.now(timezone.utc)
+                    or not request.app.state.repository._is_market_open(
+                        USDJPY_DATABASE_SYMBOL, candle_open_time
+                    )
+                ):
+                    continue
+                claude_usdjpy_open_times.append(candle_open_time)
+            if claude_usdjpy_open_times:
+                try:
+                    _run_claude_usdjpy_batch(claude_usdjpy_open_times)
+                except ClaudeUSDJPYStrategyError:
+                    logger.exception(
+                        "Nie udało się ocenić paczki świec USD/JPY przez Claude."
+                    )
             batch_strategy_candles = sorted(
                 (
                     candle

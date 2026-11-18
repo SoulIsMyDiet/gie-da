@@ -39,8 +39,11 @@ progów jest w `config.py`.
 Alternatywa do pętli: po zatwierdzonym zapisie świecy C++ może uruchomić
 `USDJPYStrategyV1.py --candle-open-epoch <epoch_otwarcia_UTC>`. Proces sprawdzi
 zamknięcie i idempotentność, wykona pojedynczą analizę i zakończy się. Ten
-wariant nie jest domyślnie podłączony do C++; nie należy równolegle uruchamiać
-go wraz z pętlą, jeśli oba procesy mają analizować te same świece.
+wariant jest używany przez API z argumentem
+`--api-candle-open-epoch <epoch_otwarcia_UTC>` albo
+`--api-candle-open-epochs <epoki...>` dla paczki. Zapisuje wyniki bez lokalnego
+dźwięku, a API przekazuje do klienta dźwięk wyłącznie dla LONG/SHORT. Nie należy
+równolegle uruchamiać osobnej pętli `--loop`, jeśli API obsługuje te same świece.
 
 ## Czas, rynek i dane
 

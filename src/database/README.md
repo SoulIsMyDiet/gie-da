@@ -80,6 +80,12 @@ strategie. Paczki `/api/candles/batch` także uruchamiają strategię USD/JPY dl
 zamkniętych świec, bez dźwięków dla historycznych danych. Zapisywanie NONE
 można wyłączyć przez `SAVE_NONE_SIGNALS` w `USDJPY/config.py`.
 
+Równolegle API uruchamia dla zamkniętych świec USD/JPY strategię
+`Claude-sonnet55/USDJPYStrategyV1`, także podczas przetwarzania paczek.
+Strategia zapisuje sygnały NONE zgodnie z `SAVE_NONE_SIGNALS`; odpowiedź
+zwiększa licznik dźwięku tylko dla LONG/SHORT. API używa trybu bez lokalnego
+dźwięku, aby uniknąć piknięć przy zapisie NONE.
+
 Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
 `signal`, epokę `timestamp`, `instrument` oraz `parameters` z EMA9, ATR14,
 EMA21, RSI14, krótkim powodem i pasmami Bollingera. Pełne dane diagnostyczne
