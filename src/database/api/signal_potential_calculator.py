@@ -237,7 +237,7 @@ class SignalPotentialCalculator:
 
     @staticmethod
     def _signal_timestamp(signal_parameters: Any) -> datetime:
-        """Odczytuje UTC zamknięcia świecy sygnałowej z dokumentu JSON."""
+        """Odczytuje czas świecy z JSON jako ISO 8601 lub sekundy Unix."""
         if isinstance(signal_parameters, str):
             payload = json.loads(signal_parameters)
         elif isinstance(signal_parameters, dict):
@@ -246,9 +246,25 @@ class SignalPotentialCalculator:
             raise ValueError("Parametry sygnału mają nieobsługiwany format JSON.")
 
         timestamp = payload.get("timestamp")
+        if isinstance(timestamp, int) and not isinstance(timestamp, bool):
+            try:
+                return datetime.fromtimestamp(
+                    timestamp, timezone.utc
+                ).replace(tzinfo=None)
+            except (OverflowError, OSError, ValueError) as error:
+                raise ValueError(
+                    "Parametry sygnału nie zawierają prawidłowego czasu."
+                ) from error
         if not isinstance(timestamp, str):
             raise ValueError("Parametry sygnału nie zawierają prawidłowego czasu.")
-        parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        try:
+            parsed_timestamp = datetime.fromisoformat(
+                timestamp.replace("Z", "+00:00")
+            )
+        except ValueError as error:
+            raise ValueError(
+                "Parametry sygnału nie zawierają prawidłowego czasu."
+            ) from error
         if parsed_timestamp.tzinfo is None or parsed_timestamp.utcoffset() is None:
             raise ValueError("Czas sygnału musi zawierać strefę czasową.")
         return parsed_timestamp.astimezone(timezone.utc).replace(tzinfo=None)

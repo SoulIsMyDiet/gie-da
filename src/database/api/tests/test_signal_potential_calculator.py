@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -101,6 +102,27 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         )
 
         self.assertEqual(result["saldo_1st_candle"], Decimal("0.0000"))
+
+    def test_reads_unix_timestamp_from_signal_parameters(self) -> None:
+        """Kalkulator obsługuje epokę Unix zapisywaną przez strategie."""
+        signal_time = self.calculator._signal_timestamp(
+            {"timestamp": 1735689600}
+        )
+
+        self.assertEqual(signal_time, datetime(2025, 1, 1))
+
+    def test_reads_timezone_aware_iso_timestamp_from_signal_parameters(self) -> None:
+        """Kalkulator nadal obsługuje wcześniejszy format ISO 8601."""
+        signal_time = self.calculator._signal_timestamp(
+            {"timestamp": "2025-01-01T03:00:00+03:00"}
+        )
+
+        self.assertEqual(signal_time, datetime(2025, 1, 1))
+
+    def test_rejects_boolean_timestamp(self) -> None:
+        """Wartość logiczna nie jest mylona z liczbą sekund Unix."""
+        with self.assertRaises(ValueError):
+            self.calculator._signal_timestamp({"timestamp": True})
 
     def test_truncates_balance_values_to_five_decimal_places(self) -> None:
         """Wyniki są obcinane do pięciu miejsc bez zaokrąglania."""

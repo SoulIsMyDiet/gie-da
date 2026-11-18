@@ -85,6 +85,14 @@ Nowe rekordy XAU/USD zapisują w `signal_parameters` zwięzły JSON: `price`,
 EMA21, RSI14, krótkim powodem i pasmami Bollingera. Pełne dane diagnostyczne
 algorytmu nie są zapisywane, a istniejące rekordy pozostają bez zmian.
 
+Po każdej zamkniętej świecy XAU/USD API uruchamia strategie
+`Chat-gpt6/XAUUSD/XAUUSDStrategyV1` i
+`Claude-sonnet55/XAUUSD/XAUUSDStrategyV1`. Dotyczy to zarówno pojedynczych
+zapisów, jak i świec dostarczonych w paczce `/api/candles/batch`. Obie strategie
+zapisują sygnały `NONE`, jeśli włączona jest flaga `SAVE_NONE_SIGNALS`;
+powiadomienie dźwiękowe jest naliczane wyłącznie dla sygnałów LONG i SHORT.
+Uzupełnianie historii w paczce nie odtwarza dźwięków.
+
 Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączone,
 ponieważ dotychczasowe symbole nie zapewniały danych dla oczekiwanych indeksów.
 API nie zwraca tych instrumentów jako monitorowanych ani otwartych i odrzuca

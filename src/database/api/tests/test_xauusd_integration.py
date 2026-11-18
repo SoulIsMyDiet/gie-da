@@ -1,5 +1,6 @@
 """Sprawdza wyzwalanie XAUUSD i zgodność odpowiedzi POST z klientem."""
 
+import json
 import os
 import subprocess
 import sys
@@ -37,22 +38,36 @@ def request_and_candle(opened, symbol="XAU/USD", saved=1):
     return request, candle, repository
 
 
-@pytest.mark.parametrize("beep,expected", [(True, b"0\n4"), (False, b"0\n3")])
-def test_closed_candle_runs_after_save_and_adds_only_new_beep(beep, expected):
-    """Dźwięk dolicza się tylko po nowym zapisie, zachowując istniejący licznik."""
+@pytest.mark.parametrize(
+    "chat_result,claude_result,expected,chat_beep",
+    [
+        (("NONE", True), ("NONE", True), b"0\n0", False),
+        (("LONG", True), ("NONE", True), b"0\n1", True),
+        (("NONE", True), ("SHORT", True), b"0\n1", False),
+        (("LONG", False), ("NONE", False), b"0\n0", False),
+    ],
+)
+def test_closed_candle_counts_only_actionable_signals(
+    chat_result, claude_result, expected, chat_beep
+):
+    """NONE jest zapisywany, ale tylko LONG/SHORT zwiększa licznik dźwięku."""
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, candle, repository = request_and_candle(opened)
-    repository.save_candle.return_value = (0, 1, "", 3)
+    repository.save_candle.return_value = (0, 1, "", 0)
+
     def run(value):
         repository.save_candle.assert_called_once()
         assert value == opened
-        return beep
+        return chat_result
+
     with patch.object(app, "_run_xauusd_strategy", side_effect=run), \
-            patch.object(app, "_run_claude_xauusd_strategy", return_value=False) as claude, \
+            patch.object(
+                app, "_run_claude_xauusd_strategy", return_value=claude_result
+            ) as claude, \
             patch.object(app, "Thread") as thread:
         response = app.save_candle(candle, request)
     assert response.body == expected
-    if beep:
+    if chat_beep:
         thread.assert_called_once()
         assert thread.call_args.kwargs["kwargs"] == {
             "number_of_beeps": 2, "duration_ms": 100,
@@ -62,16 +77,67 @@ def test_closed_candle_runs_after_save_and_adds_only_new_beep(beep, expected):
     claude.assert_called_once_with(opened)
 
 
-def test_claude_signal_increments_response_count_after_successful_save():
-    """Udany zapis Claude zwiększa licznik sygnałów przekazywany klientowi."""
-    opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
-    request, candle, repository = request_and_candle(opened)
-    repository.save_candle.return_value = (0, 1, "", 3)
-    with patch.object(app, "_run_xauusd_strategy", return_value=False), \
-            patch.object(app, "_run_claude_xauusd_strategy", return_value=True), \
-            patch.object(app, "Thread"):
-        response = app.save_candle(candle, request)
-    assert response.body == b"0\n4"
+def test_batch_evaluates_both_xauusd_strategies_without_sound():
+    """Paczka ocenia zamknięte świece XAU/USD bez zmiany formatu odpowiedzi."""
+    latest_open = (
+        datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        - timedelta(minutes=2)
+    )
+    candles = [
+        app.CandleRecord(
+            symbol="XAU/USD",
+            datetime=latest_open - timedelta(minutes=1),
+            open="2500",
+            high="2501",
+            low="2499",
+            close="2500",
+            volume="10",
+        ),
+        app.CandleRecord(
+            symbol="XAU/USD",
+            datetime=latest_open,
+            open="2500",
+            high="2501",
+            low="2499",
+            close="2500",
+            volume="10",
+        ),
+    ]
+    repository = Mock()
+    repository._is_market_open.return_value = True
+    repository.save_candles.return_value = (0, 2, "czas", 0)
+    repository.fetch_candle_history.return_value = []
+    state = SimpleNamespace(
+        repository=repository,
+        strategy_ready=True,
+        eurusd_strategy=Mock(),
+        grok45_v2_candles=[],
+    )
+    request = Request(
+        {
+            "type": "http",
+            "app": SimpleNamespace(state=state),
+            "method": "POST",
+            "path": "/api/candles/batch",
+            "headers": [],
+        }
+    )
+    with patch.object(app, "is_monitored_product", return_value=True), \
+            patch.object(
+                app, "_run_xauusd_strategy", return_value=("NONE", True)
+            ) as chat, \
+                patch.object(
+                    app, "_run_claude_xauusd_strategy", return_value=("NONE", True)
+                ) as claude, \
+            patch.object(app, "Thread") as thread:
+        response = app.save_candle_batch(app.CandleBatch(candles=candles), request)
+
+    assert response.status_code == 200
+    assert response.body == b"2\nczas"
+    expected_times = [candle.datetime for candle in candles]
+    assert [call.args[0] for call in chat.call_args_list] == expected_times
+    assert [call.args[0] for call in claude.call_args_list] == expected_times
+    thread.assert_not_called()
 
 
 @pytest.mark.parametrize("saved,minutes,symbol", [(0, 2, "XAU/USD"), (1, 0, "XAU/USD"), (1, 2, "EURUSD/USD")])
@@ -90,12 +156,27 @@ def test_nonqualifying_candles_do_not_trigger(saved, minutes, symbol):
     claude.assert_not_called()
 
 
-@pytest.mark.parametrize("code,beep", [(0, True), (3, False), (4, False)])
-def test_process_exit_codes(code, beep):
-    """Kod procesu rozróżnia zapis z dźwiękiem, duplikat i zapis bez dźwięku."""
+@pytest.mark.parametrize(
+    "code,signal,expected",
+    [
+        (0, "LONG", ("LONG", True)),
+        (0, "NONE", ("NONE", True)),
+        (3, "NONE", None),
+        (4, "SHORT", ("SHORT", False)),
+    ],
+)
+def test_process_exit_codes(code, signal, expected):
+    """Kod procesu oraz JSON odróżniają zapis kierunkowy od duplikatu."""
     opened = datetime.now(timezone.utc)
-    with patch.object(app.subprocess, "run", return_value=SimpleNamespace(returncode=code, stderr="")) as run:
-        assert app._run_xauusd_strategy(opened) is beep
+    result = {"signal": signal}
+    with patch.object(
+        app.subprocess,
+        "run",
+        return_value=SimpleNamespace(
+            returncode=code, stderr="", stdout=json.dumps(result)
+        ),
+    ) as run:
+        assert app._run_xauusd_strategy(opened) == expected
     assert run.call_args.args[0][-2:] == ["--api-candle-open-epoch", str(int(opened.timestamp()))]
     assert "XAUUSDStrategyV1.py" in run.call_args.args[0][1]
 
@@ -110,7 +191,7 @@ def test_process_failure_is_logged_without_blocking_client(failure, caplog):
     request, candle, repository = request_and_candle(opened)
     process = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
     with patch.object(app.subprocess, "run", **process), \
-            patch.object(app, "_run_claude_xauusd_strategy", return_value=False), \
+            patch.object(app, "_run_claude_xauusd_strategy", return_value=None), \
             patch.object(app, "Thread"):
         response = app.save_candle(candle, request)
     assert response.status_code == 200 and response.body == b"2\n3"
@@ -119,15 +200,27 @@ def test_process_failure_is_logged_without_blocking_client(failure, caplog):
     repository.save_candle.assert_called_once()
 
 
-@pytest.mark.parametrize("exit_code,saved", [(0, True), (3, False), (4, False)])
-def test_claude_strategy_process_exit_code(exit_code, saved):
-    """Nowa strategia otrzymuje epokę otwarcia i raportuje tylko nowy zapis."""
+@pytest.mark.parametrize(
+    "exit_code,signal,expected",
+    [
+        (0, "NONE", ("NONE", True)),
+        (0, "SHORT", ("SHORT", True)),
+        (3, "NONE", None),
+        (4, "SHORT", ("SHORT", False)),
+    ],
+)
+def test_claude_strategy_process_exit_code(exit_code, signal, expected):
+    """Strategia Claude zwraca kierunek zapisanego sygnału lub brak nowego wpisu."""
     opened = datetime.now(timezone.utc)
     with patch.object(
         app.subprocess, "run",
-        return_value=SimpleNamespace(returncode=exit_code, stderr=""),
+        return_value=SimpleNamespace(
+            returncode=exit_code,
+            stderr="",
+            stdout=json.dumps({"signal": signal}),
+        ),
     ) as run:
-        assert app._run_claude_xauusd_strategy(opened) is saved
+        assert app._run_claude_xauusd_strategy(opened) == expected
     command = run.call_args.args[0]
     assert "Claude-sonnet55" in command[1]
     assert command[-2:] == [
@@ -160,7 +253,7 @@ def test_unexpected_strategy_failure_is_isolated(caplog):
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, candle, _ = request_and_candle(opened)
     with patch.object(app, "_run_xauusd_strategy", side_effect=ValueError("test")), \
-            patch.object(app, "_run_claude_xauusd_strategy", return_value=False), \
+            patch.object(app, "_run_claude_xauusd_strategy", return_value=None), \
             patch.object(app, "Thread"):
         response = app.save_candle(candle, request)
     assert response.status_code == 200 and response.body == b"2\n3"
@@ -172,7 +265,7 @@ def test_claude_strategy_failure_is_reported_without_reverting_candle(caplog):
     """Awaria Claude ma osobny nagłówek i nie cofa zapisu świecy."""
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, candle, repository = request_and_candle(opened)
-    with patch.object(app, "_run_xauusd_strategy", return_value=False), \
+    with patch.object(app, "_run_xauusd_strategy", return_value=None), \
             patch.object(
                 app,
                 "_run_claude_xauusd_strategy",

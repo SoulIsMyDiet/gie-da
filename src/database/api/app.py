@@ -235,11 +235,78 @@ class XAUUSDStrategyError(RuntimeError):
     """Sygnalizuje błąd analizy XAUUSD po zapisaniu świecy."""
 
 
-def _run_xauusd_strategy(candle_open_time: datetime) -> bool:
-    """Uruchamia osobny proces dla świecy UTC; zwraca żądanie dźwięku.
+def _saved_xauusd_signal(
+    completed: subprocess.CompletedProcess[str],
+    strategy_name: str,
+    candle_open_time: datetime,
+) -> tuple[str, bool] | None:
+    """Odczytuje kierunek zapisanego sygnału albo informuje o braku nowego wpisu.
 
-    Błąd uruchomienia, przekroczenie czasu i nieznany kod wyjścia zgłaszają
-    XAUUSDStrategyError, aby nie ukryć niepowodzenia analizy.
+    Kod 3 oznacza, że strategia nie utworzyła nowego rekordu. Kody 0 i 4
+    oznaczają zapis; kod 4 może wystąpić, gdy dźwięk strategii jest wyłączony.
+
+    Returns:
+        Para (kierunek, czy dźwięk jest dozwolony) lub None dla duplikatu.
+
+    Raises:
+        XAUUSDStrategyError: Gdy proces lub jego wynik nie potwierdza poprawnego zapisu.
+    """
+    if completed.returncode == 3:
+        logger.debug(
+            "Strategia %s nie utworzyła nowego wpisu dla świecy %s (kod 3).",
+            strategy_name,
+            candle_open_time.isoformat(),
+        )
+        return None
+    if completed.returncode not in {0, 4}:
+        logger.error(
+            "Strategia %s zakończyła się błędem %s: %s",
+            strategy_name,
+            completed.returncode,
+            completed.stderr.strip(),
+        )
+        raise XAUUSDStrategyError(
+            f"Strategia {strategy_name} zakończyła się błędem."
+        )
+    try:
+        result = json.loads(completed.stdout)
+    except (json.JSONDecodeError, TypeError) as error:
+        logger.error(
+            "Strategia %s zwróciła niepoprawny JSON dla świecy %s: %s",
+            strategy_name,
+            candle_open_time.isoformat(),
+            completed.stderr.strip(),
+        )
+        raise XAUUSDStrategyError(
+            f"Strategia {strategy_name} zwróciła niepoprawny wynik."
+        ) from error
+    signal = result.get("signal") if isinstance(result, dict) else None
+    if not isinstance(signal, str) or signal.upper() not in {
+        "LONG",
+        "SHORT",
+        "NONE",
+    }:
+        logger.error(
+            "Strategia %s nie zwróciła poprawnego kierunku dla świecy %s.",
+            strategy_name,
+            candle_open_time.isoformat(),
+        )
+        raise XAUUSDStrategyError(
+            f"Strategia {strategy_name} nie zwróciła poprawnego sygnału."
+        )
+    return signal.upper(), completed.returncode == 0
+
+
+def _run_xauusd_strategy(
+    candle_open_time: datetime,
+) -> tuple[str, bool] | None:
+    """Uruchamia strategię Chat-gpt6 XAU/USD dla świecy UTC.
+
+    Returns:
+        Para (kierunek, czy dźwięk jest dozwolony) lub None dla duplikatu.
+
+    Raises:
+        XAUUSDStrategyError: Gdy nie można uruchomić procesu albo wynik jest błędny.
     """
     algorithm_directory = Path(__file__).resolve().parent / "xauusd_algorithm"
     if not algorithm_directory.is_dir():
@@ -257,19 +324,22 @@ def _run_xauusd_strategy(candle_open_time: datetime) -> bool:
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise XAUUSDStrategyError("Nie udało się uruchomić strategii XAUUSD.") from error
-    if completed.returncode == 0:
-        return True
-    if completed.returncode in (3, 4):
-        return False
-    logger.error(
-        "Strategia XAUUSD zakończyła się błędem %s: %s",
-        completed.returncode, completed.stderr.strip(),
+    return _saved_xauusd_signal(
+        completed, "Chat-gpt6/XAUUSDStrategyV1", candle_open_time
     )
-    raise XAUUSDStrategyError("Strategia XAUUSD zakończyła się błędem.")
 
 
-def _run_claude_xauusd_strategy(candle_open_time: datetime) -> bool:
-    """Uruchamia strategię Claude dla zamkniętej świecy; True oznacza nowy zapis."""
+def _run_claude_xauusd_strategy(
+    candle_open_time: datetime,
+) -> tuple[str, bool] | None:
+    """Uruchamia strategię Claude XAU/USD dla świecy UTC.
+
+    Returns:
+        Para (kierunek, czy dźwięk jest dozwolony) lub None dla duplikatu.
+
+    Raises:
+        XAUUSDStrategyError: Gdy nie można uruchomić procesu albo wynik jest błędny.
+    """
     algorithm_directory = (
         Path(__file__).resolve().parent / "claude_xauusd_algorithm"
     )
@@ -298,16 +368,9 @@ def _run_claude_xauusd_strategy(candle_open_time: datetime) -> bool:
         raise XAUUSDStrategyError(
             "Nie udało się uruchomić strategii Claude XAU/USD."
         ) from error
-    if completed.returncode == 0:
-        return True
-    if completed.returncode in (3, 4):
-        return False
-    logger.error(
-        "Strategia Claude XAU/USD zakończyła się błędem %s: %s",
-        completed.returncode,
-        completed.stderr.strip(),
+    return _saved_xauusd_signal(
+        completed, "Claude-sonnet55/XAUUSDStrategyV1", candle_open_time
     )
-    raise XAUUSDStrategyError("Strategia Claude XAU/USD zakończyła się błędem.")
 
 
 def _run_sp500_process(candle_open_time: datetime, container_directory: str,
@@ -2560,22 +2623,35 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     + timedelta(minutes=1) <= datetime.now(timezone.utc)
             ):
                 try:
-                    if _run_xauusd_strategy(candle.datetime.astimezone(timezone.utc)):
-                        signal_save_count += 1
-                        Thread(
-                            target=play_alert,
-                            kwargs={"number_of_beeps": 2, "duration_ms": 100},
-                            daemon=True,
-                        ).start()
+                    xauusd_result = _run_xauusd_strategy(
+                        candle.datetime.astimezone(timezone.utc)
+                    )
+                    if xauusd_result is not None:
+                        xauusd_signal, sound_enabled = xauusd_result
+                        if xauusd_signal in {"LONG", "SHORT"} and sound_enabled:
+                            signal_save_count += 1
+                            Thread(
+                                target=play_alert,
+                                kwargs={"number_of_beeps": 2, "duration_ms": 100},
+                                daemon=True,
+                            ).start()
                 except Exception:
                     # Backend: także nieoczekiwany błąd procesu nie cofa zapisanej świecy.
                     logger.exception("Błąd strategii XAUUSD po zapisaniu świecy.")
                     xauusd_error = True
                 try:
-                    if _run_claude_xauusd_strategy(
+                    claude_xauusd_result = _run_claude_xauusd_strategy(
                         candle.datetime.astimezone(timezone.utc)
-                    ):
-                        signal_save_count += 1
+                    )
+                    if claude_xauusd_result is not None:
+                        claude_xauusd_signal, claude_sound_enabled = (
+                            claude_xauusd_result
+                        )
+                        if (
+                            claude_xauusd_signal in {"LONG", "SHORT"}
+                            and claude_sound_enabled
+                        ):
+                            signal_save_count += 1
                 except Exception:
                     logger.exception(
                         "Błąd strategii Claude XAU/USD po zapisaniu świecy."
@@ -2661,7 +2737,7 @@ def save_grok45_signal(
 
 @app.post("/api/candles/batch", response_class=Response)
 def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
-    """Zapisuje paczkę świec i ocenia zamknięte USD/MXN oraz USD/JPY."""
+    """Zapisuje paczkę świec i ocenia zamknięte świece obsługiwanych strategii."""
     unsupported_symbols = sorted(
         {
             candle.symbol
@@ -2714,6 +2790,39 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                     datetime.now(timezone.utc),
                     enqueue_notifications=False,
                 )
+            batch_xauusd_candles = sorted(
+                (
+                    candle
+                    for candle in batch.candles
+                    if candle.symbol == "XAU/USD"
+                ),
+                key=lambda candle: candle.datetime.astimezone(timezone.utc),
+            )
+            for candle in batch_xauusd_candles:
+                candle_open_time = candle.datetime.astimezone(timezone.utc)
+                if (
+                    candle_open_time + timedelta(minutes=1)
+                    > datetime.now(timezone.utc)
+                    or not request.app.state.repository._is_market_open(
+                        "XAU/USD", candle_open_time
+                    )
+                ):
+                    continue
+                for strategy_name, strategy_runner in (
+                    ("Chat-gpt6/XAUUSDStrategyV1", _run_xauusd_strategy),
+                    (
+                        "Claude-sonnet55/XAUUSDStrategyV1",
+                        _run_claude_xauusd_strategy,
+                    ),
+                ):
+                    try:
+                        strategy_runner(candle_open_time)
+                    except XAUUSDStrategyError:
+                        logger.exception(
+                            "Nie udało się ocenić świecy XAU/USD %s przez %s.",
+                            candle_open_time.isoformat(),
+                            strategy_name,
+                        )
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
