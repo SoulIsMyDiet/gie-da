@@ -23,6 +23,8 @@ constexpr wchar_t batchApiPath[] = L"/api/candles/batch";
 constexpr wchar_t monitoredProductsApiPath[] = L"/api/products/monitored";
 constexpr wchar_t openProductsApiPath[] = L"/api/products/open";
 constexpr wchar_t analysisCandlesApiPath[] = L"/api/candles/analysis?limit=";
+constexpr wchar_t promptCandleHistoryApiPath[] =
+    L"/api/candles/prompt-history?symbol=";
 constexpr wchar_t generatedSignalApiPath[] = L"/api/signals/grok45";
 constexpr wchar_t grokNotificationCursorPath[] =
     L"/api/signals/grok-sp500/notifications/cursor";
@@ -1249,6 +1251,31 @@ bool CandleHistoryClient::fetchLatestAnalysisCandles(
     std::reverse(receivedCandles.begin(), receivedCandles.end());
     candles = std::move(receivedCandles);
     return true;
+}
+
+/**
+ * Pobiera ograniczoną historię świec M1 dla kontekstu prompta.
+ */
+bool CandleHistoryClient::fetchPromptCandleHistory(
+    const std::string& symbol,
+    std::size_t limit,
+    std::string& response,
+    std::string& error) {
+    response.clear();
+    if (limit == 0 || limit > 1000) {
+        error = "Liczba świec do kontekstu prompta musi mieścić się w zakresie 1-1000.";
+        return false;
+    }
+
+    std::wstring encodedSymbol;
+    if (!encodeSymbolForUrl(symbol, encodedSymbol)) {
+        error = "Symbol instrumentu jest pusty lub nieprawidłowy.";
+        return false;
+    }
+    const std::wstring path =
+        std::wstring(promptCandleHistoryApiPath) + encodedSymbol +
+        L"&limit=" + std::to_wstring(limit);
+    return fetchApiResponse(path, response, error);
 }
 
 /**

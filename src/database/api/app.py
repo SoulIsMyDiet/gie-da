@@ -1501,6 +1501,81 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_prompt_candle_history(
+        self, symbol: str, limit: int
+    ) -> list[dict[str, Any]]:
+        """Pobiera zamknięte świece M1 wraz z informacją o lukach w sesji."""
+        if not is_monitored_product(symbol):
+            raise ValueError(f"Instrument {symbol} nie jest skonfigurowany.")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
+            raise ValueError("Limit historii musi należeć do zakresu 1-1000.")
+
+        cutoff_utc = datetime.now(timezone.utc).replace(
+            second=0, microsecond=0, tzinfo=None
+        )
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT datetime, utc_offset_minutes, open, high, low, close
+                    FROM candles
+                    WHERE symbol = %s
+                        AND DATE_SUB(
+                            datetime, INTERVAL utc_offset_minutes MINUTE
+                        ) < %s
+                    ORDER BY DATE_SUB(
+                        datetime, INTERVAL utc_offset_minutes MINUTE
+                    ) DESC
+                    LIMIT %s
+                    """,
+                    (symbol, cutoff_utc, limit),
+                )
+                rows = list(reversed(cursor.fetchall()))
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+        candles: list[dict[str, Any]] = []
+        previous_timestamp: datetime | None = None
+        for (
+            local_datetime,
+            offset_minutes,
+            open_price,
+            high,
+            low,
+            close,
+        ) in rows:
+            timestamp_utc = local_datetime.replace(
+                tzinfo=timezone(timedelta(minutes=int(offset_minutes)))
+            ).astimezone(timezone.utc)
+            gap_before = False
+            if previous_timestamp is not None:
+                missing_minute = previous_timestamp + timedelta(minutes=1)
+                while missing_minute < timestamp_utc:
+                    if self._is_market_open(symbol, missing_minute):
+                        gap_before = True
+                        break
+                    missing_minute += timedelta(minutes=1)
+            candles.append(
+                {
+                    "timestamp_utc": int(timestamp_utc.timestamp()),
+                    "open": format(Decimal(str(open_price)).normalize(), "f"),
+                    "high": format(Decimal(str(high)).normalize(), "f"),
+                    "low": format(Decimal(str(low)).normalize(), "f"),
+                    "close": format(Decimal(str(close)).normalize(), "f"),
+                    "gap_before": gap_before,
+                }
+            )
+            previous_timestamp = timestamp_utc
+        return candles
+
     def has_algorithm_evaluation(
         self, product: str, algorithm_name: str, source_timestamp: int
     ) -> bool:
@@ -3021,6 +3096,45 @@ def analysis_candles(
         ) from error
     return Response(
         content="\n".join("\t".join(row) for row in rows),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/candles/prompt-history", response_class=Response)
+def prompt_candle_history(
+    request: Request,
+    symbol: str = Query(min_length=1, max_length=32),
+    limit: int = Query(default=1000, ge=1, le=1000),
+) -> Response:
+    """Udostępnia zamknięte świece M1 do budowania kontekstu prompta C++."""
+    try:
+        candles = request.app.state.repository.fetch_prompt_candle_history(
+            symbol, limit
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się pobrać świec do kontekstu prompta.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    lines = ["timestamp_utc\topen\thigh\tlow\tclose\tgap_before"]
+    lines.extend(
+        "\t".join(
+            (
+                str(candle["timestamp_utc"]),
+                candle["open"],
+                candle["high"],
+                candle["low"],
+                candle["close"],
+                "1" if candle["gap_before"] else "0",
+            )
+        )
+        for candle in candles
+    )
+    return Response(
+        content="\n".join(lines),
         media_type="text/tab-separated-values; charset=utf-8",
     )
 

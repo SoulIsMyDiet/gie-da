@@ -135,6 +135,8 @@ podgląd całej tabeli, w tym wpisów już uzupełnionych.
 
 Przycisk „Raporty” otwiera tabelę 20 najnowszych świec. Przyciski „Poprzednia” i „Następna” pozwalają przechodzić pomiędzy stronami, a „Strona główna” wraca do głównego widoku. Lista jest pobierana z lokalnego API pod adresem `/api/candles/report`; nowe świece są zapisywane przez `/api/candles` lub paczkowo przez `/api/candles/batch`.
 
+Klasa `CandlePromptContextBuilder` w `src/stockmarket` pobiera do 1000 zamkniętych świec M1 z `/api/candles/prompt-history`, agreguje ostatnie 30 pełnych świec M5 i zwraca skompresowany JSON z 50 świecami M1. Niepełne koszyki M5 są pomijane, a wykryta luka w otwartej sesji jest dopisywana do `LogError-11.2026`.
+
 Przycisk „Sygnały” obok widoków świec i luk otwiera stronicowany podgląd 15 wpisów tabeli `signals` na stronę. Widok pokazuje czas, produkt, cenę i algorytm; przycisk „Szczegóły” pobiera dla wybranego `signal_id` saldo z 20 świec, numer świecy maksymalnego wyniku, wynik transakcji dla 100 zł i spread z tabeli `signal_potention`.
 
 Istniejące świece zapisane wcześniej w UTC są jednorazowo przeliczane na `Europe/Warsaw`; nowe wpisy również są zapisywane w tym czasie. API jest dostępne lokalnie na `127.0.0.1:8000`, a MySQL na `127.0.0.1:3306` wyłącznie dla programów uruchomionych na tym samym komputerze; port nie jest wystawiony na interfejs sieciowy. Dalsze zmiany struktury będą wymagały migracji w `src/database/api/app.py` — samo `CREATE TABLE IF NOT EXISTS` nie zmienia już istniejących tabel.

@@ -187,6 +187,20 @@ public:
         std::string& error);
 
     /**
+     * Pobiera historię M1 w TSV do budowania kontekstu prompta.
+     * @param symbol Symbol instrumentu.
+     * @param limit Maksymalna liczba zamkniętych świec (1-1000).
+     * @param response Otrzymuje wiersze z czasem UTC, OHLC i flagą luki.
+     * @param error Otrzymuje opis błędu żądania lub odpowiedzi.
+     * @return true, jeśli lokalne API zwróciło poprawną odpowiedź.
+     */
+    static bool fetchPromptCandleHistory(
+        const std::string& symbol,
+        std::size_t limit,
+        std::string& response,
+        std::string& error);
+
+    /**
      * Zapisuje wygenerowany sygnał Grok-45; API pomija duplikaty tej samej świecy.
      * @param signalJson Pełny dokument JSON zwrócony przez algorytm.
      * @param signalSaved Otrzymuje informację, czy utworzono nowy wpis.
