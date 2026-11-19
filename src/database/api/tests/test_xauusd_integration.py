@@ -260,6 +260,7 @@ def test_initialize_creates_and_seeds_active_prompt():
     connection, cursor = Mock(), Mock()
     connection.cursor.return_value = cursor
     cursor.fetchall.return_value = []
+    cursor.fetchone.return_value = ("used_candles",)
     with patch.object(app.mysql.connector, "connect", return_value=connection), \
             patch.object(repository, "_migrate_signal_enum"), \
             patch.object(repository, "_migrate_signal_source_timestamp"), \
@@ -280,7 +281,24 @@ def test_initialize_creates_and_seeds_active_prompt():
         True,
         True,
         True,
+        True,
     )
+
+
+def test_migrate_prompt_used_candles_marks_existing_seed_prompt_true():
+    """Migracja dodaje flagę i włącza ją dla istniejącego promptu startowego."""
+    repository = app.MarketDataRepository()
+    cursor = Mock()
+    cursor.fetchone.return_value = None
+
+    repository._migrate_prompt_used_candles(cursor)
+
+    calls = [call.args for call in cursor.execute.call_args_list]
+    assert any("ADD COLUMN used_candles" in call[0] for call in calls)
+    assert (
+        "UPDATE prompts SET used_candles = TRUE WHERE id = %s",
+        (1,),
+    ) in calls
 
 
 def test_unexpected_strategy_failure_is_isolated(caplog):

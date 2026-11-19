@@ -798,19 +798,22 @@ class MarketDataRepository:
                         prompt LONGTEXT NOT NULL,
                         used_context BOOLEAN NOT NULL DEFAULT FALSE,
                         used_parameters BOOLEAN NOT NULL DEFAULT FALSE,
-                        prompt_in_use BOOLEAN NOT NULL DEFAULT FALSE
+                        prompt_in_use BOOLEAN NOT NULL DEFAULT FALSE,
+                        used_candles BOOLEAN NOT NULL DEFAULT FALSE
                     ) ENGINE=InnoDB
                     DEFAULT CHARACTER SET utf8mb4
                     COLLATE utf8mb4_unicode_ci
                     """
                 )
+                self._migrate_prompt_used_candles(cursor)
                 cursor.execute(
                     """
                     INSERT IGNORE INTO prompts
-                        (id, prompt, used_context, used_parameters, prompt_in_use)
-                    VALUES (%s, %s, %s, %s, %s)
+                        (id, prompt, used_context, used_parameters, prompt_in_use,
+                         used_candles)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                    (1, INITIAL_SIGNAL_REVIEW_PROMPT, True, True, True),
+                    (1, INITIAL_SIGNAL_REVIEW_PROMPT, True, True, True, True),
                 )
                 cursor.execute("DROP TABLE IF EXISTS price_history")
                 cursor.execute(
@@ -921,6 +924,26 @@ class MarketDataRepository:
                 cursor.close()
         finally:
             connection.close()
+
+    def _migrate_prompt_used_candles(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Dodaje flagę użycia świec i ustawia ją dla istniejącego promptu startowego."""
+        cursor.execute(
+            "SHOW COLUMNS FROM prompts LIKE %s",
+            ("used_candles",),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                """
+                ALTER TABLE prompts
+                ADD COLUMN used_candles BOOLEAN NOT NULL DEFAULT FALSE
+                """
+            )
+            cursor.execute(
+                "UPDATE prompts SET used_candles = TRUE WHERE id = %s",
+                (1,),
+            )
 
     def _migrate_signal_source_timestamp(
         self, cursor: mysql.connector.cursor.MySQLCursor
