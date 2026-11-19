@@ -9,6 +9,13 @@ from typing import Sequence
 
 
 STRATEGY_NAME = "Grok-45/EURUSD/EURUSDStrategyV2"
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument EURUSD/USD; zamknięte świece M1. LONG: EMA9 > EMA21 lub świeże "
+    "przecięcie w górę, RSI14 > 40 i rośnie (do 70), cena przy/poniżej środka "
+    "lub blisko dolnego pasma Bollingera oraz świeca wzrostowa albo dolny knot; "
+    "wymagana minimalna zmienność. SHORT stosuje warunki lustrzane; inaczej NONE."
+)
 BOLLINGER_DEVIATION_MULTIPLIER = 2.0
 NEARBY_BAND_WIDTH_FRACTION = 0.3
 WICK_TO_BODY_MULTIPLIER = 1.5

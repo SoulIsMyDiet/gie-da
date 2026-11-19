@@ -14,6 +14,14 @@ from math import isfinite
 from typing import Any, Callable, Sequence
 from zoneinfo import ZoneInfo
 
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument USD/MXN; zamknięte M1. LONG: EMA5 > EMA13, cena nad EMA5, RSI "
+    "> 52 i rośnie, momentum(5) > 0,08% oraz filtr Bollingera i ATR przechodzą. "
+    "SHORT stosuje warunki lustrzane (RSI < 48, spadek, momentum < -0,08%). "
+    "Brak minimum 100 świec, zmienności lub zgodnego setupu oznacza NONE."
+)
+
 from .config import (
     ATR_MINIMUM_PERCENTILE,
     ATR_PERIOD,

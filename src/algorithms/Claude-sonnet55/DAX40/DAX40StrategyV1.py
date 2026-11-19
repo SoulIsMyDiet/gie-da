@@ -26,6 +26,16 @@ else:
     from DAX40.storage import DAX40Storage
 
 logger = logging.getLogger(__name__)
+
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument GER30/DAX40; analizowane są zamknięte świece M1. "
+    "LONG/SHORT: wybicie z zakresu otwarcia potwierdzone wolumenem, VWAP i EMA20 "
+    "ukończonego M5; alternatywnie trend EMA9/21/55 z pullbackiem (ER >= 0.30) "
+    "albo rewersja od pasma Bollingera z RSI i VWAP (ER <= 0.20). "
+    "NONE przy braku zgodnego setupu lub niespełnieniu filtrów."
+)
+
 # pisze program w c++ słuzący do zapisywania momentów (sygnałow) swiadczacych o tym że wlansie jest dobry moment na dokonanie mikrotransakcji. Przez mikrotranskacje rozumiem wykonia operacji typu long/short i sfinalizowanie tej transkacji w ciagu max 20 minut.
 
 # do tego celu sciagam z api giełdy swiece 1 minutowe co minute i zapisuje je w bazie. Nie mam tam niestety wglądu do aktualnego spreada(ani bid ani ask) wiec muszą mi wystarczyc pozostale paramtery.

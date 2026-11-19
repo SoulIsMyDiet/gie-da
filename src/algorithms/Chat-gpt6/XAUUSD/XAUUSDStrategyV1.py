@@ -1,5 +1,14 @@
 """Backend: punkt wejścia procesu analizy świecy XAUUSD."""
 
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument XAU/USD; zamknięte M1 z potwierdzeniem M5. LONG/SHORT wymagają "
+    "zgodnego trendu EMA M1/M5, RSI z momentum i położenia ceny względem VWAP "
+    "oraz jednego setupu: pullback przy EMA9 po korekcie albo wybicie poza "
+    "pasmo Bollingera i lokalne maksimum/minimum. Wymagane są filtry sesji, "
+    "świeżości, danych i minimalnej punktacji; inaczej NONE."
+)
+
 import sys
 from pathlib import Path
 from types import ModuleType

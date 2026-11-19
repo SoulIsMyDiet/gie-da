@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace grok45 {
@@ -103,6 +104,12 @@ public:
  */
 class SignalGenerator {
 public:
+    static constexpr std::string_view strategyContext =
+        "Instrument EURUSD/USD; zamknięte świece M1. LONG wymaga EMA9 > EMA21 "
+        "lub świeżego przecięcia w górę, RSI14 > 40 i rośnie (do 70), ceny przy "
+        "lub poniżej środka albo blisko dolnego pasma Bollingera, świecy wzrostowej "
+        "lub dolnego knota oraz minimalnej zmienności. SHORT stosuje warunki "
+        "lustrzane; w przeciwnym razie NONE.";
     static constexpr std::size_t minimumCandles = 50;
     static constexpr std::size_t emaShortPeriod = 9;
     static constexpr std::size_t emaLongPeriod = 21;

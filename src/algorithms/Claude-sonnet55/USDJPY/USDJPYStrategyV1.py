@@ -1,5 +1,13 @@
 """Punkt wejścia strategii mikrotransakcji USD/JPY."""
 
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument USD/JPY; decyzja na zamkniętych M1, z trendem/potwierdzeniem M5. "
+    "LONG/SHORT: pullback do EMA21 zgodny z trendem M1/M5 i RSI, wybicie zakresu "
+    "Tokio albo rewersja do wnętrza wstęg w kierunku VWAP przy niskim ER. "
+    "NONE poza oknami lub gdy setup, dane albo filtry nie potwierdzają kierunku."
+)
+
 import logging
 from pathlib import Path
 import sys

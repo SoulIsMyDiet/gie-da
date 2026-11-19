@@ -21,6 +21,13 @@ from market_data import (
 from signal_serializer import Signal
 
 STRATEGY_NAME = "Chat-gpt6/EURUSD/EURUSDStrategyV1"
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument EURUSD/USD; zamknięte M1 z potwierdzeniem ukończonego M5. "
+    "LONG: EMA9 > EMA21 na M1 i M5, dotknięcie EMA9 z zamknięciem nad nią oraz "
+    "RSI14 przecięciem w górę przez 50; SHORT stosuje warunki lustrzane. "
+    "Wymagane są gotowe wskaźniki i dopuszczalny spread; inaczej brak sygnału (NONE)."
+)
 MAX_SPREAD_PIPS = 3.0
 ASSUMED_SPREAD_PIPS = 3.0
 MINIMUM_M1_CANDLES = 50

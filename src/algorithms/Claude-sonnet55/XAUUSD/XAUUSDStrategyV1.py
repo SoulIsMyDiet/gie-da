@@ -1,5 +1,13 @@
 """Punkt wejścia strategii XAU/USD z importami płaskimi."""
 
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument XAU/USD; decyzja na zamkniętych M1. LONG/SHORT: wybicie zakresu "
+    "Azji, pullback zgodny z trendem M1/M5 (ER >= 0.30) albo rewersja od skrajnego "
+    "pasma Bollingera przy niskim ER, RSI i powrocie ku VWAP. Sygnał wymaga "
+    "minimalnego wyniku i aktywnego okna; w pozostałych przypadkach NONE."
+)
+
 from pathlib import Path
 import sys
 

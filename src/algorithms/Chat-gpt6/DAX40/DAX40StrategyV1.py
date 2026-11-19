@@ -44,6 +44,15 @@ MarketOpenCheck = Callable[[str, datetime], bool]
 Candle = dict[str, Any]
 
 
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument GER30/DAX40; zamknięte świece M1. LONG/SHORT wymagają zgodnego "
+    "układu EMA9/21/50, ADX14 >= 18, wybicia maksimum/minimum z 10 poprzednich "
+    "świec z buforem ATR, odpowiedniego korpusu i pozycji zamknięcia oraz RSI "
+    "w skonfigurowanym zakresie. Wolumen nie wpływa na decyzję; inaczej NONE."
+)
+
+
 def _at_least(value: float, threshold: float) -> bool:
     """Uwzględnia błąd float wyłącznie przy równych progach włącznie."""
     return value >= threshold or isclose(

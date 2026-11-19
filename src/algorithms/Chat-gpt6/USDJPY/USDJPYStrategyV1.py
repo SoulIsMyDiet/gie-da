@@ -3,6 +3,14 @@
 
 from __future__ import annotations
 
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument USD/JPY; sygnał na zamkniętej M1. LONG/SHORT wymagają zgodnego "
+    "trendowego układu EMA na M1 i M5, ADX14 M5 >= 18, RSI14 przecinającego 50 "
+    "w kierunku transakcji oraz wybicia maksimum/minimum poprzedniej M1. "
+    "Przy braku potwierdzenia, świec albo aktualnych danych wynik to NONE."
+)
+
 import logging
 from datetime import datetime, timedelta, timezone
 from math import isfinite

@@ -81,6 +81,16 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S&P500",
 )
 logger = logging.getLogger(__name__)
+
+# Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
+STRATEGY_CONTEXT = (
+    "Instrument EURUSD/USD; decyzja po zamknięciu M1 z potwierdzeniem M5. "
+    "LONG: wzrostowy układ EMA9/21/55 na M1 i EMA20 M5, cofnięcie z odbiciem RSI "
+    "(ER >= 0.30); w konsolidacji (ER <= 0.20) odbicie od dolnego pasma Bollingera, "
+    "wyprzedanie RSI i powrót ceny ku VWAP. SHORT stosuje warunki lustrzane. "
+    "NONE, gdy brak setupu albo nie przejdą filtry danych, czasu lub ryzyka."
+)
+
 #sam skrypt napisany za pomoca calude sonnet 5.5 w przciwienstwie do reszty kodu napisanego prze chat gpt6 luna
 # pisze program w c++ słuzący do zapisywania momentów (sygnałow) swiadczacych o tym że wlansie jest dobry moment na dokonanie mikrotransakcji. Przez mikrotranskacje rozumiem wykonia operacji typu long/short i sfinalizowanie tej transkacji w ciagu max 20 minut.
 
