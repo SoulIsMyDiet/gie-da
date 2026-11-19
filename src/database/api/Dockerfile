@@ -14,6 +14,7 @@ RUN apt-get update \
     && chown appuser:appuser /var/lib/grok-sp500
 
 COPY database/api/app.py ./app.py
+COPY database/api/prompt_templates.py ./prompt_templates.py
 COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.py
 COPY database/api/market_products.py ./market_products.py
 COPY database/api/sound_alert.py ./sound_alert.py

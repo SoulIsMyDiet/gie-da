@@ -254,6 +254,35 @@ def test_initialize_backfills_xau_with_configured_spread():
     assert expected_xau_pair in case_pairs
 
 
+def test_initialize_creates_and_seeds_active_prompt():
+    """Inicjalizacja tworzy tabelę promptów i dodaje tylko jeden prompt startowy."""
+    repository = app.MarketDataRepository()
+    connection, cursor = Mock(), Mock()
+    connection.cursor.return_value = cursor
+    cursor.fetchall.return_value = []
+    with patch.object(app.mysql.connector, "connect", return_value=connection), \
+            patch.object(repository, "_migrate_signal_enum"), \
+            patch.object(repository, "_migrate_signal_source_timestamp"), \
+            patch.object(repository, "_migrate_signal_potention_schema"), \
+            patch.object(repository, "_migrate_candle_timestamps"), \
+            patch.object(repository, "_sync_signal_potention_spreads"), \
+            patch.object(repository.signal_potential_calculator, "update_pending"):
+        repository.initialize()
+
+    calls = [call.args for call in cursor.execute.call_args_list]
+    assert any("CREATE TABLE IF NOT EXISTS prompts" in call[0] for call in calls)
+    seed_call = next(
+        call for call in calls if "INSERT IGNORE INTO prompts" in call[0]
+    )
+    assert seed_call[1] == (
+        1,
+        app.INITIAL_SIGNAL_REVIEW_PROMPT,
+        True,
+        True,
+        True,
+    )
+
+
 def test_unexpected_strategy_failure_is_isolated(caplog):
     """Nieprzewidziany wyjątek analizy nie przerywa pobierania produktów."""
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)

@@ -157,6 +157,7 @@ from market_products import (  # noqa: E402
     is_market_open,
     is_monitored_product,
 )
+from prompt_templates import INITIAL_SIGNAL_REVIEW_PROMPT  # noqa: E402
 from sound_alert import play_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
@@ -789,6 +790,27 @@ class MarketDataRepository:
                         created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                     ) ENGINE=InnoDB
                     """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS prompts (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        prompt LONGTEXT NOT NULL,
+                        used_context BOOLEAN NOT NULL DEFAULT FALSE,
+                        used_parameters BOOLEAN NOT NULL DEFAULT FALSE,
+                        prompt_in_use BOOLEAN NOT NULL DEFAULT FALSE
+                    ) ENGINE=InnoDB
+                    DEFAULT CHARACTER SET utf8mb4
+                    COLLATE utf8mb4_unicode_ci
+                    """
+                )
+                cursor.execute(
+                    """
+                    INSERT IGNORE INTO prompts
+                        (id, prompt, used_context, used_parameters, prompt_in_use)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (1, INITIAL_SIGNAL_REVIEW_PROMPT, True, True, True),
                 )
                 cursor.execute("DROP TABLE IF EXISTS price_history")
                 cursor.execute(
