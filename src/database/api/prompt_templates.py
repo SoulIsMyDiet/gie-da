@@ -1,7 +1,7 @@
 """Teksty startowe promptów używanych do oceny sygnałów."""
 
 # Zwiększ wartość tylko wtedy, gdy API ma zastąpić prompt startowy nowym szablonem.
-PROMPT_TEMPLATE_VERSION = 2
+PROMPT_TEMPLATE_VERSION = 3
 
 INITIAL_SIGNAL_REVIEW_PROMPT = """# ROLA I ZADANIE
 
@@ -157,7 +157,7 @@ Używaj krótkich równoważników zdań oddzielonych średnikami.
 
 # MODEL JĘZYKOWY
 
-llm_name: Zwróć nazwę modelu językowego wraz z wersją, który wygenerował odpowiedź.
+llm_name: Zwróć dokładną nazwę modelu wraz z wersją: Qwen 3.8 27B (Groq).
 
 # FORMAT ODPOWIEDZI
 
@@ -167,7 +167,7 @@ W polu llm_name podaj nazwę modelu wraz z wersją. Zwróć dwie osobne oceny:
 aggressive oraz moderate.
 
 {
-  "llm_name": "Grok 4.5",
+  "llm_name": "Qwen 3.8 27B (Groq)",
   "aggressive": {
     "transaction": "LONG",
     "spread": 0.003,

@@ -161,10 +161,12 @@ from prompt_templates import (  # noqa: E402
     INITIAL_SIGNAL_REVIEW_PROMPT,
     PROMPT_TEMPLATE_VERSION,
 )
+from ai_verification import AIVerificationWorker  # noqa: E402
 from sound_alert import play_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
+from transaction_tracker import TransactionTracker  # noqa: E402
 from claude_sonnet55_dax40.DAX40StrategyV1 import (  # noqa: E402
     DAX40StrategyV1,
 )
@@ -795,6 +797,7 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS prompts (
@@ -882,6 +885,7 @@ class MarketDataRepository:
                 )
                 self._migrate_signal_enum(cursor)
                 self._migrate_signal_source_timestamp(cursor)
+                self._initialize_ai_verification_schema(cursor)
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS algorithm_evaluations (
@@ -1033,6 +1037,134 @@ class MarketDataRepository:
                     (product, algorithm_name, source_timestamp)
                 """
             )
+
+    @staticmethod
+    def _initialize_ai_verification_schema(
+        cursor: mysql.connector.cursor.MySQLCursor,
+    ) -> None:
+        """Tworzy tabele weryfikacji i uruchamia kolejkę dla nowych sygnałów."""
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS `transactions` (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                signal_id BIGINT UNSIGNED NOT NULL,
+                `mode` ENUM('aggressive', 'moderate') NOT NULL,
+                signal_status ENUM('long', 'short') NOT NULL,
+                ai_decision_status ENUM('long', 'short') NOT NULL,
+                open_price DECIMAL(20, 10) NOT NULL,
+                stop_loss_price DECIMAL(20, 10) NOT NULL,
+                take_profit_price DECIMAL(20, 10) NOT NULL,
+                true_spread DECIMAL(20, 10) NOT NULL,
+                time_to_open INT UNSIGNED NULL DEFAULT 0,
+                time_from_open_to_close INT UNSIGNED NULL,
+                transaction_status
+                    ENUM('awaiting', 'in progress', 'closed', 'canceled')
+                    NOT NULL DEFAULT 'awaiting',
+                transaction_saldo DECIMAL(20, 10) NULL,
+                transaction_100zl_deal DECIMAL(20, 5) NULL,
+                signal_close_utc DATETIME(6) NOT NULL,
+                opened_at_utc DATETIME(6) NULL,
+                closed_at_utc DATETIME(6) NULL,
+                UNIQUE KEY uq_transactions_signal_mode (signal_id, `mode`),
+                INDEX idx_transactions_status (transaction_status, signal_id),
+                CONSTRAINT fk_transactions_signal
+                    FOREIGN KEY (signal_id) REFERENCES signals(id)
+                    ON DELETE CASCADE
+            ) ENGINE=InnoDB
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_decisions (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                transaction_id BIGINT UNSIGNED NOT NULL,
+                `version` SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+                ai_name VARCHAR(255) NOT NULL,
+                ai_pts TINYINT UNSIGNED NOT NULL,
+                ai_decision ENUM('accept', 'decline') NOT NULL,
+                ai_decision_reason_msg VARCHAR(250) NOT NULL,
+                ai_after_tramsaction_msg TEXT NULL,
+                `mode` ENUM('aggressive', 'moderate') NOT NULL,
+                UNIQUE KEY uq_ai_decisions_transaction_version
+                    (transaction_id, `version`),
+                CONSTRAINT chk_ai_decisions_pts
+                    CHECK (ai_pts BETWEEN 1 AND 100),
+                CONSTRAINT fk_ai_decisions_transaction
+                    FOREIGN KEY (transaction_id) REFERENCES `transactions`(id)
+                    ON DELETE CASCADE
+            ) ENGINE=InnoDB
+                DEFAULT CHARACTER SET utf8mb4
+                COLLATE utf8mb4_unicode_ci
+                """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prompts_revision (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                full_prompt LONGTEXT NOT NULL,
+                ai_decision_id BIGINT UNSIGNED NULL,
+                ai_response LONGTEXT NOT NULL,
+                created_at_utc DATETIME(6) NOT NULL
+                    DEFAULT CURRENT_TIMESTAMP(6),
+                INDEX idx_prompts_revision_decision (ai_decision_id),
+                CONSTRAINT fk_prompts_revision_decision
+                    FOREIGN KEY (ai_decision_id) REFERENCES ai_decisions(id)
+                    ON DELETE SET NULL
+            ) ENGINE=InnoDB
+            DEFAULT CHARACTER SET utf8mb4
+            COLLATE utf8mb4_unicode_ci
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_verification_jobs (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                signal_id BIGINT UNSIGNED NOT NULL,
+                status ENUM(
+                    'pending', 'processing', 'completed', 'failed', 'skipped'
+                ) NOT NULL DEFAULT 'pending',
+                last_error TEXT NULL,
+                created_at_utc DATETIME(6) NOT NULL
+                    DEFAULT CURRENT_TIMESTAMP(6),
+                updated_at_utc DATETIME(6) NOT NULL
+                    DEFAULT CURRENT_TIMESTAMP(6)
+                    ON UPDATE CURRENT_TIMESTAMP(6),
+                UNIQUE KEY uq_ai_verification_jobs_signal (signal_id),
+                INDEX idx_ai_verification_jobs_status (status, created_at_utc),
+                CONSTRAINT fk_ai_verification_jobs_signal
+                    FOREIGN KEY (signal_id) REFERENCES signals(id)
+                    ON DELETE CASCADE
+            ) ENGINE=InnoDB
+                DEFAULT CHARACTER SET utf8mb4
+                COLLATE utf8mb4_unicode_ci
+                """
+        )
+        cursor.execute(
+            """
+            UPDATE ai_verification_jobs
+            SET status = 'pending',
+                last_error = 'Odzyskano zadanie po nieoczekiwanym zatrzymaniu API.'
+            WHERE status = 'processing'
+                AND updated_at_utc <
+                    UTC_TIMESTAMP(6) - INTERVAL 10 MINUTE
+            """
+        )
+        cursor.execute(
+            "DROP TRIGGER IF EXISTS trg_signals_ai_verification_after_insert"
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER trg_signals_ai_verification_after_insert
+            AFTER INSERT ON signals
+            FOR EACH ROW
+            BEGIN
+                IF NEW.`signal` IN ('long', 'short') THEN
+                    INSERT IGNORE INTO ai_verification_jobs (signal_id)
+                    VALUES (NEW.id);
+                END IF;
+            END
+            """
+        )
 
     def _migrate_signal_enum(
         self, cursor: mysql.connector.cursor.MySQLCursor
@@ -1368,8 +1500,11 @@ class MarketDataRepository:
             self.signal_potential_calculator.update_pending(
                 cursor, product_symbols
             )
+            TransactionTracker().process_candles(
+                cursor, open_market_candles
+            )
             connection.commit()
-        except mysql.connector.Error:
+        except (mysql.connector.Error, ValueError):
             connection.rollback()
             raise
         finally:
@@ -1569,7 +1704,10 @@ class MarketDataRepository:
             connection.close()
 
     def fetch_prompt_candle_history(
-        self, symbol: str, limit: int
+        self,
+        symbol: str,
+        limit: int,
+        cutoff: datetime | None = None,
     ) -> list[dict[str, Any]]:
         """Pobiera zamknięte świece M1 wraz z informacją o lukach w sesji."""
         if not is_monitored_product(symbol):
@@ -1581,9 +1719,16 @@ class MarketDataRepository:
         ):
             raise ValueError("Limit historii musi należeć do zakresu 1-1000.")
 
-        cutoff_utc = datetime.now(timezone.utc).replace(
-            second=0, microsecond=0, tzinfo=None
-        )
+        if cutoff is None:
+            cutoff_utc = datetime.now(timezone.utc).replace(
+                second=0, microsecond=0, tzinfo=None
+            )
+        else:
+            if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+                raise ValueError("Granica historii musi zawierać strefę czasową.")
+            cutoff_utc = cutoff.astimezone(timezone.utc).replace(
+                second=0, microsecond=0, tzinfo=None
+            )
         connection = mysql.connector.connect(**self.database_settings)
         try:
             cursor = connection.cursor()
@@ -2637,11 +2782,15 @@ async def lifespan(application: FastAPI):
     else:
         print("[Startup] Pętla Grok S&P 500 pominięta: ES nie jest monitorowany.")
     application.state.grok_sp500_worker = worker
+    ai_verification_worker = AIVerificationWorker(repository)
+    ai_verification_worker.start()
+    application.state.ai_verification_worker = ai_verification_worker
     try:
         yield
     finally:
         if worker is not None:
             worker.stop()
+        ai_verification_worker.stop()
 
 
 app = FastAPI(title="gie-da market data API", lifespan=lifespan)
@@ -2650,6 +2799,136 @@ app = FastAPI(title="gie-da market data API", lifespan=lifespan)
 def health() -> dict[str, str]:
     """Zwraca prostą odpowiedź kontrolną dla lokalnego API."""
     return {"status": "ok"}
+
+
+@app.get("/api/ai-verification/jobs")
+def ai_verification_jobs(
+    request: Request,
+    status: Literal[
+        "pending", "processing", "completed", "failed", "skipped"
+    ] | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    """Udostępnia statusy weryfikacji i szczegóły błędów asynchronicznych."""
+    database_settings = request.app.state.repository.database_settings
+    try:
+        connection = mysql.connector.connect(**database_settings)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się połączyć z bazą statusów weryfikacji AI.",
+        ) from error
+    try:
+        cursor = connection.cursor()
+        try:
+            if status is None:
+                cursor.execute(
+                    """
+                    SELECT signal_id, status, last_error,
+                           created_at_utc, updated_at_utc
+                    FROM ai_verification_jobs
+                    ORDER BY id DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT signal_id, status, last_error,
+                           created_at_utc, updated_at_utc
+                    FROM ai_verification_jobs
+                    WHERE status = %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                    """,
+                    (status, limit),
+                )
+            rows = cursor.fetchall()
+        except mysql.connector.Error as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Nie udało się pobrać statusów weryfikacji AI.",
+            ) from error
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+    return {
+        "jobs": [
+            {
+                "signal_id": row[0],
+                "status": row[1],
+                "last_error": row[2],
+                "created_at_utc": row[3],
+                "updated_at_utc": row[4],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/ai-verification/jobs/{signal_id}/retry")
+def retry_ai_verification_job(
+    signal_id: int,
+    request: Request,
+) -> dict[str, Any]:
+    """Ponownie kolejkuje wyłącznie zadanie zakończone błędem lub pominięte."""
+    database_settings = request.app.state.repository.database_settings
+    try:
+        connection = mysql.connector.connect(**database_settings)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się połączyć z kolejką weryfikacji AI.",
+        ) from error
+    try:
+        cursor = connection.cursor()
+        try:
+            connection.start_transaction()
+            cursor.execute(
+                """
+                SELECT status
+                FROM ai_verification_jobs
+                WHERE signal_id = %s
+                FOR UPDATE
+                """,
+                (signal_id,),
+            )
+            job = cursor.fetchone()
+            if job is None:
+                connection.rollback()
+                raise HTTPException(
+                    status_code=404,
+                    detail="Nie znaleziono zadania dla podanego sygnału.",
+                )
+            if job[0] not in {"failed", "skipped"}:
+                connection.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Ponowić można tylko zadanie failed albo skipped.",
+                )
+            cursor.execute(
+                """
+                UPDATE ai_verification_jobs
+                SET status = 'pending', last_error = NULL,
+                    updated_at_utc = UTC_TIMESTAMP(6)
+                WHERE signal_id = %s
+                """,
+                (signal_id,),
+            )
+            connection.commit()
+        except mysql.connector.Error as error:
+            connection.rollback()
+            raise HTTPException(
+                status_code=503,
+                detail="Nie udało się ponownie zakolejkować weryfikacji AI.",
+            ) from error
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+    return {"signal_id": signal_id, "status": "pending"}
 
 
 @app.get("/api/products/monitored", response_class=Response)
