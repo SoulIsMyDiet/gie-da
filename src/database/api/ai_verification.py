@@ -120,6 +120,7 @@ class GroqChatClient:
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": "gie-da/1.0",
             },
             method="POST",
         )
