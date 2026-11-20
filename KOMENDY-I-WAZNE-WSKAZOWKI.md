@@ -27,12 +27,23 @@ docker compose up -d --build
 
 ### Otwarcie konsoli MySQL
 
+Przed otwarciem konsoli ustaw kodowanie UTF-8 w bieżącym oknie PowerShell, aby
+poprawnie wyświetlać polskie znaki:
+
 ```powershell
-docker compose exec mysql mysql -u gie_da_app -p gie_da
+chcp 65001
+$utf8 = New-Object System.Text.UTF8Encoding
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+```
+
+```powershell
+docker compose exec mysql mysql --default-character-set=utf8mb4 -u gie_da_app -p gie_da
 ```
 
 Po wyświetleniu `Enter password:` wpisz wartość `MYSQL_PASSWORD` z pliku `.env`.
 Podczas wpisywania hasło nie będzie widoczne.
+Ustawienia UTF-8 dotyczą tylko wyświetlania w tym oknie — nie zmieniają danych w bazie.
 
 Po połączeniu zobaczysz znak zachęty `mysql>`. Wpisuj tam komendy SQL i kończ je
 średnikiem `;`.
