@@ -10,11 +10,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt \
     && useradd --create-home appuser \
-    && mkdir -p /var/lib/grok-sp500 \
-    && chown appuser:appuser /var/lib/grok-sp500
+    && mkdir -p /var/lib/grok-sp500 /var/log/gieda \
+    && chown appuser:appuser /var/lib/grok-sp500 /var/log/gieda
 
 COPY database/api/app.py ./app.py
 COPY database/api/ai_verification.py ./ai_verification.py
+COPY database/api/error_file_logging.py ./error_file_logging.py
 COPY database/api/candle_prompt_context.py ./candle_prompt_context.py
 COPY database/api/prompt_templates.py ./prompt_templates.py
 COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.py

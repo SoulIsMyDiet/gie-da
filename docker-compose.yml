@@ -36,8 +36,10 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       GROK_API_KEY: ${GROK_API_KEY:-}
       GROK_SP500_STATE_PATH: /var/lib/grok-sp500/processed.sqlite3
+      GIEDA_LOG_DIRECTORY: /var/log/gieda
     volumes:
       - grok_sp500_state:/var/lib/grok-sp500
+      - ./logs:/var/log/gieda
     ports:
       - "127.0.0.1:8000:8000"
 

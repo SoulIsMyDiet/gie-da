@@ -1,13 +1,13 @@
 #include "CandlePromptContextBuilder.h"
 
 #include "CandleHistoryClient.h"
+#include "ErrorLogger.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <charconv>
 #include <cmath>
-#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -27,7 +27,7 @@ constexpr std::int64_t secondsPerMinute = 60;
 constexpr std::int64_t secondsPerFiveMinutes = 5 * secondsPerMinute;
 constexpr int maximumPricePrecision = 10;
 constexpr char warningLine[] =
-    "[warning] wykryto luke w swiecy podczas wysyłania prompta</br>";
+    "Wykryto lukę w historii świec podczas budowania promptu.";
 
 struct FiveMinuteCandle {
     std::int64_t timestampUtc = 0;
@@ -339,38 +339,6 @@ std::vector<FiveMinuteCandle> aggregateFiveMinuteCandles(
 }
 
 /**
- * Znajduje log projektu; jawna ścieżka środowiskowa ma pierwszeństwo.
- */
-std::filesystem::path defaultWarningLogPath() {
-    if (const char* configuredPath =
-            std::getenv("PROMPT_CANDLE_WARNING_LOG_PATH");
-        configuredPath != nullptr && configuredPath[0] != '\0') {
-        return std::filesystem::path(configuredPath);
-    }
-
-    std::error_code fileSystemError;
-    std::filesystem::path directory =
-        std::filesystem::current_path(fileSystemError);
-    if (fileSystemError) {
-        return std::filesystem::path("LogError-11.2026");
-    }
-
-    while (!directory.empty()) {
-        if (std::filesystem::exists(directory / "CMakeLists.txt", fileSystemError) &&
-            !fileSystemError) {
-            return directory / "LogError-11.2026";
-        }
-        fileSystemError.clear();
-        const std::filesystem::path parent = directory.parent_path();
-        if (parent == directory) {
-            break;
-        }
-        directory = parent;
-    }
-    return std::filesystem::current_path() / "LogError-11.2026";
-}
-
-/**
  * Dopisuje pojedyncze ostrzeżenie o luce, nie zastępując wcześniejszych wpisów.
  */
 bool appendGapWarning(
@@ -523,14 +491,13 @@ bool CandlePromptContextBuilder::buildJson(
                 candle.timestampUtc >= gapSearchStart &&
                 candle.timestampUtc <= gapSearchEnd;
         });
-    if (relevantGap) {
-        const std::filesystem::path logPath = warningLogPath.empty()
-            ? defaultWarningLogPath()
-            : warningLogPath;
-        if (!appendGapWarning(logPath, error)) {
-            return false;
+        if (relevantGap) {
+            if (warningLogPath.empty()) {
+                ErrorLogger::warning(warningLine);
+            } else if (!appendGapWarning(warningLogPath, error)) {
+                return false;
+            }
         }
-    }
 
     if (allFiveMinuteCandles.size() < fiveMinuteCandlesToReturn) {
         error = "Do kontekstu prompta potrzeba 30 pełnych świec M5.";

@@ -3,6 +3,7 @@
 #include "CandleBackfillClient.h"
 #include "CandleHistoryClient.h"
 #include "AudioSignal.h"
+#include "ErrorLogger.h"
 #include "SignalGenerator.h"
 
 #include <algorithm>
@@ -500,6 +501,8 @@ void StockPriceMonitor::runNotifications() {
             setNotificationStatus({});
             retryDelayMs = notificationRetryInitialMs;
         } else {
+            ErrorLogger::warning(
+                "Nie udało się pobrać powiadomień sygnałów: " + error);
             setNotificationStatus("Powiadomienia sygnałów: " + error);
         }
         const DWORD waitMs = succeeded
@@ -644,10 +647,17 @@ bool StockPriceMonitor::updateCandle() {
     const bool closedCandleAvailable = fetched && isClosedCandle(candle);
     std::string updateStatus;
     if (!fetched) {
+        ErrorLogger::error(
+            "Błąd pobierania świecy 1-minutowej: " + error);
         updateStatus = "Błąd świecy 1-minutowej: " + error;
     } else if (!saved) {
+        ErrorLogger::error(
+            "Nie udało się zapisać świecy w bazie: " + error);
         updateStatus = "Nie udało się zapisać świecy w bazie: " + error;
     } else if (newlyDetectedGapCount > 0) {
+        ErrorLogger::warning(
+            "Wykryto " + std::to_string(newlyDetectedGapCount) +
+            " brakujących świec dla EURUSD/USD.");
         updateStatus = "Wykryto " +
             std::to_string(newlyDetectedGapCount) +
             " brakujących świec.";
@@ -660,6 +670,9 @@ bool StockPriceMonitor::updateCandle() {
         if (!CandleHistoryClient::fetchLatestAnalysisCandles(
                 grok45::SignalGenerator::analysisWindowCandles,
                 analysisCandles, signalError)) {
+            ErrorLogger::error(
+                "Błąd pobierania danych do algorytmu Grok-45: " +
+                signalError);
             updateStatus += " Błąd pobierania danych do algorytmu Grok-45: " +
                 signalError;
         } else {
@@ -667,6 +680,9 @@ bool StockPriceMonitor::updateCandle() {
             if (analysisCandles.empty() ||
                 !parseCandleUnixTimestamp(candle, savedCandleTimestamp) ||
                 analysisCandles.back().timestamp != savedCandleTimestamp) {
+                ErrorLogger::warning(
+                    "Dane z bazy nie zawierają ostatniej zapisanej świecy; "
+                    "sygnał Grok-45 nie został obliczony.");
                 updateStatus +=
                     " Dane z bazy nie zawierają ostatniej zapisanej świecy; "
                     "sygnał Grok-45 nie został obliczony.";
@@ -692,6 +708,8 @@ bool StockPriceMonitor::updateCandle() {
                     bool grokSignalSaved = false;
                     if (!CandleHistoryClient::saveGeneratedSignal(
                             generatedSignal, grokSignalSaved, signalError)) {
+                        ErrorLogger::error(
+                            "Błąd zapisu sygnału Grok-45: " + signalError);
                         updateStatus += " Błąd zapisu sygnału Grok-45: " +
                             signalError;
                     } else if (grokSignalSaved) {
@@ -704,6 +722,8 @@ bool StockPriceMonitor::updateCandle() {
     if (saved) {
         for (std::size_t index = 0; index < savedSignalCount; ++index) {
             if (!playSignalSavedAudio()) {
+                ErrorLogger::error(
+                    "Nie udało się odtworzyć dźwięku zapisu sygnału.");
                 updateStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
                 break;
             }
@@ -729,6 +749,9 @@ void StockPriceMonitor::updateAdditionalProducts() {
     std::string configurationError;
     if (!CandleHistoryClient::fetchMonitoredSymbols(
             configuredSymbols, configurationError)) {
+        ErrorLogger::error(
+            "Błąd odświeżania konfiguracji produktów: " +
+            configurationError);
         AcquireSRWLockExclusive(&statusLock_);
         status_ += " Błąd odświeżania konfiguracji produktów: " +
             configurationError;
@@ -752,6 +775,8 @@ void StockPriceMonitor::updateAdditionalProducts() {
     std::vector<std::string> openSymbols;
     std::string symbolsError;
     if (!CandleHistoryClient::fetchOpenSymbols(openSymbols, symbolsError)) {
+        ErrorLogger::error(
+            "Błąd pobierania aktywnych sesji: " + symbolsError);
         AcquireSRWLockExclusive(&statusLock_);
         status_ += " Błąd pobierania aktywnych sesji: " + symbolsError;
         ReleaseSRWLockExclusive(&statusLock_);
@@ -780,6 +805,9 @@ void StockPriceMonitor::updateAdditionalProducts() {
                     CandleBackfillClient::synchronize(
                         symbol, backfillResult, backfillError);
                 if (!backfillSucceeded) {
+                    ErrorLogger::warning(
+                        symbol + ": błąd uzupełniania historii: " +
+                        backfillError);
                     backfillRetryAfter_[symbol] =
                         std::chrono::steady_clock::now() +
                         backfillRetryDelay;
@@ -817,6 +845,8 @@ void StockPriceMonitor::updateAdditionalProducts() {
         std::string error;
         if (!CandlesDataClient::fetchLatestOneMinuteCandle(
                 symbol, candle, error)) {
+            ErrorLogger::warning(
+                symbol + ": błąd pobierania świecy: " + error);
             if (!additionalStatus.empty()) {
                 additionalStatus += " | ";
             }
@@ -836,6 +866,8 @@ void StockPriceMonitor::updateAdditionalProducts() {
             &candleSavedDespiteError);
         savedSignalCount += signalSaveCount;
         if (!saveSucceeded && !candleSavedDespiteError) {
+            ErrorLogger::error(
+                symbol + ": błąd zapisu świecy: " + error);
             if (!additionalStatus.empty()) {
                 additionalStatus += " | ";
             }
@@ -847,6 +879,8 @@ void StockPriceMonitor::updateAdditionalProducts() {
         }
         additionalStatus += symbol + ": ";
         if (candleSavedDespiteError) {
+            ErrorLogger::warning(
+                symbol + ": świeca zapisana, ale wystąpił błąd: " + error);
             additionalStatus += "świeca zapisana, ale " + error;
         } else {
             additionalStatus += "świeca została zapisana";
@@ -861,6 +895,9 @@ void StockPriceMonitor::updateAdditionalProducts() {
             std::string backfillError;
             if (!CandleBackfillClient::synchronize(
                     symbol, backfillResult, backfillError)) {
+                ErrorLogger::warning(
+                    symbol + ": nie udało się uzupełnić brakujących świec: " +
+                    backfillError);
                 backfilledSymbols_.erase(symbol);
                 backfillRetryAfter_[symbol] =
                     std::chrono::steady_clock::now() + backfillRetryDelay;
@@ -878,6 +915,8 @@ void StockPriceMonitor::updateAdditionalProducts() {
 
     for (std::size_t index = 0; index < savedSignalCount; ++index) {
         if (!playSignalSavedAudio()) {
+            ErrorLogger::error(
+                "Nie udało się odtworzyć dźwięku zapisu sygnału.");
             additionalStatus += " Nie udało się odtworzyć dźwięku zapisu sygnału.";
             break;
         }

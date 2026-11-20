@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include "SignalsPage.h"
+#include "ErrorLogger.h"
 #include "../WindowScale.h"
 
 #include <algorithm>
@@ -496,6 +497,7 @@ void SignalsPage::loadCurrentPage() {
             currentPage_, receivedSignals, receivedHasNextPage, error)) {
         signals_.clear();
         hasNextPage_ = false;
+        ErrorLogger::error(error);
         status_ = std::move(error);
         createDetailsButtons();
         positionControls();
@@ -507,6 +509,7 @@ void SignalsPage::loadCurrentPage() {
     status_.clear();
     if (!createDetailsButtons()) {
         status_ = "Nie udało się utworzyć przycisków szczegółów.";
+        ErrorLogger::error(status_);
     }
     positionControls();
 }
@@ -575,6 +578,7 @@ bool SignalsPage::createDetailsButtons() {
 void SignalsPage::openDetails(std::size_t signalIndex) {
     if (signalIndex >= signals_.size()) {
         detailsStatus_ = "Nie można odnaleźć wybranego sygnału.";
+        ErrorLogger::warning(detailsStatus_);
         details_ = {};
         detailsVisible_ = true;
         return;
@@ -585,6 +589,7 @@ void SignalsPage::openDetails(std::size_t signalIndex) {
     if (!CandleHistoryClient::fetchSignalPotential(
             signals_[signalIndex].id, receivedDetails, error)) {
         details_ = {};
+        ErrorLogger::error(error);
         detailsStatus_ = std::move(error);
     } else {
         details_ = std::move(receivedDetails);

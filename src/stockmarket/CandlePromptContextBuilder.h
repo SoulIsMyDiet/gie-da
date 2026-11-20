@@ -41,7 +41,7 @@ public:
      * @param history Świece M1 uporządkowane rosnąco według czasu UTC.
      * @param json Otrzymuje gotowy JSON.
      * @param error Otrzymuje opis błędu walidacji, agregacji lub zapisu logu.
-     * @param warningLogPath Opcjonalna ścieżka logu; pusta oznacza plik projektu.
+     * @param warningLogPath Opcjonalny dodatkowy plik dla ostrzeżenia o luce.
      * @return true, jeśli udało się utworzyć kompletny JSON.
      */
     static bool buildJson(

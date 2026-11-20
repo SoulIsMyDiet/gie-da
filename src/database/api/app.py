@@ -21,6 +21,8 @@ import mysql.connector
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from error_file_logging import configure_error_file_logging  # noqa: E402
+
 algorithm_directory = Path(__file__).resolve().parent / "algorithm"
 if not algorithm_directory.is_dir():
     algorithm_directory = (
@@ -2418,7 +2420,12 @@ class MarketDataRepository:
                     ).start()
                     time.sleep(retry_delay_seconds)
                 else:
-                    print(f"[Retry] {symbol}: nie udało się po {max_retries} próbach: {error}")
+                    logger.error(
+                        "[Retry] %s: nie udało się po %s próbach: %s",
+                        symbol,
+                        max_retries,
+                        error,
+                    )
         
         # Zwracamy ostatni błąd lub pusty wynik
         if last_error:
@@ -2747,6 +2754,22 @@ strategy_lock = Lock()
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Przygotowuje tabele przed obsługą żądań i pobiera brakujące świece."""
+    configured_log_directory = os.environ.get("GIEDA_LOG_DIRECTORY")
+    if configured_log_directory:
+        log_directory = Path(configured_log_directory)
+    else:
+        source_file = Path(__file__).resolve()
+        project_root = next(
+            (
+                parent
+                for parent in source_file.parents
+                if (parent / ".git").exists()
+            ),
+            source_file.parent,
+        )
+        log_directory = project_root / "logs"
+    configure_error_file_logging(log_directory)
+
     repository.initialize()
     
     # Backend - Pobieranie brakujących świec dla wszystkich monitorowanych symboli z retry
@@ -2764,8 +2787,11 @@ async def lifespan(application: FastAPI):
                 )
             else:
                 print(f"[Startup] {symbol}: brak brakujących świec")
-        except Exception as error:
-            print(f"[Startup] Błąd przy pobieraniu brakujących świec dla {symbol}: {error}")
+        except Exception:
+            logger.exception(
+                "[Startup] Błąd przy pobieraniu brakujących świec dla %s.",
+                symbol,
+            )
     
     with strategy_lock:
         candle_history = repository.fetch_candle_history("EURUSD/USD")

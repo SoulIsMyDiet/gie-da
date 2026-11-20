@@ -1,8 +1,11 @@
 """Odtwarza krótkie dźwięki dla powiadomień i błędów API."""
 
+import logging
 import platform
 import sys
 import time
+
+LOGGER = logging.getLogger(__name__)
 
 
 def play_alert(number_of_beeps: int = 3, frequency: int = 1000, duration_ms: int = 200) -> None:
@@ -27,9 +30,12 @@ def play_alert(number_of_beeps: int = 3, frequency: int = 1000, duration_ms: int
                 sys.stdout.flush()
                 time.sleep(duration_ms / 1000)
         else:
-            print(f"Ostrzeżenie: System {system} nie wspierany dla sygnału dźwiękowego.", file=sys.stderr)
-    except Exception as error:
-        print(f"Błąd przy emisji sygnału dźwiękowego: {error}", file=sys.stderr)
+            LOGGER.warning(
+                "System %s nie jest obsługiwany przy odtwarzaniu dźwięku.",
+                system,
+            )
+    except Exception:
+        LOGGER.exception("Błąd przy emisji sygnału dźwiękowego.")
 
 
 def play_connection_error_alert() -> None:
@@ -47,6 +53,9 @@ def play_connection_error_alert() -> None:
         elif system in ("Linux", "Darwin"):
             os.system(f'printf "\\a\\a\\a\\a"')
         else:
-            print(f"Ostrzeżenie: System {system} nie wspierany dla sygnału dźwiękowego.", file=sys.stderr)
-    except Exception as error:
-        print(f"Błąd przy emisji sygnału błędu: {error}", file=sys.stderr)
+            LOGGER.warning(
+                "System %s nie jest obsługiwany przy dźwiękowym sygnale błędu.",
+                system,
+            )
+    except Exception:
+        LOGGER.exception("Błąd przy emisji dźwiękowego sygnału błędu.")

@@ -20,6 +20,7 @@ add_executable(gieda WIN32
     src/stockmarket/StockMarketClient/CandleBackfillClient.cpp
     src/ai/AiClient/DailySentenceClient.cpp
     src/utility/AudioSignal.cpp
+    src/utility/ErrorLogger.cpp
     src/algorithms/Grok-45/EURUSD/SignalGenerator.cpp
 )
 set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
@@ -70,6 +71,7 @@ if(BUILD_TESTING)
     add_executable(candle_prompt_context_tests
         src/stockmarket/CandlePromptContextBuilder.cpp
         src/stockmarket/StockMarketClient/CandleHistoryClient.cpp
+        src/utility/ErrorLogger.cpp
         src/stockmarket/tests/CandlePromptContextBuilderTests.cpp
     )
     set_property(
@@ -79,6 +81,7 @@ if(BUILD_TESTING)
     target_include_directories(candle_prompt_context_tests PRIVATE
         src/stockmarket
         src/stockmarket/StockMarketClient
+        src/utility
     )
     target_link_libraries(candle_prompt_context_tests PRIVATE winhttp)
     target_link_options(candle_prompt_context_tests PRIVATE

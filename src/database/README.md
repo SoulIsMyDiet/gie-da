@@ -36,6 +36,15 @@ Projekt używa MySQL uruchomionego w Dockerze. Pobrane świece rynkowe są przec
 - Logi lokalnego API: `docker compose logs -f price-history-api`.
 - Zatrzymanie usług: `docker compose stop`. Zatrzymanie nie usuwa zapisanych danych.
 
+## Pliki błędów
+
+Ostrzeżenia i błędy API oraz aplikacji C++ są dopisywane do wspólnych plików
+`logs/LogError-MM.YYYY`, na przykład `logs/LogError-11.2026`. Każdy wpis
+zajmuje jedną linię i zawiera poziom (`[Warning]` lub `[Error]`), lokalną datę
+i godzinę oraz komunikat. Nowy plik dla kolejnego miesiąca jest tworzony przy
+starcie aplikacji/API albo przy pierwszym wpisie w nowym miesiącu. Starsze
+pliki pozostają zachowane.
+
 Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu API tabela `price_history`, jeśli istnieje, jest usuwana wraz z zawartością. Nie używaj `docker compose down -v`, jeśli chcesz zachować pozostałe dane — opcja `-v` usuwa cały wolumen.
 
 ## Struktura danych

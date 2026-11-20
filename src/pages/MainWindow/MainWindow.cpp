@@ -2,11 +2,14 @@
 #include <windows.h>
 
 #include "DailySentenceClient.h"
+#include "ErrorLogger.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
 #include "../WindowScale.h"
 
 #include <algorithm>
+#include <exception>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -23,6 +26,14 @@ constexpr int reportsButtonGap = 12;
 constexpr int reportsButtonBottomMargin = 16;
 constexpr int initialWindowWidth = 1280;
 constexpr int initialWindowHeight = 720;
+
+/**
+ * Zapisuje błąd do pliku i pokazuje go użytkownikowi w standardowym oknie.
+ */
+void showErrorMessage(HWND owner, const wchar_t* message) {
+    ErrorLogger::error(message);
+    MessageBoxW(owner, message, L"Błąd", MB_ICONERROR);
+}
 
 } // namespace
 
@@ -47,8 +58,8 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
     windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
 
     if (!RegisterClassW(&windowClass)) {
-        MessageBoxW(nullptr, L"Nie udało się zarejestrować klasy okna.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            nullptr, L"Nie udało się zarejestrować klasy okna.");
         return false;
     }
 
@@ -61,8 +72,7 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
         initialWindowWidth, initialWindowHeight,
         nullptr, nullptr, instance_, this);
     if (handle_ == nullptr) {
-        MessageBoxW(nullptr, L"Nie udało się utworzyć okna.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(nullptr, L"Nie udało się utworzyć okna.");
         return false;
     }
 
@@ -72,7 +82,7 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
 }
 
 /**
- * Dispatches queued messages and returns the application's exit code.
+ * Obsługuje komunikaty systemu i zwraca kod zakończenia aplikacji.
  */
 int MainWindow::run() {
     MSG message{};
@@ -82,11 +92,17 @@ int MainWindow::run() {
         DispatchMessageA(&message);
     }
 
-    return result == -1 ? 1 : static_cast<int>(message.wParam);
+    if (result == -1) {
+        ErrorLogger::error(
+            "Nie udało się pobrać komunikatu okna. Kod Win32: " +
+            std::to_string(GetLastError()) + ".");
+        return 1;
+    }
+    return static_cast<int>(message.wParam);
 }
 
 /**
- * Associates each created window with its MainWindow object and dispatches messages.
+ * Łączy okno z obiektem MainWindow i bezpiecznie przekazuje mu komunikaty.
  */
 LRESULT CALLBACK MainWindow::windowProcedure(
     HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -105,7 +121,23 @@ LRESULT CALLBACK MainWindow::windowProcedure(
         return DefWindowProcW(window, message, wParam, lParam);
     }
 
-    const LRESULT result = mainWindow->handleMessage(message, wParam, lParam);
+    LRESULT result = 0;
+    try {
+        result = mainWindow->handleMessage(message, wParam, lParam);
+    } catch (const std::exception& error) {
+        ErrorLogger::error(
+            "Nieobsłużony wyjątek podczas obsługi komunikatu okna: " +
+            std::string(error.what()));
+        result = message == WM_CREATE
+            ? -1
+            : DefWindowProcW(window, message, wParam, lParam);
+    } catch (...) {
+        ErrorLogger::error(
+            "Nieznany wyjątek podczas obsługi komunikatu okna.");
+        result = message == WM_CREATE
+            ? -1
+            : DefWindowProcW(window, message, wParam, lParam);
+    }
     if (message == WM_NCDESTROY) {
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
     }
@@ -174,33 +206,32 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
  */
 bool MainWindow::onCreate() {
     if (!createReportsButton()) {
-        MessageBoxW(handle_, L"Nie udało się utworzyć przycisku raportów.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(handle_, L"Nie udało się utworzyć przycisku raportów.");
         return false;
     }
     if (!createCandleGapsButton()) {
-        MessageBoxW(handle_, L"Nie udało się utworzyć przycisku brakujących świec.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć przycisku brakujących świec.");
         return false;
     }
     if (!createSignalsButton()) {
-        MessageBoxW(handle_, L"Nie udało się utworzyć przycisku sygnałów.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć przycisku sygnałów.");
         return false;
     }
     if (!reportsPage_.create(instance_, handle_)) {
-        MessageBoxW(handle_, L"Nie udało się utworzyć przycisków raportu.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć przycisków raportu.");
         return false;
     }
     if (!candleGapsPage_.create(instance_, handle_)) {
-        MessageBoxW(handle_, L"Nie udało się utworzyć widoku brakujących świec.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć widoku brakujących świec.");
         return false;
     }
     if (!signalsPage_.create(instance_, handle_)) {
-        MessageBoxW(handle_, L"Nie udało się utworzyć widoku sygnałów.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć widoku sygnałów.");
         return false;
     }
 
@@ -210,18 +241,20 @@ bool MainWindow::onCreate() {
     signalsPage_.positionControls();
 
     if (!candleMonitor_.start(handle_)) {
-        MessageBoxW(handle_, L"Nie udało się uruchomić pobierania świecy.",
-                    L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            handle_, L"Nie udało się uruchomić pobierania świecy.");
         return false;
     }
 
     try {
         startDailySentenceRequest();
-    } catch (const std::system_error&) {
+    } catch (const std::system_error& error) {
+        ErrorLogger::error(
+            "Nie udało się uruchomić pobierania sentencji: " +
+            std::string(error.what()));
         candleMonitor_.stop();
-        MessageBoxW(
-            handle_, L"Nie udało się uruchomić pobierania sentencji.",
-            L"Błąd", MB_ICONERROR);
+        showErrorMessage(
+            handle_, L"Nie udało się uruchomić pobierania sentencji.");
         return false;
     }
     return true;
@@ -234,8 +267,19 @@ void MainWindow::startDailySentenceRequest() {
     dailySentenceThread_ = std::thread([this]() {
         std::string sentence;
         std::string error;
-        const bool succeeded =
-            DailySentenceClient::fetchDailySentence(sentence, error);
+        bool succeeded = false;
+        try {
+            succeeded =
+                DailySentenceClient::fetchDailySentence(sentence, error);
+        } catch (const std::exception& exception) {
+            error = "Nieobsłużony wyjątek podczas pobierania sentencji: " +
+                std::string(exception.what());
+        } catch (...) {
+            error = "Nieznany wyjątek podczas pobierania sentencji.";
+        }
+        if (!succeeded) {
+            ErrorLogger::error(error);
+        }
         {
             const std::lock_guard<std::mutex> lock(dailySentenceMutex_);
             dailySentence_ = succeeded

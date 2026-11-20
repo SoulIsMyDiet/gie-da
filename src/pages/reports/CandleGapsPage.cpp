@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include "CandleGapsPage.h"
+#include "ErrorLogger.h"
 #include "../WindowScale.h"
 
 #include <algorithm>
@@ -284,6 +285,7 @@ void CandleGapsPage::loadCurrentPage() {
             currentPage_, receivedGaps, receivedHasNextPage, error)) {
         gaps_.clear();
         hasNextPage_ = false;
+        ErrorLogger::error(error);
         status_ = std::move(error);
         return;
     }

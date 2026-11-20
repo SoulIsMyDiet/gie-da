@@ -241,7 +241,8 @@ def test_lifespan_starts_and_stops_worker() -> None:
             worker.stop.assert_not_called()
         worker.stop.assert_called_once()
 
-    with patch.object(module, "GrokSP500Worker", return_value=worker), \
+    with patch.object(module, "configure_error_file_logging"), \
+            patch.object(module, "GrokSP500Worker", return_value=worker), \
             patch.object(module.repository, "initialize"), \
             patch.object(module, "get_monitored_symbols", return_value=()), \
             patch.object(module, "is_monitored_product", return_value=True), \
@@ -260,7 +261,8 @@ def test_lifespan_skips_worker_when_sp500_is_not_monitored() -> None:
         async with module.lifespan(module.app):
             assert module.app.state.grok_sp500_worker is None
 
-    with patch.object(module, "GrokSP500Worker") as worker_factory, \
+    with patch.object(module, "configure_error_file_logging"), \
+            patch.object(module, "GrokSP500Worker") as worker_factory, \
             patch.object(module.repository, "initialize"), \
             patch.object(module, "get_monitored_symbols", return_value=()), \
             patch.object(module, "is_monitored_product", return_value=False), \

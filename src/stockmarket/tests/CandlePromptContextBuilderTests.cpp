@@ -102,7 +102,7 @@ bool testBuildsFiftyM1AndThirtyM5Candles() {
     std::filesystem::remove(logPath, fileSystemError);
     return require(
         logContent ==
-            "[warning] wykryto luke w swiecy podczas wysyłania prompta</br>\n",
+            "Wykryto lukę w historii świec podczas budowania promptu.\n",
         "Ostrzeżenie o luce nie zostało zapisane w wymaganej postaci.");
 }
 

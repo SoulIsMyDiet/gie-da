@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include "ErrorLogger.h"
 #include "ReportsPage.h"
 #include "../WindowScale.h"
 
@@ -286,6 +287,7 @@ void ReportsPage::loadCurrentPage() {
             currentPage_, receivedCandles, receivedHasNextPage, error)) {
         candles_.clear();
         hasNextPage_ = false;
+        ErrorLogger::error(error);
         status_ = std::move(error);
         return;
     }
