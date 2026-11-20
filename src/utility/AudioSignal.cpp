@@ -11,6 +11,9 @@
 
 namespace {
 
+// Tymczasowe wyciszenie wszystkich sygnałów dźwiękowych aplikacji.
+constexpr bool audioSignalsEnabled = false;
+
 // Audio format and signal timing used to construct the in-memory WAV data.
 constexpr DWORD sampleRate = 44100;
 #pragma pack(push, 1)
@@ -85,5 +88,9 @@ bool playBeeps(DWORD beepCount, double frequency, DWORD durationMs, DWORD gapMs)
  * Odtwarza dwa piknięcia po potwierdzonym zapisie sygnału do bazy.
  */
 bool AudioSignal::playSignalSaved() {
+    if (!audioSignalsEnabled) {
+        return true;
+    }
+
     return playBeeps(2, 1000.0, 120, 100);
 }
