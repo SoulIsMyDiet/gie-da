@@ -37,6 +37,7 @@ from candle_prompt_context import (  # noqa: E402
     PromptContextError,
 )
 from strategy_context_registry import load_strategy_context_registry  # noqa: E402
+from prompt_templates import INITIAL_SIGNAL_REVIEW_PROMPT  # noqa: E402
 
 
 def _valid_response() -> dict[str, object]:
@@ -53,7 +54,6 @@ def _valid_response() -> dict[str, object]:
         "reason_msg": "M1 i M5 potwierdzają kierunek.",
     }
     return {
-        "llm_name": MODEL_DISPLAY_NAME,
         "aggressive": variant.copy(),
         "moderate": variant.copy(),
     }
@@ -105,22 +105,18 @@ def test_validator_accepts_both_modes_and_preserves_decimal_values() -> None:
         json.dumps(_valid_response(), ensure_ascii=False)
     )
 
-    assert validated["llm_name"] == MODEL_DISPLAY_NAME
+    assert set(validated) == {"aggressive", "moderate"}
     assert validated["aggressive"]["open_price"] == Decimal("17.102")
     assert validated["moderate"]["decision"] == "YES"
 
 
-def test_validator_accepts_the_name_configured_for_another_provider() -> None:
-    """Wymaga dokładnej nazwy wybranego dostawcy, nie nazwy Groq."""
+def test_validator_rejects_a_model_name_returned_in_the_json() -> None:
+    """Nie przyjmuje llm_name w JSON-ie, bo nazwę ustala konfiguracja kodu."""
     response = _valid_response()
     response["llm_name"] = "Dodatkowy model"
 
-    validated = validate_verifier_response(
-        json.dumps(response, ensure_ascii=False),
-        expected_llm_name="Dodatkowy model",
-    )
-
-    assert validated["llm_name"] == "Dodatkowy model"
+    with pytest.raises(AIVerificationError, match="wyłącznie aggressive i moderate"):
+        validate_verifier_response(json.dumps(response, ensure_ascii=False))
 
 
 @pytest.mark.parametrize(
@@ -130,11 +126,10 @@ def test_validator_accepts_the_name_configured_for_another_provider() -> None:
         lambda value: value["aggressive"].update(pts=101),
         lambda value: value["aggressive"].update(take_profit=17.100),
         lambda value: value["aggressive"].update(reason_msg="x" * 251),
-        lambda value: value.update(llm_name="Nieznany model"),
     ],
 )
 def test_validator_rejects_invalid_response_shapes(change) -> None:
-    """Odrzuca niekompletną odpowiedź, błędne wartości i inną nazwę modelu."""
+    """Odrzuca niekompletną odpowiedź i błędne wartości."""
     response = _valid_response()
     change(response)
 
@@ -162,6 +157,14 @@ def test_prompt_replaces_only_the_named_variables() -> None:
     assert '"ema": 12' in prompt
     assert "Opis strategii" in prompt
     assert '{"M1":[]}' in prompt
+
+
+def test_seed_prompt_does_not_spend_tokens_on_the_model_name() -> None:
+    """Pozostawia identyfikację modelu kodowi i zachowuje zmienne promptu."""
+    assert "llm_name" not in INITIAL_SIGNAL_REVIEW_PROMPT
+    assert "<parametry_algorytmu>" in INITIAL_SIGNAL_REVIEW_PROMPT
+    assert "<kontekst_algorytmu>" in INITIAL_SIGNAL_REVIEW_PROMPT
+    assert "<historia_świec>" in INITIAL_SIGNAL_REVIEW_PROMPT
 
 
 def test_groq_client_reports_missing_key_without_sending_a_request() -> None:
@@ -225,8 +228,8 @@ def test_router_sends_only_the_configured_instrument_to_the_secondary_model(
     assert router.client_for("USD/MXN") is router.client_for("USD/MXN")
 
 
-def test_openai_compatible_client_sends_expected_model_and_name() -> None:
-    """Wysyła klucz i model z konfiguracji bez kontaktu z siecią."""
+def test_openai_compatible_client_sends_model_without_requesting_its_name() -> None:
+    """Wysyła model z konfiguracji bez proszenia o nazwę w odpowiedzi."""
     response = MagicMock()
     response.__enter__.return_value = response
     response.read.return_value = (
@@ -249,7 +252,7 @@ def test_openai_compatible_client_sends_expected_model_and_name() -> None:
     request_body = json.loads(request.data.decode("utf-8"))
     assert request.get_header("Authorization") == "Bearer test-key"
     assert request_body["model"] == "small-model"
-    assert "Dodatkowy model" in request_body["messages"][0]["content"]
+    assert "llm_name" not in request_body["messages"][0]["content"]
 
 
 def test_worker_uses_the_provider_assigned_to_the_signal_product() -> None:
@@ -257,7 +260,6 @@ def test_worker_uses_the_provider_assigned_to_the_signal_product() -> None:
     client = Mock()
     client.display_name = "Dodatkowy model"
     response = _valid_response()
-    response["llm_name"] = "Dodatkowy model"
     client.complete.return_value = json.dumps(response, ensure_ascii=False)
     router = Mock()
     router.client_for.return_value = client
@@ -287,10 +289,7 @@ def test_worker_uses_the_provider_assigned_to_the_signal_product() -> None:
 
     router.client_for.assert_called_once_with("USD/MXN")
     client.complete.assert_called_once_with("Sprawdź sygnał.")
-    assert (
-        worker._save_success.call_args.args[6]["llm_name"]
-        == "Dodatkowy model"
-    )
+    assert worker._save_success.call_args.args[7] == "Dodatkowy model"
 
 
 def test_strategy_registry_maps_known_signal_names() -> None:
@@ -443,6 +442,7 @@ def test_success_persists_both_modes_even_when_decision_is_no() -> None:
             Decimal("17.102"),
             "long",
             response,
+            MODEL_DISPLAY_NAME,
             "pełny prompt",
             response_text,
         )
@@ -465,6 +465,7 @@ def test_success_persists_both_modes_even_when_decision_is_no() -> None:
     assert len(transactions) == len(decisions) == len(revisions) == 2
     assert transactions[0][8:10] == (0, "in progress")
     assert transactions[1][8:10] == (None, "awaiting")
+    assert decisions[0][1] == decisions[1][1] == MODEL_DISPLAY_NAME
     assert decisions[1][3] == "decline"
     assert revisions[0][1] == 2
     assert revisions[1][1] == 5

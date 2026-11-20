@@ -105,9 +105,8 @@ class GroqChatClient:
                         "role": "system",
                         "content": (
                             "Zwróć wyłącznie poprawny obiekt JSON z polami "
-                            "llm_name, aggressive i moderate. Każdy wariant "
-                            "musi zawierać dokładnie pola wymagane przez prompt. "
-                            f"llm_name ustaw dokładnie na {MODEL_DISPLAY_NAME!r}."
+                            "aggressive i moderate. Każdy wariant "
+                            "musi zawierać dokładnie pola wymagane przez prompt."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -230,9 +229,8 @@ class OpenAICompatibleChatClient:
                         "role": "system",
                         "content": (
                             "Zwróć wyłącznie poprawny obiekt JSON z polami "
-                            "llm_name, aggressive i moderate. Każdy wariant "
-                            "musi zawierać dokładnie pola wymagane przez prompt. "
-                            f"llm_name ustaw dokładnie na {self.display_name!r}."
+                            "aggressive i moderate. Każdy wariant "
+                            "musi zawierać dokładnie pola wymagane przez prompt."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -385,9 +383,10 @@ def load_verifier_routing_config(
         if not all(
             isinstance(value, str) and value.strip()
             for value in (endpoint, model, display_name, api_key_env)
-        ):
+        ) or len(display_name.strip()) > 255:
             raise AIVerificationError(
-                f"Dostawca {provider_id!r} zawiera puste ustawienie."
+                f"Dostawca {provider_id!r} zawiera puste ustawienie "
+                "lub nazwę dłuższą niż 255 znaków."
             )
         try:
             parsed_url = urlsplit(endpoint)
@@ -482,7 +481,6 @@ class AIVerificationRouter:
 
 def validate_verifier_response(
     response_text: str,
-    expected_llm_name: str = MODEL_DISPLAY_NAME,
 ) -> dict[str, Any]:
     """Sprawdza strukturę i wartości odpowiedzi weryfikatora.
 
@@ -490,7 +488,7 @@ def validate_verifier_response(
         response_text: Tekst JSON zwrócony przez model.
 
     Returns:
-        Odpowiedź z cenami i spreadem zamienionymi na Decimal.
+        Dwa warianty odpowiedzi z cenami i spreadem zamienionymi na Decimal.
 
     Raises:
         AIVerificationError: Gdy odpowiedź nie spełnia ścisłego kontraktu.
@@ -506,26 +504,14 @@ def validate_verifier_response(
         ) from error
 
     if not isinstance(response, dict) or set(response) != {
-        "llm_name",
         "aggressive",
         "moderate",
     }:
         raise AIVerificationError(
-            "Odpowiedź musi zawierać wyłącznie llm_name, aggressive i moderate."
-        )
-    llm_name = response["llm_name"]
-    if (
-        not isinstance(llm_name, str)
-        or not llm_name.strip()
-        or len(llm_name.strip()) > 255
-    ):
-        raise AIVerificationError("Pole llm_name musi zawierać nazwę modelu.")
-    if llm_name.strip() != expected_llm_name:
-        raise AIVerificationError(
-            f"Pole llm_name musi mieć wartość {expected_llm_name!r}."
+            "Odpowiedź musi zawierać wyłącznie aggressive i moderate."
         )
 
-    normalized: dict[str, Any] = {"llm_name": llm_name.strip()}
+    normalized: dict[str, Any] = {}
     for mode_name in MODE_NAMES:
         mode_response = response[mode_name]
         if (
@@ -727,14 +713,17 @@ class AIVerificationWorker:
             )
             client = self._client or self._router.client_for(product)
             response_text = client.complete(full_prompt)
-            expected_llm_name = getattr(
-                client, "display_name", MODEL_DISPLAY_NAME
-            )
-            if not isinstance(expected_llm_name, str):
-                expected_llm_name = MODEL_DISPLAY_NAME
-            verifier_response = validate_verifier_response(
-                response_text, expected_llm_name
-            )
+            ai_name = getattr(client, "display_name", None)
+            if (
+                not isinstance(ai_name, str)
+                or not ai_name.strip()
+                or len(ai_name) > 255
+            ):
+                raise AIVerificationError(
+                    "Wybrany dostawca nie ma prawidłowej nazwy modelu."
+                )
+            ai_name = ai_name.strip()
+            verifier_response = validate_verifier_response(response_text)
             self._save_success(
                 job_id,
                 signal_id,
@@ -743,6 +732,7 @@ class AIVerificationWorker:
                 signal_price,
                 signal_direction,
                 verifier_response,
+                ai_name,
                 full_prompt,
                 response_text,
             )
@@ -798,10 +788,30 @@ class AIVerificationWorker:
         signal_price_value: Any,
         signal_direction: str,
         response: dict[str, Any],
+        ai_name: str,
         full_prompt: str,
         response_text: str,
     ) -> None:
-        """Zapisuje oba warianty, ich decyzje oraz historię prompta atomowo."""
+        """Zapisuje oba warianty, nazwę modelu i historię prompta atomowo.
+
+        Args:
+            job_id: Identyfikator przetwarzanego zadania.
+            signal_id: Identyfikator sygnału, który uruchomił weryfikację.
+            product: Symbol instrumentu używany do pobrania świec.
+            signal_close_utc: Czas zamknięcia świecy sygnałowej w UTC.
+            signal_price_value: Cena zamknięcia świecy sygnałowej.
+            signal_direction: Kierunek sygnału zapisany w tabeli signals.
+            response: Zweryfikowane dane profili aggressive i moderate.
+            ai_name: Nazwa dostawcy odczytana z konfiguracji klienta.
+            full_prompt: Pełny prompt wysłany do dostawcy.
+            response_text: Surowy tekst odpowiedzi dostawcy.
+
+        Raises:
+            mysql.connector.Error: Gdy transakcja zapisu w MySQL nie powiedzie się.
+            ValueError: Gdy wartości odpowiedzi nie mogą zostać zapisane.
+        """
+        if not ai_name.strip() or len(ai_name) > 255:
+            raise ValueError("Nazwa modelu musi zawierać 1-255 znaków.")
         connection = mysql.connector.connect(**self._database_settings)
         try:
             cursor = connection.cursor()
@@ -852,7 +862,7 @@ class AIVerificationWorker:
                         """,
                         (
                             transaction_id,
-                            response["llm_name"],
+                            ai_name,
                             mode_response["pts"],
                             (
                                 "accept"
