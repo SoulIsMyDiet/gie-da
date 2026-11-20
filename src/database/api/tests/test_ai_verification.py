@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -29,6 +30,7 @@ from ai_verification import (  # noqa: E402
     GroqChatClient,
     MODEL_DISPLAY_NAME,
     OpenAICompatibleChatClient,
+    VerifierResult,
     _signal_datetime_to_utc,
     assemble_verifier_prompt,
     validate_verifier_response,
@@ -191,16 +193,18 @@ def test_groq_client_uses_the_desktop_user_agent() -> None:
     assert request.get_header("User-agent") == "gie-da/1.0"
 
 
-def test_router_sends_only_the_configured_instrument_to_the_secondary_model(
+def test_router_supports_multiple_models_for_one_instrument(
     tmp_path: Path,
 ) -> None:
-    """Pozostawia domyślną trasę Groq i nadpisuje tylko wybraną parę."""
+    """Zwraca wszystkie modele przypisane do instrumentu w kolejności z pliku."""
     config_path = tmp_path / "ai_verification_config.json"
     config_path.write_text(
         json.dumps(
             {
                 "default_provider": "groq",
-                "instrument_routes": {"USD/MXN": "secondary"},
+                "instrument_routes": {
+                    "USD/MXN": ["secondary", "groq"]
+                },
                 "providers": {
                     "groq": {"type": "groq"},
                     "secondary": {
@@ -220,25 +224,27 @@ def test_router_sends_only_the_configured_instrument_to_the_secondary_model(
 
     router = AIVerificationRouter(config_path)
 
-    assert router.provider_id_for("USD/MXN") == "secondary"
-    assert router.provider_id_for("USD/JPY") == "groq"
-    assert isinstance(
-        router.client_for("USD/MXN"), OpenAICompatibleChatClient
-    )
-    assert isinstance(router.client_for("USD/JPY"), GroqChatClient)
-    assert router.client_for("USD/MXN") is router.client_for("USD/MXN")
+    assert router.provider_ids_for("USD/MXN") == ("secondary", "groq")
+    assert router.provider_ids_for("USD/JPY") == ("groq",)
+    clients = router.clients_for("USD/MXN")
+    assert isinstance(clients[0][1], OpenAICompatibleChatClient)
+    assert isinstance(clients[1][1], GroqChatClient)
+    assert router.clients_for("USD/MXN") == clients
 
 
-def test_router_assigns_only_usdmxn_to_claude() -> None:
-    """Pozostawia Groq dla pozostałych symboli i kieruje USD/MXN do Claude."""
+def test_router_assigns_both_models_only_to_usdmxn() -> None:
+    """Uruchamia Claude i Groq dla USD/MXN, a pozostałym zostawia Groq."""
     router = AIVerificationRouter(
         Path(__file__).resolve().parents[1]
         / "ai_verification_config.json"
     )
 
-    assert router.provider_id_for("USD/MXN") == "claude_sonnet55"
-    assert router.provider_id_for("USD/JPY") == "groq"
-    claude_client = router.client_for("USD/MXN")
+    assert router.provider_ids_for("USD/MXN") == (
+        "claude_sonnet55",
+        "groq",
+    )
+    assert router.provider_ids_for("USD/JPY") == ("groq",)
+    claude_client = router.clients_for("USD/MXN")[0][1]
     assert isinstance(claude_client, AnthropicMessagesClient)
     assert claude_client.display_name == "Claude Sonnet 5.5 (Anthropic)"
 
@@ -318,14 +324,28 @@ def test_anthropic_client_rejects_missing_key_without_sending_a_request() -> Non
     opener.assert_not_called()
 
 
-def test_worker_uses_the_provider_assigned_to_the_signal_product() -> None:
-    """Kieruje sygnał do modelu wybranego dla jego symbolu produktu."""
-    client = Mock()
-    client.display_name = "Dodatkowy model"
+def test_worker_requests_all_models_assigned_to_the_signal_product() -> None:
+    """Odpytuje Claude i Groq dla sygnału USD/MXN i zapisuje oba wyniki."""
+    claude_client = Mock()
+    claude_client.display_name = "Claude Sonnet 5.5 (Anthropic)"
+    groq_client = Mock()
+    groq_client.display_name = MODEL_DISPLAY_NAME
     response = _valid_response()
-    client.complete.return_value = json.dumps(response, ensure_ascii=False)
+    simultaneous_requests = Barrier(2, timeout=2)
+    response_text = json.dumps(response, ensure_ascii=False)
+
+    def complete_in_parallel(prompt: str) -> str:
+        assert prompt == "Sprawdź sygnał."
+        simultaneous_requests.wait()
+        return response_text
+
+    claude_client.complete.side_effect = complete_in_parallel
+    groq_client.complete.side_effect = complete_in_parallel
     router = Mock()
-    router.client_for.return_value = client
+    router.clients_for.return_value = (
+        ("claude_sonnet55", claude_client),
+        ("groq", groq_client),
+    )
     worker = AIVerificationWorker(
         SimpleNamespace(database_settings={}),
         router=router,
@@ -350,9 +370,18 @@ def test_worker_uses_the_provider_assigned_to_the_signal_product() -> None:
         )
     )
 
-    router.client_for.assert_called_once_with("USD/MXN")
-    client.complete.assert_called_once_with("Sprawdź sygnał.")
-    assert worker._save_success.call_args.args[7] == "Dodatkowy model"
+    router.clients_for.assert_called_once_with("USD/MXN")
+    claude_client.complete.assert_called_once_with("Sprawdź sygnał.")
+    groq_client.complete.assert_called_once_with("Sprawdź sygnał.")
+    results = worker._save_success.call_args.args[6]
+    assert [result.provider_id for result in results] == [
+        "claude_sonnet55",
+        "groq",
+    ]
+    assert [result.ai_name for result in results] == [
+        "Claude Sonnet 5.5 (Anthropic)",
+        MODEL_DISPLAY_NAME,
+    ]
 
 
 def test_strategy_registry_maps_known_signal_names() -> None:
@@ -473,8 +502,8 @@ def test_retry_endpoint_rejects_a_job_already_in_progress() -> None:
     assert not connection.commit.called
 
 
-def test_success_persists_both_modes_even_when_decision_is_no() -> None:
-    """Zapisuje dwa warianty i nie pomija symulacji z decyzją NO."""
+def test_success_persists_each_model_and_both_modes_even_when_decision_is_no() -> None:
+    """Zapisuje osobne transakcje obu modeli i nie pomija decyzji NO."""
     cursor = _MemoryCursor()
     connection = Mock()
     connection.cursor.return_value = cursor
@@ -497,6 +526,20 @@ def test_success_persists_both_modes_even_when_decision_is_no() -> None:
         "connect",
         return_value=connection,
     ):
+        verifier_results = (
+            VerifierResult(
+                provider_id="claude_sonnet55",
+                ai_name="Claude Sonnet 5.5 (Anthropic)",
+                response=response,
+                response_text=response_text,
+            ),
+            VerifierResult(
+                provider_id="groq",
+                ai_name=MODEL_DISPLAY_NAME,
+                response=response,
+                response_text=response_text,
+            ),
+        )
         worker._save_success(
             10,
             20,
@@ -504,10 +547,8 @@ def test_success_persists_both_modes_even_when_decision_is_no() -> None:
             signal_close_utc,
             Decimal("17.102"),
             "long",
-            response,
-            MODEL_DISPLAY_NAME,
+            verifier_results,
             "pełny prompt",
-            response_text,
         )
 
     transactions = [
@@ -525,12 +566,20 @@ def test_success_persists_both_modes_even_when_decision_is_no() -> None:
         for query, parameters in cursor.calls
         if "INSERT INTO prompts_revision" in query
     ]
-    assert len(transactions) == len(decisions) == len(revisions) == 2
-    assert transactions[0][8:10] == (0, "in progress")
-    assert transactions[1][8:10] == (None, "awaiting")
-    assert decisions[0][1] == decisions[1][1] == MODEL_DISPLAY_NAME
+    assert len(transactions) == len(decisions) == len(revisions) == 4
+    assert transactions[0][1:3] == ("claude_sonnet55", "aggressive")
+    assert transactions[1][1:3] == ("claude_sonnet55", "moderate")
+    assert transactions[0][9:11] == (0, "in progress")
+    assert transactions[1][9:11] == (None, "awaiting")
+    assert transactions[2][1:3] == ("groq", "aggressive")
+    assert transactions[3][1:3] == ("groq", "moderate")
+    assert [decision[1] for decision in decisions] == [
+        "Claude Sonnet 5.5 (Anthropic)",
+        "Claude Sonnet 5.5 (Anthropic)",
+        MODEL_DISPLAY_NAME,
+        MODEL_DISPLAY_NAME,
+    ]
     assert decisions[1][3] == "decline"
-    assert revisions[0][1] == 2
-    assert revisions[1][1] == 5
+    assert [revision[1] for revision in revisions] == [2, 5, 8, 11]
     assert connection.commit.called
     transaction_tracker.process_historical_candles.assert_called_once()

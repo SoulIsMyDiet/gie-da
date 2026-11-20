@@ -9,6 +9,7 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -418,9 +419,23 @@ class VerifierProviderSettings:
     api_key_env: str | None = None
 
 
+@dataclass(frozen=True)
+class VerifierResult:
+    """Przechowuje wynik jednego modelu dla pojedynczego sygnału."""
+
+    provider_id: str
+    ai_name: str
+    response: dict[str, Any]
+    response_text: str
+
+
 def load_verifier_routing_config(
     config_path: Path | None = None,
-) -> tuple[str, dict[str, VerifierProviderSettings], dict[str, str]]:
+) -> tuple[
+    str,
+    dict[str, VerifierProviderSettings],
+    dict[str, tuple[str, ...]],
+]:
     """Wczytuje dostawców i przypisania instrumentów do modeli.
 
     Args:
@@ -461,10 +476,14 @@ def load_verifier_routing_config(
         if (
             not isinstance(provider_id, str)
             or not provider_id.strip()
+            or len(provider_id) > 64
+            or not provider_id.isascii()
+            or not provider_id.replace("_", "").replace("-", "").isalnum()
             or not isinstance(provider_value, dict)
         ):
             raise AIVerificationError(
-                "Każdy dostawca musi mieć nazwę i obiekt ustawień."
+                "Każdy dostawca musi mieć unikalny identyfikator ASCII "
+                "do 64 znaków i obiekt ustawień."
             )
         provider_type = provider_value.get("type")
         if provider_type == "groq":
@@ -551,22 +570,39 @@ def load_verifier_routing_config(
             "default_provider musi wskazywać skonfigurowanego dostawcę."
         )
     raw_routes = configuration["instrument_routes"]
-    if not isinstance(raw_routes, dict) or any(
-        not isinstance(instrument, str)
-        or not instrument.strip()
-        or not isinstance(provider_id, str)
-        or provider_id not in providers
-        for instrument, provider_id in raw_routes.items()
-    ):
+    if not isinstance(raw_routes, dict):
         raise AIVerificationError(
-            "Każde przypisanie instrumentu musi wskazywać skonfigurowanego "
-            "dostawcę."
+            "instrument_routes musi być obiektem przypisań instrumentów."
         )
-    return default_provider, providers, raw_routes
+    routes: dict[str, tuple[str, ...]] = {}
+    for instrument, raw_provider_ids in raw_routes.items():
+        provider_ids = (
+            (raw_provider_ids,)
+            if isinstance(raw_provider_ids, str)
+            else raw_provider_ids
+        )
+        if (
+            not isinstance(instrument, str)
+            or not instrument.strip()
+            or not isinstance(provider_ids, (list, tuple))
+            or not provider_ids
+            or any(
+                not isinstance(provider_id, str)
+                or provider_id not in providers
+                for provider_id in provider_ids
+            )
+            or len(set(provider_ids)) != len(provider_ids)
+        ):
+            raise AIVerificationError(
+                "Każde przypisanie instrumentu musi wskazywać jednego lub "
+                "więcej różnych, skonfigurowanych dostawców."
+            )
+        routes[instrument] = tuple(provider_ids)
+    return default_provider, providers, routes
 
 
 class AIVerificationRouter:
-    """Wybiera dostawcę AI na podstawie symbolu instrumentu."""
+    """Wybiera jednego lub więcej dostawców na podstawie instrumentu."""
 
     def __init__(self, config_path: Path | None = None) -> None:
         """Wczytuje routing raz przy starcie workera.
@@ -580,16 +616,37 @@ class AIVerificationRouter:
             self._instrument_routes,
         ) = load_verifier_routing_config(config_path)
         self._clients: dict[
-                str,
-                GroqChatClient
-                | OpenAICompatibleChatClient
-                | AnthropicMessagesClient,
-            ] = {}
+            str,
+            GroqChatClient
+            | OpenAICompatibleChatClient
+            | AnthropicMessagesClient,
+        ] = {}
+
+    def provider_ids_for(self, instrument: str) -> tuple[str, ...]:
+        """Zwraca wszystkich dostawców przypisanych do instrumentu."""
+        return self._instrument_routes.get(
+            instrument, (self._default_provider,)
+        )
 
     def provider_id_for(self, instrument: str) -> str:
-        """Zwraca dostawcę przypisanego do instrumentu lub domyślnego."""
-        return self._instrument_routes.get(
-            instrument, self._default_provider
+        """Zwraca pierwszego dostawcę dla zgodności ze starszym użyciem."""
+        return self.provider_ids_for(instrument)[0]
+
+    def clients_for(
+        self, instrument: str
+    ) -> tuple[
+        tuple[
+            str,
+            GroqChatClient
+            | OpenAICompatibleChatClient
+            | AnthropicMessagesClient,
+        ],
+        ...,
+    ]:
+        """Zwraca klientów dla wszystkich modeli przypisanych do instrumentu."""
+        return tuple(
+            (provider_id, self._client_for_provider(provider_id))
+            for provider_id in self.provider_ids_for(instrument)
         )
 
     def client_for(
@@ -599,8 +656,18 @@ class AIVerificationRouter:
         | OpenAICompatibleChatClient
         | AnthropicMessagesClient
     ):
-        """Tworzy raz i ponownie wykorzystuje klienta wybranego dostawcy."""
+        """Zwraca pierwszego klienta dla zgodności ze starszym użyciem."""
         provider_id = self.provider_id_for(instrument)
+        return self._client_for_provider(provider_id)
+
+    def _client_for_provider(
+        self, provider_id: str
+    ) -> (
+        GroqChatClient
+        | OpenAICompatibleChatClient
+        | AnthropicMessagesClient
+    ):
+        """Tworzy raz i ponownie wykorzystuje klienta danego dostawcy."""
         if provider_id not in self._clients:
             settings = self._providers[provider_id]
             if settings.provider_type == "groq":
@@ -854,19 +921,20 @@ class AIVerificationWorker:
                 algorithm_context,
                 candle_context,
             )
-            client = self._client or self._router.client_for(product)
-            response_text = client.complete(full_prompt)
-            ai_name = getattr(client, "display_name", None)
-            if (
-                not isinstance(ai_name, str)
-                or not ai_name.strip()
-                or len(ai_name) > 255
-            ):
-                raise AIVerificationError(
-                    "Wybrany dostawca nie ma prawidłowej nazwy modelu."
-                )
-            ai_name = ai_name.strip()
-            verifier_response = validate_verifier_response(response_text)
+            if self._client is not None:
+                configured_clients = (("injected", self._client),)
+            else:
+                configured_clients = self._router.clients_for(product)
+            verifier_results = self._request_verifier_results(
+                configured_clients, full_prompt
+            )
+            response_text = json.dumps(
+                {
+                    result.ai_name: result.response_text
+                    for result in verifier_results
+                },
+                ensure_ascii=False,
+            )
             self._save_success(
                 job_id,
                 signal_id,
@@ -874,10 +942,8 @@ class AIVerificationWorker:
                 signal_close_utc,
                 signal_price,
                 signal_direction,
-                verifier_response,
-                ai_name,
+                verifier_results,
                 full_prompt,
-                response_text,
             )
         except (
             AIVerificationError,
@@ -893,6 +959,53 @@ class AIVerificationWorker:
             self._mark_failed(
                 job_id, str(error), full_prompt, response_text
             )
+
+    @staticmethod
+    def _request_verifier_results(
+        configured_clients: tuple[tuple[str, Any], ...],
+        full_prompt: str,
+    ) -> tuple[VerifierResult, ...]:
+        """Odpytuje przypisane modele równolegle i sprawdza ich odpowiedzi."""
+        if not configured_clients:
+            raise AIVerificationError(
+                "Dla instrumentu nie skonfigurowano żadnego weryfikatora."
+            )
+
+        results_by_provider: dict[str, VerifierResult] = {}
+        with ThreadPoolExecutor(
+            max_workers=len(configured_clients),
+            thread_name_prefix="ai-verifier",
+        ) as executor:
+            futures = {
+                executor.submit(client.complete, full_prompt): (
+                    provider_id,
+                    client,
+                )
+                for provider_id, client in configured_clients
+            }
+            for future in as_completed(futures):
+                provider_id, client = futures[future]
+                response_text = future.result()
+                ai_name = getattr(client, "display_name", None)
+                if (
+                    not isinstance(ai_name, str)
+                    or not ai_name.strip()
+                    or len(ai_name) > 255
+                ):
+                    raise AIVerificationError(
+                        f"Dostawca {provider_id!r} nie ma prawidłowej "
+                        "nazwy modelu."
+                    )
+                results_by_provider[provider_id] = VerifierResult(
+                    provider_id=provider_id,
+                    ai_name=ai_name.strip(),
+                    response=validate_verifier_response(response_text),
+                    response_text=response_text,
+                )
+        return tuple(
+            results_by_provider[provider_id]
+            for provider_id, _client in configured_clients
+        )
 
     def _get_active_prompt(self) -> str | None:
         """Zwraca jedyny aktywny prompt lub zgłasza niejednoznaczną konfigurację."""
@@ -930,12 +1043,10 @@ class AIVerificationWorker:
         signal_close_utc: datetime,
         signal_price_value: Any,
         signal_direction: str,
-        response: dict[str, Any],
-        ai_name: str,
+        verifier_results: tuple[VerifierResult, ...],
         full_prompt: str,
-        response_text: str,
     ) -> None:
-        """Zapisuje oba warianty, nazwę modelu i historię prompta atomowo.
+        """Zapisuje wyniki wszystkich modeli i oba profile atomowo.
 
         Args:
             job_id: Identyfikator przetwarzanego zadania.
@@ -944,17 +1055,15 @@ class AIVerificationWorker:
             signal_close_utc: Czas zamknięcia świecy sygnałowej w UTC.
             signal_price_value: Cena zamknięcia świecy sygnałowej.
             signal_direction: Kierunek sygnału zapisany w tabeli signals.
-            response: Zweryfikowane dane profili aggressive i moderate.
-            ai_name: Nazwa dostawcy odczytana z konfiguracji klienta.
+            verifier_results: Odpowiedzi modeli wraz z nazwami i identyfikatorami.
             full_prompt: Pełny prompt wysłany do dostawcy.
-            response_text: Surowy tekst odpowiedzi dostawcy.
 
         Raises:
             mysql.connector.Error: Gdy transakcja zapisu w MySQL nie powiedzie się.
             ValueError: Gdy wartości odpowiedzi nie mogą zostać zapisane.
         """
-        if not ai_name.strip() or len(ai_name) > 255:
-            raise ValueError("Nazwa modelu musi zawierać 1-255 znaków.")
+        if not verifier_results:
+            raise ValueError("Brak wyników weryfikatora do zapisania.")
         connection = mysql.connector.connect(**self._database_settings)
         try:
             cursor = connection.cursor()
@@ -962,68 +1071,90 @@ class AIVerificationWorker:
                 connection.start_transaction()
                 signal_close_db = signal_close_utc.replace(tzinfo=None)
                 signal_price = Decimal(str(signal_price_value))
-                for mode_name in MODE_NAMES:
-                    mode_response = response[mode_name]
-                    open_price = mode_response["open_price"]
-                    opened_immediately = open_price == signal_price
-                    cursor.execute(
-                        """
-                        INSERT INTO `transactions`
-                            (signal_id, `mode`, signal_status,
-                             ai_decision_status, open_price, stop_loss_price,
-                             take_profit_price, true_spread, time_to_open,
-                             transaction_status, transaction_saldo,
-                             transaction_100zl_deal, signal_close_utc,
-                             opened_at_utc)
-                        VALUES
-                            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                             NULL, NULL, %s, %s)
-                        """,
-                        (
-                            signal_id,
-                            mode_name,
-                            signal_direction,
-                            mode_response["transaction"].lower(),
-                            open_price,
-                            mode_response["stop_loss"],
-                            mode_response["take_profit"],
-                            mode_response["spread"],
-                            0 if opened_immediately else None,
-                            "in progress" if opened_immediately else "awaiting",
-                            signal_close_db,
-                            signal_close_db if opened_immediately else None,
-                        ),
-                    )
-                    transaction_id = cursor.lastrowid
-                    cursor.execute(
-                        """
-                        INSERT INTO ai_decisions
-                            (transaction_id, ai_name, ai_pts, ai_decision,
-                             ai_decision_reason_msg, ai_after_tramsaction_msg,
-                             `mode`)
-                        VALUES (%s, %s, %s, %s, %s, NULL, %s)
-                        """,
-                        (
-                            transaction_id,
-                            ai_name,
-                            mode_response["pts"],
+                for verifier_result in verifier_results:
+                    if (
+                        not verifier_result.provider_id
+                        or not verifier_result.ai_name.strip()
+                        or len(verifier_result.ai_name) > 255
+                    ):
+                        raise ValueError(
+                            "Wynik weryfikatora ma nieprawidłową "
+                            "identyfikację dostawcy."
+                        )
+                    for mode_name in MODE_NAMES:
+                        mode_response = verifier_result.response[mode_name]
+                        open_price = mode_response["open_price"]
+                        opened_immediately = open_price == signal_price
+                        cursor.execute(
+                            """
+                            INSERT INTO `transactions`
+                                (signal_id, verifier_id, `mode`,
+                                 signal_status, ai_decision_status, open_price,
+                                 stop_loss_price, take_profit_price,
+                                 true_spread, time_to_open,
+                                 transaction_status, transaction_saldo,
+                                 transaction_100zl_deal, signal_close_utc,
+                                 opened_at_utc)
+                            VALUES
+                                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                 %s, NULL, NULL, %s, %s)
+                            """,
                             (
-                                "accept"
-                                if mode_response["decision"] == "YES"
-                                else "decline"
+                                signal_id,
+                                verifier_result.provider_id,
+                                mode_name,
+                                signal_direction,
+                                mode_response["transaction"].lower(),
+                                open_price,
+                                mode_response["stop_loss"],
+                                mode_response["take_profit"],
+                                mode_response["spread"],
+                                0 if opened_immediately else None,
+                                (
+                                    "in progress"
+                                    if opened_immediately
+                                    else "awaiting"
+                                ),
+                                signal_close_db,
+                                signal_close_db
+                                if opened_immediately
+                                else None,
                             ),
-                            mode_response["reason_msg"],
-                            mode_name,
-                        ),
-                    )
-                    cursor.execute(
-                        """
-                        INSERT INTO prompts_revision
-                            (full_prompt, ai_decision_id, ai_response)
-                        VALUES (%s, %s, %s)
-                        """,
-                        (full_prompt, cursor.lastrowid, response_text),
-                    )
+                        )
+                        transaction_id = cursor.lastrowid
+                        cursor.execute(
+                            """
+                            INSERT INTO ai_decisions
+                                (transaction_id, ai_name, ai_pts,
+                                 ai_decision, ai_decision_reason_msg,
+                                 ai_after_tramsaction_msg, `mode`)
+                            VALUES (%s, %s, %s, %s, %s, NULL, %s)
+                            """,
+                            (
+                                transaction_id,
+                                verifier_result.ai_name,
+                                mode_response["pts"],
+                                (
+                                    "accept"
+                                    if mode_response["decision"] == "YES"
+                                    else "decline"
+                                ),
+                                mode_response["reason_msg"],
+                                mode_name,
+                            ),
+                        )
+                        cursor.execute(
+                            """
+                            INSERT INTO prompts_revision
+                                (full_prompt, ai_decision_id, ai_response)
+                            VALUES (%s, %s, %s)
+                            """,
+                            (
+                                full_prompt,
+                                cursor.lastrowid,
+                                verifier_result.response_text,
+                            ),
+                        )
                 self._transaction_tracker.process_historical_candles(
                     cursor, product, signal_close_utc
                 )

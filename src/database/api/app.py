@@ -1050,6 +1050,8 @@ class MarketDataRepository:
             CREATE TABLE IF NOT EXISTS `transactions` (
                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
                 signal_id BIGINT UNSIGNED NOT NULL,
+                verifier_id VARCHAR(64)
+                    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
                 `mode` ENUM('aggressive', 'moderate') NOT NULL,
                 signal_status ENUM('long', 'short') NOT NULL,
                 ai_decision_status ENUM('long', 'short') NOT NULL,
@@ -1067,7 +1069,8 @@ class MarketDataRepository:
                 signal_close_utc DATETIME(6) NOT NULL,
                 opened_at_utc DATETIME(6) NULL,
                 closed_at_utc DATETIME(6) NULL,
-                UNIQUE KEY uq_transactions_signal_mode (signal_id, `mode`),
+                UNIQUE KEY uq_transactions_signal_verifier_mode
+                    (signal_id, verifier_id, `mode`),
                 INDEX idx_transactions_status (transaction_status, signal_id),
                 CONSTRAINT fk_transactions_signal
                     FOREIGN KEY (signal_id) REFERENCES signals(id)
@@ -1117,6 +1120,7 @@ class MarketDataRepository:
             COLLATE utf8mb4_unicode_ci
             """
         )
+        MarketDataRepository._migrate_transactions_verifier_schema(cursor)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS ai_verification_jobs (
@@ -1167,6 +1171,60 @@ class MarketDataRepository:
             END
             """
         )
+
+    @staticmethod
+    def _migrate_transactions_verifier_schema(
+        cursor: mysql.connector.cursor.MySQLCursor,
+    ) -> None:
+        """Dodaje identyfikator modelu i umożliwia osobne transakcje modeli."""
+        cursor.execute("SHOW COLUMNS FROM `transactions` LIKE 'verifier_id'")
+        if cursor.fetchone() is None:
+            cursor.execute(
+                """
+                ALTER TABLE `transactions`
+                ADD COLUMN verifier_id VARCHAR(64)
+                    CHARACTER SET ascii COLLATE ascii_bin NULL
+                    AFTER signal_id
+                """
+            )
+        cursor.execute(
+            """
+            UPDATE `transactions`
+            SET verifier_id = 'legacy'
+            WHERE verifier_id IS NULL OR verifier_id = ''
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE `transactions`
+            MODIFY COLUMN verifier_id VARCHAR(64)
+                CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+            """
+        )
+
+        cursor.execute(
+            "SHOW INDEX FROM `transactions` "
+            "WHERE Key_name = %s",
+            ("uq_transactions_signal_verifier_mode",),
+        )
+        if not cursor.fetchall():
+            cursor.execute(
+                """
+                ALTER TABLE `transactions`
+                ADD UNIQUE KEY uq_transactions_signal_verifier_mode
+                    (signal_id, verifier_id, `mode`)
+                """
+            )
+        cursor.execute(
+            "SHOW INDEX FROM `transactions` "
+            "WHERE Key_name = %s",
+            ("uq_transactions_signal_mode",),
+        )
+        if cursor.fetchall():
+            cursor.execute(
+                "ALTER TABLE `transactions` "
+                "DROP INDEX uq_transactions_signal_mode"
+            )
 
     def _migrate_signal_enum(
         self, cursor: mysql.connector.cursor.MySQLCursor

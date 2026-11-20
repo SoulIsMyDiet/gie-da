@@ -1,7 +1,7 @@
 {
   "default_provider": "groq",
   "instrument_routes": {
-    "USD/MXN": "claude_sonnet55"
+    "USD/MXN": ["claude_sonnet55", "groq"]
   },
   "providers": {
     "groq": {
