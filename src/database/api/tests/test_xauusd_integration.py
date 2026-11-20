@@ -239,7 +239,10 @@ def test_initialize_backfills_xau_with_configured_spread():
             patch.object(repository, "_migrate_signal_enum"), \
             patch.object(repository, "_migrate_signal_source_timestamp"), \
             patch.object(repository, "_migrate_signal_potention_schema"), \
-            patch.object(repository, "_migrate_candle_timestamps"):
+            patch.object(repository, "_migrate_candle_timestamps"), \
+            patch.object(repository, "_migrate_prompt_template_version"), \
+            patch.object(repository, "_migrate_prompt_encoding"), \
+            patch.object(repository, "_migrate_prompt_template"):
         repository.initialize()
     calls = [call.args for call in cursor.execute.call_args_list
              if "INSERT IGNORE INTO signal_potention" in call.args[0]]
@@ -266,6 +269,9 @@ def test_initialize_creates_and_seeds_active_prompt():
             patch.object(repository, "_migrate_signal_source_timestamp"), \
             patch.object(repository, "_migrate_signal_potention_schema"), \
             patch.object(repository, "_migrate_candle_timestamps"), \
+            patch.object(repository, "_migrate_prompt_template_version"), \
+            patch.object(repository, "_migrate_prompt_encoding"), \
+            patch.object(repository, "_migrate_prompt_template"), \
             patch.object(repository, "_sync_signal_potention_spreads"), \
             patch.object(repository.signal_potential_calculator, "update_pending"):
         repository.initialize()
@@ -282,6 +288,61 @@ def test_initialize_creates_and_seeds_active_prompt():
         True,
         True,
         True,
+    )
+
+
+def test_migrate_prompt_template_version_adds_version_column():
+    """Migracja dodaje numer wersji do istniejącej tabeli promptów."""
+    repository = app.MarketDataRepository()
+    cursor = Mock()
+    cursor.fetchone.return_value = None
+
+    repository._migrate_prompt_template_version(cursor)
+
+    assert any(
+        "ADD COLUMN prompt_template_version" in call.args[0]
+        for call in cursor.execute.call_args_list
+    )
+
+
+def test_migrate_prompt_encoding_converts_legacy_column():
+    """Migracja zmienia kodowanie starej kolumny prompt na utf8mb4."""
+    repository = app.MarketDataRepository()
+    cursor = Mock()
+    cursor.fetchone.return_value = (
+        "prompt",
+        "longtext",
+        "latin1_swedish_ci",
+        "NO",
+        "",
+        None,
+        "",
+        "",
+        "",
+    )
+
+    repository._migrate_prompt_encoding(cursor)
+
+    assert any(
+        "CHARACTER SET utf8mb4" in call.args[0]
+        for call in cursor.execute.call_args_list
+    )
+
+
+def test_migrate_prompt_template_updates_only_outdated_seed():
+    """Migracja zapisuje nowy prompt tylko dla wiersza ze starszą wersją."""
+    repository = app.MarketDataRepository()
+    cursor = Mock()
+
+    repository._migrate_prompt_template(cursor)
+
+    update_call = cursor.execute.call_args
+    assert "WHERE id = %s AND prompt_template_version < %s" in update_call.args[0]
+    assert update_call.args[1] == (
+        app.INITIAL_SIGNAL_REVIEW_PROMPT,
+        app.PROMPT_TEMPLATE_VERSION,
+        1,
+        app.PROMPT_TEMPLATE_VERSION,
     )
 
 

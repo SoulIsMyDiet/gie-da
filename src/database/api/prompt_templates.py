@@ -1,5 +1,8 @@
 """Teksty startowe promptów używanych do oceny sygnałów."""
 
+# Zwiększ wartość tylko wtedy, gdy API ma zastąpić prompt startowy nowym szablonem.
+PROMPT_TEMPLATE_VERSION = 1
+
 INITIAL_SIGNAL_REVIEW_PROMPT = """# ROLA I ZADANIE
 
 Jesteś niezależnym analitykiem rynku Forex i instrumentów finansowych. Twoim zadaniem jest weryfikowanie sygnałów transakcyjnych generowanych przez inny algorytm.
@@ -152,35 +155,24 @@ Podaj najważniejsze argumenty przemawiające za podjętą decyzją.
 
 Używaj krótkich równoważników zdań oddzielonych średnikami.
 
+# MODEL JĘZYKOWY
+
+llm_name: Zwróć nazwę modelu językowego wraz z wersją, który wygenerował odpowiedź.
+
 # FORMAT ODPOWIEDZI
 
 Zwróć wyłącznie poprawny JSON, bez dodatkowego tekstu, komentarzy i formatowania Markdown.
 
-Zwróć dwie osobne oceny: aggressive oraz moderate.
-
 {
-  "aggressive": {
-    "transaction": "LONG",
-    "spread": 0.003,
-    "spread_confidence": "MEDIUM",
-    "open_price": 17.102,
-    "take_profit": 17.125,
-    "stop_loss": 17.085,
-    "pts": 72,
-    "decision": "YES",
-    "reason_msg": "Momentum wzrostowe; M5 potwierdza kierunek; umiarkowana zmienność"
-  },
-  "moderate": {
-    "transaction": "LONG",
-    "spread": 0.003,
-    "spread_confidence": "MEDIUM",
-    "open_price": 17.102,
-    "take_profit": 17.120,
-    "stop_loss": 17.095,
-    "pts": 55,
-    "decision": "NO",
-    "reason_msg": "M1 wzrostowy; brak pełnego potwierdzenia M5; niekorzystny stosunek zysku do ryzyka"
-  }
+  "transaction": "LONG",
+  "spread": 0.003,
+  "open_price": 17.102,
+  "take_profit": 17.125,
+  "stop_loss": 17.085,
+  "pts": 65,
+  "decision": "YES",
+  "reason_msg": "Momentum wzrostowe; M5 zgodne z M1; umiarkowany RSI; korzystny stosunek zysku do ryzyka",
+  "llm_name": "Grok 4.5"
 }
 
 Wartości powyżej są wyłącznie przykładem struktury odpowiedzi.

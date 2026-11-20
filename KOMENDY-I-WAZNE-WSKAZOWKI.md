@@ -106,6 +106,44 @@ Ponowne uruchomienie zatrzymanych kontenerów:
 docker compose start
 ```
 
+## Uruchomienie backendu API w debuggerze
+
+Backend API działa domyślnie w kontenerze Dockera, a konfiguracje CMake w CLion służą
+do uruchamiania aplikacji C++. Aby debugować kod Python, użyj IDE z obsługą Pythona
+(np. PyCharm albo CLion z odpowiednią wtyczką):
+
+1. Uruchom samą bazę danych, bez kontenera API:
+
+   ```powershell
+   docker compose up -d mysql
+   ```
+
+2. Skonfiguruj interpreter Python 3.12 i zainstaluj zależności API z głównego folderu repozytorium:
+
+   ```powershell
+   python -m pip install -r src\database\api\requirements.txt
+   ```
+
+3. Utwórz konfigurację uruchomieniową typu **Python**:
+   - moduł: `uvicorn`;
+   - argumenty: `app:app --host 127.0.0.1 --port 8000`;
+   - folder roboczy: `src\database\api`;
+   - zmienne środowiskowe `MYSQL_HOST=127.0.0.1`, `MYSQL_PORT=3306` oraz
+     `MYSQL_DATABASE`, `MYSQL_USER` i `MYSQL_PASSWORD` skopiowane z lokalnego pliku
+     `.env`.
+
+   Nie zapisuj haseł w repozytorium ani nie udostępniaj ich w zrzutach ekranu.
+
+4. Uruchom tę konfigurację przyciskiem **Debug**. Breakpointy ustawiaj w plikach
+   Python backendu, np. `src\database\api\app.py`.
+
+Jeśli kontener `price-history-api` już działa, zatrzymaj go przed uruchomieniem
+konfiguracji debugowania, aby zwolnić port 8000:
+
+```powershell
+docker compose stop price-history-api
+```
+
 ## Ważne informacje o danych
 
 - Przy uruchomieniu API tabela `price_history`, jeśli istnieje, jest usuwana wraz z zawartością.

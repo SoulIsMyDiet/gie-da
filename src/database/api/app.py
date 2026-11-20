@@ -157,7 +157,10 @@ from market_products import (  # noqa: E402
     is_market_open,
     is_monitored_product,
 )
-from prompt_templates import INITIAL_SIGNAL_REVIEW_PROMPT  # noqa: E402
+from prompt_templates import (  # noqa: E402
+    INITIAL_SIGNAL_REVIEW_PROMPT,
+    PROMPT_TEMPLATE_VERSION,
+)
 from sound_alert import play_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
@@ -774,6 +777,7 @@ class MarketDataRepository:
             "user": os.environ["MYSQL_USER"],
             "password": os.environ["MYSQL_PASSWORD"],
             "database": os.environ["MYSQL_DATABASE"],
+            "charset": "utf8mb4",
         }
         self.signal_potential_calculator = SignalPotentialCalculator()
 
@@ -799,13 +803,16 @@ class MarketDataRepository:
                         used_context BOOLEAN NOT NULL DEFAULT FALSE,
                         used_parameters BOOLEAN NOT NULL DEFAULT FALSE,
                         prompt_in_use BOOLEAN NOT NULL DEFAULT FALSE,
-                        used_candles BOOLEAN NOT NULL DEFAULT FALSE
+                        used_candles BOOLEAN NOT NULL DEFAULT FALSE,
+                        prompt_template_version SMALLINT UNSIGNED NOT NULL DEFAULT 0
                     ) ENGINE=InnoDB
                     DEFAULT CHARACTER SET utf8mb4
                     COLLATE utf8mb4_unicode_ci
                     """
                 )
                 self._migrate_prompt_used_candles(cursor)
+                self._migrate_prompt_template_version(cursor)
+                self._migrate_prompt_encoding(cursor)
                 cursor.execute(
                     """
                     INSERT IGNORE INTO prompts
@@ -815,6 +822,7 @@ class MarketDataRepository:
                     """,
                     (1, INITIAL_SIGNAL_REVIEW_PROMPT, True, True, True, True),
                 )
+                self._migrate_prompt_template(cursor)
                 cursor.execute("DROP TABLE IF EXISTS price_history")
                 cursor.execute(
                     """
@@ -944,6 +952,65 @@ class MarketDataRepository:
                 "UPDATE prompts SET used_candles = TRUE WHERE id = %s",
                 (1,),
             )
+
+    def _migrate_prompt_template_version(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Dodaje znacznik wersji, który pozwala jednorazowo odświeżyć prompt startowy."""
+        cursor.execute(
+            "SHOW COLUMNS FROM prompts LIKE %s",
+            ("prompt_template_version",),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(
+                """
+                ALTER TABLE prompts
+                ADD COLUMN prompt_template_version
+                    SMALLINT UNSIGNED NOT NULL DEFAULT 0
+                """
+            )
+
+    def _migrate_prompt_encoding(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Ustawia kodowanie utf8mb4 dla kolumny prompt w istniejącej tabeli."""
+        cursor.execute(
+            "SHOW FULL COLUMNS FROM prompts LIKE %s",
+            ("prompt",),
+        )
+        prompt_column = cursor.fetchone()
+        if prompt_column is None:
+            raise RuntimeError("Nie znaleziono kolumny prompts.prompt.")
+
+        collation = prompt_column[2]
+        if not collation or not collation.startswith("utf8mb4_"):
+            cursor.execute(
+                """
+                ALTER TABLE prompts
+                MODIFY COLUMN prompt LONGTEXT
+                    CHARACTER SET utf8mb4
+                    COLLATE utf8mb4_unicode_ci
+                    NOT NULL
+                """
+            )
+
+    def _migrate_prompt_template(
+        self, cursor: mysql.connector.cursor.MySQLCursor
+    ) -> None:
+        """Zastępuje przestarzały prompt startowy tylko raz dla danej wersji szablonu."""
+        cursor.execute(
+            """
+            UPDATE prompts
+            SET prompt = %s, prompt_template_version = %s
+            WHERE id = %s AND prompt_template_version < %s
+            """,
+            (
+                INITIAL_SIGNAL_REVIEW_PROMPT,
+                PROMPT_TEMPLATE_VERSION,
+                1,
+                PROMPT_TEMPLATE_VERSION,
+            ),
+        )
 
     def _migrate_signal_source_timestamp(
         self, cursor: mysql.connector.cursor.MySQLCursor
