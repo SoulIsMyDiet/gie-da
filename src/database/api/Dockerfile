@@ -15,6 +15,7 @@ RUN apt-get update \
 
 COPY database/api/app.py ./app.py
 COPY database/api/ai_verification.py ./ai_verification.py
+COPY database/api/ai_verification_config.json ./ai_verification_config.json
 COPY database/api/error_file_logging.py ./error_file_logging.py
 COPY database/api/candle_prompt_context.py ./candle_prompt_context.py
 COPY database/api/prompt_templates.py ./prompt_templates.py

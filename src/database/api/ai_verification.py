@@ -1,4 +1,4 @@
-"""Kolejkuje sygnały do oceny przez Groq i zapisuje wynik w MySQL."""
+"""Kieruje sygnały do skonfigurowanych modeli i zapisuje wynik w MySQL."""
 
 # Backend
 from __future__ import annotations
@@ -9,10 +9,12 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import mysql.connector
@@ -57,6 +59,8 @@ class AIVerificationError(ValueError):
 
 class GroqChatClient:
     """Wysyła pojedyncze żądanie czatu do zgodnego z OpenAI API Groq."""
+
+    display_name = MODEL_DISPLAY_NAME
 
     def __init__(
         self,
@@ -157,7 +161,329 @@ class GroqChatClient:
         return content.strip()
 
 
-def validate_verifier_response(response_text: str) -> dict[str, Any]:
+class OpenAICompatibleChatClient:
+    """Wysyła żądanie do wybranego API obsługującego format OpenAI Chat."""
+
+    def __init__(
+        self,
+        *,
+        chat_completions_url: str,
+        model: str,
+        display_name: str,
+        api_key_env: str,
+        api_key: str | None = None,
+        opener: Callable[..., Any] = urllib.request.urlopen,
+    ) -> None:
+        """Przygotowuje klienta bez wysyłania żądania do dostawcy.
+
+        Args:
+            chat_completions_url: Pełny adres endpointu Chat Completions.
+            model: Identyfikator modelu wymagany przez dostawcę.
+            display_name: Nazwa zapisywana w odpowiedzi modelu i bazie.
+            api_key_env: Nazwa zmiennej środowiskowej z kluczem API.
+            api_key: Opcjonalny klucz podany bezpośrednio, głównie w testach.
+            opener: Funkcja otwierająca żądanie HTTP.
+        """
+        try:
+            parsed_url = urlsplit(chat_completions_url)
+        except ValueError as error:
+            raise AIVerificationError(
+                "Adres dodatkowego dostawcy nie jest prawidłowym URL-em."
+            ) from error
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise AIVerificationError(
+                "Adres dodatkowego dostawcy musi być adresem HTTP lub HTTPS."
+            )
+        self._chat_completions_url = chat_completions_url
+        self._model = model
+        self.display_name = display_name
+        self._api_key_env = api_key_env
+        self._api_key = (
+            os.environ.get(api_key_env, "").strip()
+            if api_key is None
+            else api_key.strip()
+        )
+        self._opener = opener
+
+    def complete(self, prompt: str) -> str:
+        """Wysyła prompt do dodatkowego modelu i zwraca jego odpowiedź.
+
+        Args:
+            prompt: Pełny prompt z kontekstem sygnału i historią świec.
+
+        Returns:
+            Treść odpowiedzi wygenerowanej przez model.
+
+        Raises:
+            AIVerificationError: Gdy brakuje klucza, API odpowie błędem
+                albo zwróci nieoczekiwany format.
+        """
+        if not self._api_key:
+            raise AIVerificationError(
+                f"Brak klucza API w zmiennej {self._api_key_env}."
+            )
+        request_body = json.dumps(
+            {
+                "model": self._model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Zwróć wyłącznie poprawny obiekt JSON z polami "
+                            "llm_name, aggressive i moderate. Każdy wariant "
+                            "musi zawierać dokładnie pola wymagane przez prompt. "
+                            f"llm_name ustaw dokładnie na {self.display_name!r}."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+                "max_tokens": MAX_COMPLETION_TOKENS,
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            self._chat_completions_url,
+            data=request_body,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "gie-da/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with self._opener(
+                request, timeout=REQUEST_TIMEOUT_SECONDS
+            ) as response:
+                response_body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            details = error.read().decode("utf-8", errors="replace")[:1000]
+            raise AIVerificationError(
+                f"Dostawca {self.display_name} zwrócił HTTP "
+                f"{error.code}: {details}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise AIVerificationError(
+                f"Nie udało się połączyć z dostawcą "
+                f"{self.display_name}: {error.reason}"
+            ) from error
+        except (TimeoutError, OSError) as error:
+            raise AIVerificationError(
+                f"Połączenie z dostawcą {self.display_name} nie powiodło się: "
+                f"{error}"
+            ) from error
+
+        try:
+            provider_response = json.loads(response_body)
+            content = provider_response["choices"][0]["message"]["content"]
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as error:
+            raise AIVerificationError(
+                f"Dostawca {self.display_name} zwrócił "
+                "nieprawidłową strukturę odpowiedzi."
+            ) from error
+        if not isinstance(content, str) or not content.strip():
+            raise AIVerificationError(
+                f"Dostawca {self.display_name} zwrócił pustą treść odpowiedzi."
+            )
+        return content.strip()
+
+
+@dataclass(frozen=True)
+class VerifierProviderSettings:
+    """Przechowuje bezpieczne, niebędące sekretami ustawienia dostawcy."""
+
+    provider_type: str
+    display_name: str
+    model: str | None = None
+    chat_completions_url: str | None = None
+    api_key_env: str | None = None
+
+
+def load_verifier_routing_config(
+    config_path: Path | None = None,
+) -> tuple[str, dict[str, VerifierProviderSettings], dict[str, str]]:
+    """Wczytuje dostawców i przypisania instrumentów do modeli.
+
+    Args:
+        config_path: Opcjonalna ścieżka pliku JSON; domyślnie plik obok modułu.
+
+    Returns:
+        Domyślny dostawca, definicje dostawców i przypisania instrumentów.
+
+    Raises:
+        AIVerificationError: Gdy plik lub jego konfiguracja są nieprawidłowe.
+    """
+    path = config_path or Path(__file__).with_name(
+        "ai_verification_config.json"
+    )
+    try:
+        configuration = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise AIVerificationError(
+            f"Nie można wczytać konfiguracji weryfikatora {path}: {error}"
+        ) from error
+    if not isinstance(configuration, dict) or set(configuration) != {
+        "default_provider",
+        "instrument_routes",
+        "providers",
+    }:
+        raise AIVerificationError(
+            "Konfiguracja weryfikatora musi zawierać dokładnie "
+            "default_provider, instrument_routes i providers."
+        )
+
+    raw_providers = configuration["providers"]
+    if not isinstance(raw_providers, dict) or not raw_providers:
+        raise AIVerificationError(
+            "Konfiguracja weryfikatora musi zawierać dostawców."
+        )
+    providers: dict[str, VerifierProviderSettings] = {}
+    for provider_id, provider_value in raw_providers.items():
+        if (
+            not isinstance(provider_id, str)
+            or not provider_id.strip()
+            or not isinstance(provider_value, dict)
+        ):
+            raise AIVerificationError(
+                "Każdy dostawca musi mieć nazwę i obiekt ustawień."
+            )
+        provider_type = provider_value.get("type")
+        if provider_type == "groq":
+            if set(provider_value) != {"type"}:
+                raise AIVerificationError(
+                    f"Dostawca {provider_id!r} typu groq nie przyjmuje "
+                    "dodatkowych pól."
+                )
+            providers[provider_id] = VerifierProviderSettings(
+                provider_type="groq",
+                display_name=MODEL_DISPLAY_NAME,
+            )
+            continue
+        if provider_type != "openai_compatible":
+            raise AIVerificationError(
+                f"Dostawca {provider_id!r} ma nieobsługiwany typ."
+            )
+
+        required_fields = {
+            "type",
+            "chat_completions_url",
+            "model",
+            "display_name",
+            "api_key_env",
+        }
+        if set(provider_value) != required_fields:
+            raise AIVerificationError(
+                f"Dostawca {provider_id!r} musi zawierać dokładnie "
+                "type, chat_completions_url, model, display_name i api_key_env."
+            )
+        endpoint = provider_value["chat_completions_url"]
+        model = provider_value["model"]
+        display_name = provider_value["display_name"]
+        api_key_env = provider_value["api_key_env"]
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (endpoint, model, display_name, api_key_env)
+        ):
+            raise AIVerificationError(
+                f"Dostawca {provider_id!r} zawiera puste ustawienie."
+            )
+        try:
+            parsed_url = urlsplit(endpoint)
+        except ValueError as error:
+            raise AIVerificationError(
+                f"Dostawca {provider_id!r} ma nieprawidłowy adres API."
+            ) from error
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise AIVerificationError(
+                f"Dostawca {provider_id!r} ma nieprawidłowy adres API."
+            )
+        if (
+            not api_key_env.isascii()
+            or not api_key_env.replace("_", "").isalnum()
+            or not api_key_env[0].isalpha()
+        ):
+            raise AIVerificationError(
+                f"Dostawca {provider_id!r} ma nieprawidłową nazwę "
+                "zmiennej środowiskowej klucza."
+            )
+        providers[provider_id] = VerifierProviderSettings(
+            provider_type="openai_compatible",
+            display_name=display_name.strip(),
+            model=model.strip(),
+            chat_completions_url=endpoint.strip(),
+            api_key_env=api_key_env,
+        )
+
+    default_provider = configuration["default_provider"]
+    if not isinstance(default_provider, str) or default_provider not in providers:
+        raise AIVerificationError(
+            "default_provider musi wskazywać skonfigurowanego dostawcę."
+        )
+    raw_routes = configuration["instrument_routes"]
+    if not isinstance(raw_routes, dict) or any(
+        not isinstance(instrument, str)
+        or not instrument.strip()
+        or not isinstance(provider_id, str)
+        or provider_id not in providers
+        for instrument, provider_id in raw_routes.items()
+    ):
+        raise AIVerificationError(
+            "Każde przypisanie instrumentu musi wskazywać skonfigurowanego "
+            "dostawcę."
+        )
+    return default_provider, providers, raw_routes
+
+
+class AIVerificationRouter:
+    """Wybiera dostawcę AI na podstawie symbolu instrumentu."""
+
+    def __init__(self, config_path: Path | None = None) -> None:
+        """Wczytuje routing raz przy starcie workera.
+
+        Args:
+            config_path: Opcjonalna ścieżka pliku konfiguracyjnego.
+        """
+        (
+            self._default_provider,
+            self._providers,
+            self._instrument_routes,
+        ) = load_verifier_routing_config(config_path)
+        self._clients: dict[
+            str, GroqChatClient | OpenAICompatibleChatClient
+        ] = {}
+
+    def provider_id_for(self, instrument: str) -> str:
+        """Zwraca dostawcę przypisanego do instrumentu lub domyślnego."""
+        return self._instrument_routes.get(
+            instrument, self._default_provider
+        )
+
+    def client_for(
+        self, instrument: str
+    ) -> GroqChatClient | OpenAICompatibleChatClient:
+        """Tworzy raz i ponownie wykorzystuje klienta wybranego dostawcy."""
+        provider_id = self.provider_id_for(instrument)
+        if provider_id not in self._clients:
+            settings = self._providers[provider_id]
+            if settings.provider_type == "groq":
+                client = GroqChatClient()
+            else:
+                client = OpenAICompatibleChatClient(
+                    chat_completions_url=settings.chat_completions_url or "",
+                    model=settings.model or "",
+                    display_name=settings.display_name,
+                    api_key_env=settings.api_key_env or "",
+                )
+            self._clients[provider_id] = client
+        return self._clients[provider_id]
+
+
+def validate_verifier_response(
+    response_text: str,
+    expected_llm_name: str = MODEL_DISPLAY_NAME,
+) -> dict[str, Any]:
     """Sprawdza strukturę i wartości odpowiedzi weryfikatora.
 
     Args:
@@ -194,9 +520,9 @@ def validate_verifier_response(response_text: str) -> dict[str, Any]:
         or len(llm_name.strip()) > 255
     ):
         raise AIVerificationError("Pole llm_name musi zawierać nazwę modelu.")
-    if llm_name.strip() != MODEL_DISPLAY_NAME:
+    if llm_name.strip() != expected_llm_name:
         raise AIVerificationError(
-            f"Pole llm_name musi mieć wartość {MODEL_DISPLAY_NAME!r}."
+            f"Pole llm_name musi mieć wartość {expected_llm_name!r}."
         )
 
     normalized: dict[str, Any] = {"llm_name": llm_name.strip()}
@@ -245,19 +571,22 @@ class AIVerificationWorker:
         self,
         repository: Any,
         *,
-        client: GroqChatClient | None = None,
+        client: Any | None = None,
+        router: AIVerificationRouter | None = None,
         transaction_tracker: TransactionTracker | None = None,
     ) -> None:
         """Przygotowuje połączenia i zależności wymagane przez kolejkę.
 
         Args:
             repository: Repozytorium API udostępniające bazę i historię świec.
-            client: Klient Groq; domyślnie używa klucza ze środowiska.
+            client: Opcjonalny klient zastępujący routing, głównie w testach.
+            router: Konfiguracja przypisująca instrumenty do dostawców.
             transaction_tracker: Komponent aktualizujący transakcje po świecach.
         """
         self._repository = repository
         self._database_settings = repository.database_settings
-        self._client = client or GroqChatClient()
+        self._client = client
+        self._router = router or AIVerificationRouter()
         self._transaction_tracker = (
             transaction_tracker or TransactionTracker()
         )
@@ -396,8 +725,16 @@ class AIVerificationWorker:
                 algorithm_context,
                 candle_context,
             )
-            response_text = self._client.complete(full_prompt)
-            verifier_response = validate_verifier_response(response_text)
+            client = self._client or self._router.client_for(product)
+            response_text = client.complete(full_prompt)
+            expected_llm_name = getattr(
+                client, "display_name", MODEL_DISPLAY_NAME
+            )
+            if not isinstance(expected_llm_name, str):
+                expected_llm_name = MODEL_DISPLAY_NAME
+            verifier_response = validate_verifier_response(
+                response_text, expected_llm_name
+            )
             self._save_success(
                 job_id,
                 signal_id,

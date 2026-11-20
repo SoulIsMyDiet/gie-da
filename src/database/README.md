@@ -60,7 +60,33 @@ Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego AP
 
 Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każdej nowej zamkniętej świecy EUR/USD API uruchamia strategię `Chat-gpt6/EURUSD/EURUSDStrategyV1`; wygenerowany sygnał zapisuje w tej samej transakcji bazodanowej co świecę, a jego pakiet JSON trafia do `signal_parameters`.
 
-Każdy nowy sygnał LONG lub SHORT jest dopisywany przez trigger MySQL do `ai_verification_jobs`. Wątek API przetwarza go asynchronicznie, więc wywołanie modelu nie blokuje zapisu świecy. Jeśli w `prompts` istnieje dokładnie jeden rekord z `prompt_in_use = TRUE`, API wysyła go do Groq (`qwen/qwen3.8-27b`) wraz z parametrami sygnału, `STRATEGY_CONTEXT` właściwego algorytmu oraz historią do chwili sygnału: 50 świec M1 i 30 pełnych świec M5. Odpowiedź jest ściśle walidowana; prawidłowy wynik tworzy po jednym rekordzie `transactions` i `ai_decisions` dla trybu aggressive oraz moderate, a pełny prompt i odpowiedź trafiają do `prompts_revision`. Decyzja `NO` również tworzy symulowaną transakcję.
+Każdy nowy sygnał LONG lub SHORT jest dopisywany przez trigger MySQL do `ai_verification_jobs`. Wątek API przetwarza go asynchronicznie, więc wywołanie modelu nie blokuje zapisu świecy. Jeśli w `prompts` istnieje dokładnie jeden rekord z `prompt_in_use = TRUE`, API wybiera dostawcę według instrumentu na podstawie `src/database/api/ai_verification_config.json`. Domyślnie wszystkie instrumenty nadal korzystają z Groq (`qwen/qwen3.8-27b`). Prompt zawiera parametry sygnału, `STRATEGY_CONTEXT` właściwego algorytmu oraz historię do chwili sygnału: 50 świec M1 i 30 pełnych świec M5. Odpowiedź jest ściśle walidowana; prawidłowy wynik tworzy po jednym rekordzie `transactions` i `ai_decisions` dla trybu aggressive oraz moderate, a pełny prompt i odpowiedź trafiają do `prompts_revision`. Decyzja `NO` również tworzy symulowaną transakcję.
+
+### Przypisywanie instrumentów do dodatkowego modelu
+
+Routing weryfikatora jest konfigurowany w `src/database/api/ai_verification_config.json`. `default_provider` wskazuje dostawcę dla wszystkich instrumentów, które nie mają osobnego wpisu w `instrument_routes`. Początkowa konfiguracja używa wyłącznie Groq, więc dotychczasowe działanie pozostaje bez zmian.
+
+Aby skierować jedną parę do drugiego modelu, dodaj go w obiekcie `providers` jako `openai_compatible`, a następnie przypisz dokładny symbol `product` z tabeli `signals` w `instrument_routes`. Przykład ustawień dostawcy (uzupełnij adres, identyfikator i nazwę modelu wybranego później):
+
+```json
+"secondary": {
+  "type": "openai_compatible",
+  "chat_completions_url": "https://provider.example/v1/chat/completions",
+  "model": "model-id",
+  "display_name": "Nazwa modelu",
+  "api_key_env": "SECONDARY_LLM_API_KEY"
+}
+```
+
+Wpisz definicję obok `groq` wewnątrz `providers`, a w `instrument_routes` dodaj na przykład:
+
+```json
+"USD/MXN": "secondary"
+```
+
+Wartość instrumentu musi odpowiadać symbolowi z `signals.product`, np. `EURUSD/USD`, `USD/MXN`, `USD/JPY` albo `XAU/USD`. Pozostałe instrumenty nadal będą obsługiwane przez domyślnego dostawcę Groq. Drugi adapter wymaga endpointu zgodnego z formatem OpenAI Chat Completions; jego klucz umieść w lokalnym `.env` jako `SECONDARY_LLM_API_KEY`, nie w pliku JSON ani w repozytorium. Przykładowy wpis znajduje się w `.env.example`.
+
+Po zmianie routingu lub klucza odtwórz wyłącznie kontener API poleceniem `docker compose up -d --force-recreate --no-deps price-history-api`. To nie przebudowuje obrazu ani nie restartuje MySQL; ponowne utworzenie kontenera wczytuje także nową wartość klucza z `.env`. Routing jest wczytywany przy starcie workera. Nie ma automatycznego przełączenia na inny model w razie błędu dostawcy — takie przełączenie mogłoby nieoczekiwanie zużyć tokeny. Błąd pozostawia zadanie w stanie `failed`, które można ponowić ręcznie po poprawieniu konfiguracji.
 
 Tabela `transactions` przechowuje kierunek sygnału i kierunek AI, poziomy wejścia/SL/TP, spread oraz stan `awaiting`, `in progress` albo `closed`. Jeżeli cena wejścia różni się od zamknięcia świecy sygnałowej, transakcja czeka na pierwszą późniejszą świecę M1, której zakres obejmie cenę wejścia; `time_to_open` zapisuje numer tej świecy, a nie czas kalendarzowy obejmujący przerwy w notowaniach. Świecy wejścia nie używa się do zamknięcia. Gdy jedna świeca dotknie jednocześnie SL i TP, przyjmowany jest Stop Loss. Saldo oraz wynik dla 100 zł pozostają `NULL` do zamknięcia. Błędne odpowiedzi i błędy API nie blokują zapisu sygnału; szczegóły można odczytać z `GET /api/ai-verification/jobs?status=failed`, a zadania `failed` lub `skipped` ponowić ręcznie przez `POST /api/ai-verification/jobs/{signal_id}/retry`. Ponowienie wykonuje nowe żądanie do modelu, więc nie jest automatyczne. Do kontenera API klucz Groq jest przekazywany ze zmiennej `GROK_API_KEY` w lokalnym pliku `.env`; klucza nie należy umieszczać w repozytorium.
 

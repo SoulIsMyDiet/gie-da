@@ -1,0 +1,9 @@
+{
+  "default_provider": "groq",
+  "instrument_routes": {},
+  "providers": {
+    "groq": {
+      "type": "groq"
+    }
+  }
+}
