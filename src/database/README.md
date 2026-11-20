@@ -64,29 +64,19 @@ Każdy nowy sygnał LONG lub SHORT jest dopisywany przez trigger MySQL do `ai_ve
 
 ### Przypisywanie instrumentów do dodatkowego modelu
 
-Routing weryfikatora jest konfigurowany w `src/database/api/ai_verification_config.json`. `default_provider` wskazuje dostawcę dla wszystkich instrumentów, które nie mają osobnego wpisu w `instrument_routes`. Początkowa konfiguracja używa wyłącznie Groq, więc dotychczasowe działanie pozostaje bez zmian.
+Routing jest zapisany w `src/database/api/ai_verification_config.json`. Obecnie `USD/MXN` korzysta z Claude Sonnet 5.5 przez natywne Anthropic Messages API, a pozostałe instrumenty nadal domyślnie korzystają z Groq. Model ma identyfikator API `claude-sonnet-5-5`; jego nazwa w `ai_decisions.ai_name` pochodzi z pola `display_name`, a nie z odpowiedzi JSON modelu. Żądanie ma limit odpowiedzi 900 tokenów i średni poziom effort, aby ograniczyć koszt bez wymuszania najniższej jakości rozumowania.
 
-Aby skierować jedną parę do drugiego modelu, dodaj go w obiekcie `providers` jako `openai_compatible`, a następnie przypisz dokładny symbol `product` z tabeli `signals` w `instrument_routes`. Przykład ustawień dostawcy (uzupełnij adres, identyfikator i nazwę modelu wybranego później):
+Przypisanie instrumentu ma postać:
 
 ```json
-"secondary": {
-  "type": "openai_compatible",
-  "chat_completions_url": "https://provider.example/v1/chat/completions",
-  "model": "model-id",
-  "display_name": "Nazwa modelu",
-  "api_key_env": "SECONDARY_LLM_API_KEY"
+"instrument_routes": {
+  "USD/MXN": "claude_sonnet55"
 }
 ```
 
-Wpisz definicję obok `groq` wewnątrz `providers`, a w `instrument_routes` dodaj na przykład:
+Wartość musi być dokładnym symbolem z `signals.product`, np. `EURUSD/USD`, `USD/MXN`, `USD/JPY` albo `XAU/USD`. Klucz API pozostaje w lokalnym `.env` jako `CLAUDE_API_KEY`; Docker Compose przekazuje go do kontenera. Nie umieszczaj klucza w pliku JSON ani w repozytorium. Inni dostawcy Anthropic mogą być dodani jako `type: "anthropic"`; dla przyszłych usług zgodnych z OpenAI Chat Completions dostępny jest także typ `openai_compatible`.
 
-```json
-"USD/MXN": "secondary"
-```
-
-Wartość instrumentu musi odpowiadać symbolowi z `signals.product`, np. `EURUSD/USD`, `USD/MXN`, `USD/JPY` albo `XAU/USD`. Pozostałe instrumenty nadal będą obsługiwane przez domyślnego dostawcę Groq. Drugi adapter wymaga endpointu zgodnego z formatem OpenAI Chat Completions; jego klucz umieść w lokalnym `.env` jako `SECONDARY_LLM_API_KEY`, nie w pliku JSON ani w repozytorium. Przykładowy wpis znajduje się w `.env.example`.
-
-Po zmianie routingu lub klucza odtwórz wyłącznie kontener API poleceniem `docker compose up -d --force-recreate --no-deps price-history-api`. To nie przebudowuje obrazu ani nie restartuje MySQL; ponowne utworzenie kontenera wczytuje także nową wartość klucza z `.env`. Routing jest wczytywany przy starcie workera. Nie ma automatycznego przełączenia na inny model w razie błędu dostawcy — takie przełączenie mogłoby nieoczekiwanie zużyć tokeny. Błąd pozostawia zadanie w stanie `failed`, które można ponowić ręcznie po poprawieniu konfiguracji.
+Po zmianie routingu lub klucza odtwórz wyłącznie kontener API poleceniem `docker compose up -d --force-recreate --no-deps price-history-api` (bez `--build`, ponieważ plik routingu jest montowany z hosta). Routing jest wczytywany przy starcie workera. Nie ma automatycznego przełączenia na Groq w razie błędu Claude, aby uniknąć dodatkowych, nieplanowanych zapytań i kosztów. Błąd pozostawia zadanie w stanie `failed`; ponowienie jest ręczne.
 
 Tabela `transactions` przechowuje kierunek sygnału i kierunek AI, poziomy wejścia/SL/TP, spread oraz stan `awaiting`, `in progress` albo `closed`. Jeżeli cena wejścia różni się od zamknięcia świecy sygnałowej, transakcja czeka na pierwszą późniejszą świecę M1, której zakres obejmie cenę wejścia; `time_to_open` zapisuje numer tej świecy, a nie czas kalendarzowy obejmujący przerwy w notowaniach. Świecy wejścia nie używa się do zamknięcia. Gdy jedna świeca dotknie jednocześnie SL i TP, przyjmowany jest Stop Loss. Saldo oraz wynik dla 100 zł pozostają `NULL` do zamknięcia. Błędne odpowiedzi i błędy API nie blokują zapisu sygnału; szczegóły można odczytać z `GET /api/ai-verification/jobs?status=failed`, a zadania `failed` lub `skipped` ponowić ręcznie przez `POST /api/ai-verification/jobs/{signal_id}/retry`. Ponowienie wykonuje nowe żądanie do modelu, więc nie jest automatyczne. Do kontenera API klucz Groq jest przekazywany ze zmiennej `GROK_API_KEY` w lokalnym pliku `.env`; klucza nie należy umieszczać w repozytorium.
 

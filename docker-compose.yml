@@ -35,6 +35,7 @@ services:
       MYSQL_USER: ${MYSQL_USER:?Set MYSQL_USER in .env}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       GROK_API_KEY: ${GROK_API_KEY:-}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
       SECONDARY_LLM_API_KEY: ${SECONDARY_LLM_API_KEY:-}
       GROK_SP500_STATE_PATH: /var/lib/grok-sp500/processed.sqlite3
       GIEDA_LOG_DIRECTORY: /var/log/gieda

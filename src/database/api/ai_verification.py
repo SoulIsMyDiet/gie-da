@@ -33,6 +33,9 @@ LOGGER = logging.getLogger(__name__)
 GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "qwen/qwen3.8-27b"
 MODEL_DISPLAY_NAME = "Qwen 3.8 27B (Groq)"
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_API_VERSION = "2023-06-01"
+ANTHROPIC_EFFORT = "medium"
 MAX_COMPLETION_TOKENS = 900
 MAXIMUM_HISTORY_SIZE = 1000
 REQUEST_TIMEOUT_SECONDS = 30
@@ -288,6 +291,122 @@ class OpenAICompatibleChatClient:
         return content.strip()
 
 
+class AnthropicMessagesClient:
+    """Wysyła żądanie do natywnego interfejsu Messages API Anthropic."""
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        display_name: str,
+        api_key_env: str,
+        api_key: str | None = None,
+        opener: Callable[..., Any] = urllib.request.urlopen,
+    ) -> None:
+        """Przygotowuje klienta Claude bez wysyłania żądania.
+
+        Args:
+            model: Identyfikator modelu Anthropic.
+            display_name: Nazwa zapisywana w kolumnie ai_decisions.ai_name.
+            api_key_env: Nazwa zmiennej środowiskowej z kluczem Anthropic.
+            api_key: Opcjonalny klucz podany bezpośrednio, głównie w testach.
+            opener: Funkcja otwierająca żądanie HTTP.
+        """
+        self._model = model
+        self.display_name = display_name
+        self._api_key_env = api_key_env
+        self._api_key = (
+            os.environ.get(api_key_env, "").strip()
+            if api_key is None
+            else api_key.strip()
+        )
+        self._opener = opener
+
+    def complete(self, prompt: str) -> str:
+        """Wysyła prompt do Claude i zwraca tekst odpowiedzi.
+
+        Args:
+            prompt: Pełny prompt z kontekstem sygnału i historią świec.
+
+        Returns:
+            Połączoną treść bloków tekstowych z odpowiedzi Anthropic.
+
+        Raises:
+            AIVerificationError: Gdy brakuje klucza, API odpowie błędem
+                albo zwróci nieoczekiwany format.
+        """
+        if not self._api_key:
+            raise AIVerificationError(
+                f"Brak klucza API w zmiennej {self._api_key_env}."
+            )
+        request_body = json.dumps(
+            {
+                "model": self._model,
+                "max_tokens": MAX_COMPLETION_TOKENS,
+                "system": (
+                    "Zwróć wyłącznie poprawny obiekt JSON z polami "
+                    "aggressive i moderate. Każdy wariant musi zawierać "
+                    "dokładnie pola wymagane przez prompt."
+                ),
+                "messages": [{"role": "user", "content": prompt}],
+                "output_config": {"effort": ANTHROPIC_EFFORT},
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            ANTHROPIC_MESSAGES_URL,
+            data=request_body,
+            headers={
+                "x-api-key": self._api_key,
+                "anthropic-version": ANTHROPIC_API_VERSION,
+                "Content-Type": "application/json",
+                "User-Agent": "gie-da/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with self._opener(
+                request, timeout=REQUEST_TIMEOUT_SECONDS
+            ) as response:
+                response_body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            details = error.read().decode("utf-8", errors="replace")[:1000]
+            raise AIVerificationError(
+                f"Anthropic zwrócił HTTP {error.code}: {details}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise AIVerificationError(
+                f"Nie udało się połączyć z Anthropic: {error.reason}"
+            ) from error
+        except (TimeoutError, OSError) as error:
+            raise AIVerificationError(
+                f"Połączenie z Anthropic nie powiodło się: {error}"
+            ) from error
+
+        try:
+            provider_response = json.loads(response_body)
+            content_blocks = provider_response["content"]
+            if not isinstance(content_blocks, list):
+                raise TypeError("Pole content nie jest listą.")
+            content = "".join(
+                block["text"]
+                for block in content_blocks
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise AIVerificationError(
+                "Anthropic zwrócił nieprawidłową strukturę odpowiedzi."
+            ) from error
+        if not content.strip():
+            raise AIVerificationError(
+                "Anthropic zwrócił pustą treść odpowiedzi."
+            )
+        return content.strip()
+
+
 @dataclass(frozen=True)
 class VerifierProviderSettings:
     """Przechowuje bezpieczne, niebędące sekretami ustawienia dostawcy."""
@@ -359,45 +478,54 @@ def load_verifier_routing_config(
                 display_name=MODEL_DISPLAY_NAME,
             )
             continue
-        if provider_type != "openai_compatible":
+        if provider_type not in {"anthropic", "openai_compatible"}:
             raise AIVerificationError(
                 f"Dostawca {provider_id!r} ma nieobsługiwany typ."
             )
 
         required_fields = {
             "type",
-            "chat_completions_url",
             "model",
             "display_name",
             "api_key_env",
         }
+        if provider_type == "openai_compatible":
+            required_fields.add("chat_completions_url")
         if set(provider_value) != required_fields:
             raise AIVerificationError(
                 f"Dostawca {provider_id!r} musi zawierać dokładnie "
-                "type, chat_completions_url, model, display_name i api_key_env."
+                "pola wymagane przez wybrany typ."
             )
-        endpoint = provider_value["chat_completions_url"]
         model = provider_value["model"]
         display_name = provider_value["display_name"]
         api_key_env = provider_value["api_key_env"]
+        endpoint = provider_value.get("chat_completions_url")
         if not all(
             isinstance(value, str) and value.strip()
-            for value in (endpoint, model, display_name, api_key_env)
+            for value in (model, display_name, api_key_env)
         ) or len(display_name.strip()) > 255:
             raise AIVerificationError(
                 f"Dostawca {provider_id!r} zawiera puste ustawienie "
                 "lub nazwę dłuższą niż 255 znaków."
             )
-        try:
-            parsed_url = urlsplit(endpoint)
-        except ValueError as error:
-            raise AIVerificationError(
-                f"Dostawca {provider_id!r} ma nieprawidłowy adres API."
-            ) from error
-        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-            raise AIVerificationError(
-                f"Dostawca {provider_id!r} ma nieprawidłowy adres API."
-            )
+        if provider_type == "openai_compatible":
+            if not isinstance(endpoint, str) or not endpoint.strip():
+                raise AIVerificationError(
+                    f"Dostawca {provider_id!r} nie ma adresu API."
+                )
+            try:
+                parsed_url = urlsplit(endpoint)
+            except ValueError as error:
+                raise AIVerificationError(
+                    f"Dostawca {provider_id!r} ma nieprawidłowy adres API."
+                ) from error
+            if (
+                parsed_url.scheme not in {"http", "https"}
+                or not parsed_url.netloc
+            ):
+                raise AIVerificationError(
+                    f"Dostawca {provider_id!r} ma nieprawidłowy adres API."
+                )
         if (
             not api_key_env.isascii()
             or not api_key_env.replace("_", "").isalnum()
@@ -408,10 +536,12 @@ def load_verifier_routing_config(
                 "zmiennej środowiskowej klucza."
             )
         providers[provider_id] = VerifierProviderSettings(
-            provider_type="openai_compatible",
+            provider_type=provider_type,
             display_name=display_name.strip(),
             model=model.strip(),
-            chat_completions_url=endpoint.strip(),
+            chat_completions_url=(
+                endpoint.strip() if isinstance(endpoint, str) else None
+            ),
             api_key_env=api_key_env,
         )
 
@@ -450,8 +580,11 @@ class AIVerificationRouter:
             self._instrument_routes,
         ) = load_verifier_routing_config(config_path)
         self._clients: dict[
-            str, GroqChatClient | OpenAICompatibleChatClient
-        ] = {}
+                str,
+                GroqChatClient
+                | OpenAICompatibleChatClient
+                | AnthropicMessagesClient,
+            ] = {}
 
     def provider_id_for(self, instrument: str) -> str:
         """Zwraca dostawcę przypisanego do instrumentu lub domyślnego."""
@@ -461,13 +594,23 @@ class AIVerificationRouter:
 
     def client_for(
         self, instrument: str
-    ) -> GroqChatClient | OpenAICompatibleChatClient:
+    ) -> (
+        GroqChatClient
+        | OpenAICompatibleChatClient
+        | AnthropicMessagesClient
+    ):
         """Tworzy raz i ponownie wykorzystuje klienta wybranego dostawcy."""
         provider_id = self.provider_id_for(instrument)
         if provider_id not in self._clients:
             settings = self._providers[provider_id]
             if settings.provider_type == "groq":
                 client = GroqChatClient()
+            elif settings.provider_type == "anthropic":
+                client = AnthropicMessagesClient(
+                    model=settings.model or "",
+                    display_name=settings.display_name,
+                    api_key_env=settings.api_key_env or "",
+                )
             else:
                 client = OpenAICompatibleChatClient(
                     chat_completions_url=settings.chat_completions_url or "",

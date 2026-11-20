@@ -25,6 +25,7 @@ from ai_verification import (  # noqa: E402
     AIVerificationWorker,
     AIVerificationError,
     AIVerificationRouter,
+    AnthropicMessagesClient,
     GroqChatClient,
     MODEL_DISPLAY_NAME,
     OpenAICompatibleChatClient,
@@ -228,6 +229,20 @@ def test_router_sends_only_the_configured_instrument_to_the_secondary_model(
     assert router.client_for("USD/MXN") is router.client_for("USD/MXN")
 
 
+def test_router_assigns_only_usdmxn_to_claude() -> None:
+    """Pozostawia Groq dla pozostałych symboli i kieruje USD/MXN do Claude."""
+    router = AIVerificationRouter(
+        Path(__file__).resolve().parents[1]
+        / "ai_verification_config.json"
+    )
+
+    assert router.provider_id_for("USD/MXN") == "claude_sonnet55"
+    assert router.provider_id_for("USD/JPY") == "groq"
+    claude_client = router.client_for("USD/MXN")
+    assert isinstance(claude_client, AnthropicMessagesClient)
+    assert claude_client.display_name == "Claude Sonnet 5.5 (Anthropic)"
+
+
 def test_openai_compatible_client_sends_model_without_requesting_its_name() -> None:
     """Wysyła model z konfiguracji bez proszenia o nazwę w odpowiedzi."""
     response = MagicMock()
@@ -253,6 +268,54 @@ def test_openai_compatible_client_sends_model_without_requesting_its_name() -> N
     assert request.get_header("Authorization") == "Bearer test-key"
     assert request_body["model"] == "small-model"
     assert "llm_name" not in request_body["messages"][0]["content"]
+
+
+def test_anthropic_client_uses_messages_api_and_claude_key() -> None:
+    """Buduje żądanie Messages API bez wysyłania go do zewnętrznej usługi."""
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.return_value = (
+        b'{"content":[{"type":"text","text":"{\\"aggressive\\":{},\\"moderate\\":{}}"}]}'
+    )
+    opener = Mock(return_value=response)
+    client = AnthropicMessagesClient(
+        model="claude-sonnet-5-5",
+        display_name="Claude Sonnet 5.5 (Anthropic)",
+        api_key_env="CLAUDE_API_KEY",
+        api_key="test-key",
+        opener=opener,
+    )
+
+    result = client.complete("prompt")
+
+    assert result == '{"aggressive":{},"moderate":{}}'
+    request = opener.call_args.args[0]
+    request_body = json.loads(request.data.decode("utf-8"))
+    assert request.full_url == "https://api.anthropic.com/v1/messages"
+    assert request.get_header("X-api-key") == "test-key"
+    assert request.get_header("Anthropic-version") == "2023-06-01"
+    assert request_body["model"] == "claude-sonnet-5-5"
+    assert request_body["max_tokens"] == 900
+    assert request_body["output_config"] == {"effort": "medium"}
+    assert request_body["messages"] == [{"role": "user", "content": "prompt"}]
+    assert "llm_name" not in request_body["system"]
+
+
+def test_anthropic_client_rejects_missing_key_without_sending_a_request() -> None:
+    """Nie próbuje użyć Claude, jeśli nie ma klucza API."""
+    opener = Mock()
+    client = AnthropicMessagesClient(
+        model="claude-sonnet-5-5",
+        display_name="Claude Sonnet 5.5 (Anthropic)",
+        api_key_env="CLAUDE_API_KEY",
+        api_key="",
+        opener=opener,
+    )
+
+    with pytest.raises(AIVerificationError, match="CLAUDE_API_KEY"):
+        client.complete("prompt")
+
+    opener.assert_not_called()
 
 
 def test_worker_uses_the_provider_assigned_to_the_signal_product() -> None:
