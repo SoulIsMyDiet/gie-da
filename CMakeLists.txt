@@ -47,20 +47,6 @@ add_custom_command(TARGET gieda POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(test_hello_world
-        src/utility/Test.cpp
-        src/utility/tests/TestMain.cpp
-    )
-    target_include_directories(test_hello_world PRIVATE src/utility)
-    add_test(NAME test_hello_world COMMAND test_hello_world)
-
-    add_executable(test_bye_world
-        src/utility/DrugiTest.cpp
-        src/utility/tests/DrugiTestMain.cpp
-    )
-    target_include_directories(test_bye_world PRIVATE src/utility)
-    add_test(NAME test_bye_world COMMAND test_bye_world)
-
     add_executable(grok45_signal_generator_tests
         src/algorithms/Grok-45/EURUSD/SignalGenerator.cpp
         src/algorithms/Grok-45/EURUSD/tests/SignalGeneratorTests.cpp
