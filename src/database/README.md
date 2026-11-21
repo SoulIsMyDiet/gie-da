@@ -152,7 +152,8 @@ Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączo
 ponieważ dotychczasowe symbole nie zapewniały danych dla oczekiwanych indeksów.
 API nie zwraca tych instrumentów jako monitorowanych ani otwartych i odrzuca
 nowe zapisy oraz żądania uzupełnienia; zapisane wcześniej świece pozostają
-w bazie. Monitor pobiera obecnie `EUR/USD`, `USD/MXN`, `USD/JPY` i `XAU/USD`.
+w bazie. Monitor pobiera obecnie `EUR/USD`, `USD/MXN`, `USD/JPY`, `XAU/USD`,
+`BTC/USD` (całodobowo) i `AAPL` w regularnych godzinach sesji amerykańskiej.
 
 Strategia `Claude-sonnet55/S&P500` pozostaje w kodzie. Po ponownym włączeniu
 instrumentu API może uruchamiać ją po zapisaniu pojedynczej zamkniętej świecy

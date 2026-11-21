@@ -147,6 +147,8 @@ MONITORED_PRODUCTS = (
     MarketProduct("USD/MXN", "forex_ny_24_5"),
     MarketProduct("USD/JPY", "forex_ny_24_5"),
     MarketProduct("XAU/USD", "gold_spot"),
+    MarketProduct("BTC/USD", "crypto_24_7"),
+    MarketProduct("AAPL", "us_equity"),
 )
 
 

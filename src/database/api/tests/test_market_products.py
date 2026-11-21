@@ -49,6 +49,11 @@ class MarketProductsTests(unittest.TestCase):
         self.assertFalse(
             profile.is_open(datetime(2026, 11, 21, 15, 0, tzinfo=timezone.utc))
         )
+        self.assertTrue(
+            is_market_open(
+                "AAPL", datetime(2026, 11, 18, 14, 30, tzinfo=timezone.utc)
+            )
+        )
 
     def test_crypto_profile_is_open_all_days(self) -> None:
         profile = MARKET_PROFILES["crypto_24_7"]
@@ -91,15 +96,22 @@ class MarketProductsTests(unittest.TestCase):
                 self.assertEqual(profile.is_open(timestamp), expected_open)
 
     def test_only_available_products_are_monitored(self) -> None:
-        expected_symbols = ("EUR/USD", "USD/MXN", "USD/JPY", "XAU/USD")
+        expected_symbols = (
+            "EUR/USD",
+            "USD/MXN",
+            "USD/JPY",
+            "XAU/USD",
+            "BTC/USD",
+            "AAPL",
+        )
         self.assertEqual(get_monitored_symbols(), expected_symbols)
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)),
-            expected_symbols,
+            ("EUR/USD", "USD/MXN", "USD/JPY", "XAU/USD", "BTC/USD"),
         )
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)),
-            (),
+            ("BTC/USD",),
         )
         self.assertFalse(is_monitored_product("GER30"))
         self.assertFalse(is_monitored_product("ES"))
@@ -107,11 +119,14 @@ class MarketProductsTests(unittest.TestCase):
         self.assertTrue(is_monitored_product("USD/MXN"))
         self.assertTrue(is_monitored_product("USD/JPY"))
         self.assertTrue(is_monitored_product("XAU/USD"))
+        self.assertTrue(is_monitored_product("BTC/USD"))
+        self.assertTrue(is_monitored_product("AAPL"))
 
     def test_unknown_symbols_are_not_treated_as_configured_products(self) -> None:
         with self.assertRaisesRegex(ValueError, "nie jest skonfigurowany"):
             is_market_open(
-                "AAPL", datetime(2026, 11, 18, 15, 0, tzinfo=timezone.utc)
+                "NOT_A_PRODUCT",
+                datetime(2026, 11, 18, 15, 0, tzinfo=timezone.utc),
             )
 
 
