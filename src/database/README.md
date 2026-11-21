@@ -29,6 +29,18 @@ Projekt używa MySQL uruchomionego w Dockerze. Pobrane świece rynkowe są przec
    Oczekiwany wynik to `status: ok`.
 6. Uruchom aplikację giełdy w CLion. Przy starcie aplikacja wyszukuje luki dla otwartych, monitorowanych instrumentów i uzupełnia maksymalnie 1000 najnowszych brakujących świec. Jedno żądanie Twelve Data może pobrać do 5000 świec, więc wiele bliskich luk jest pobieranych razem. Następnie monitor pobiera nowe świece 1-minutowe po zamknięciu minuty.
 
+## Testy API
+
+Testy API uruchamiaj w osobnym kontenerze z Pythonem 3.12 i wymaganymi
+zaleznosciami z `src/database/api/requirements-test.txt`. Nie trzeba instalowac
+pakietow w lokalnym Pythonie:
+
+```powershell
+docker compose --profile test run --build --rm api-tests
+```
+
+Kontener montuje kod zrodlowy, wiec testuje aktualne pliki projektu.
+
 ## Codzienna obsługa
 
 - Start po ponownym uruchomieniu komputera: uruchom Docker Desktop, a następnie wykonaj `docker compose up -d` w folderze projektu.
@@ -49,7 +61,7 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu 
 
 ## Struktura danych
 
-- `products`: unikalne symbole wewnętrzne produktów (np. `EUR/USD`). Przed wysłaniem żądania aplikacja mapuje `EUR/USD` na symbol Twelve Data `EUR/USD`; nazwa w lokalnej bazie pozostaje bez zmian.
+- `products`: unikalne symbole wewnętrzne produktów (np. `EUR/USD`). Przed wysłaniem żądania symbol `EUR/USD` jest uzywany zarowno w lokalnej bazie, jak i w zadaniach Twelve Data.
 - `candles`: kolumny `symbol`, `datetime`, `open`, `high`, `low`, `close`, `volume` oraz `utc_offset_minutes`. `datetime` jest zapisywany w czasie lokalnym `Europe/Warsaw`; offset rozróżnia powtarzającą się godzinę przy zmianie czasu. Klucz główny `(symbol, datetime, utc_offset_minutes)` zapobiega duplikatom, a ponowne pobranie świecy aktualizuje wpis. `volume` jest `NULL`, jeśli dostawca go nie podał.
 - `candle_gaps`: osobny wiersz dla każdej wykrytej brakującej świecy. `candle_datetime_utc` oznacza oczekiwany początek świecy w UTC, `status` ma wartość `missing` albo `filled`, a pola `detected_at_utc` i `filled_at_utc` zapisują moment wykrycia i uzupełnienia. Klucz `(symbol, candle_datetime_utc)` zapobiega duplikatom.
 - `daily_sentences`: `id`, `sentence` i `created_at_utc`; unikalny indeks treści zapobiega duplikatom. Aplikacja losuje sentencję po stronie C++ i nie odpytuje modelu przy każdym uruchomieniu.

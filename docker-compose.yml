@@ -20,6 +20,22 @@ services:
       retries: 20
       start_period: 20s
 
+  api-tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: src/database/api/Dockerfile.test
+    working_dir: /workspace
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: test
+      MYSQL_USER: test
+      MYSQL_PASSWORD: test
+    volumes:
+      - ./src:/workspace/src
+
   price-history-api:
     build:
       context: ./src

@@ -239,6 +239,8 @@ def test_initialize_backfills_xau_with_configured_spread():
             patch.object(repository, "_migrate_signal_enum"), \
             patch.object(repository, "_migrate_signal_source_timestamp"), \
             patch.object(repository, "_migrate_signal_potention_schema"), \
+            patch.object(repository, "_migrate_eurusd_symbol"), \
+            patch.object(repository, "_migrate_algorithm_names"), \
             patch.object(repository, "_migrate_candle_timestamps"), \
             patch.object(repository, "_migrate_prompt_template_version"), \
             patch.object(repository, "_migrate_prompt_encoding"), \
@@ -268,6 +270,8 @@ def test_initialize_creates_and_seeds_active_prompt():
             patch.object(repository, "_migrate_signal_enum"), \
             patch.object(repository, "_migrate_signal_source_timestamp"), \
             patch.object(repository, "_migrate_signal_potention_schema"), \
+            patch.object(repository, "_migrate_eurusd_symbol"), \
+            patch.object(repository, "_migrate_algorithm_names"), \
             patch.object(repository, "_migrate_candle_timestamps"), \
             patch.object(repository, "_migrate_prompt_template_version"), \
             patch.object(repository, "_migrate_prompt_encoding"), \
