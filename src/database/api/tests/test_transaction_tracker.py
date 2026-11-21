@@ -23,6 +23,7 @@ def _transaction(
     direction: str = "long",
     status: str = "in progress",
     opened_at: datetime | None = None,
+    signal_price: Decimal = Decimal("1.09900"),
 ) -> tuple[object, ...]:
     """Zwraca wiersz bazy dla przykładowej transakcji."""
     signal_close = datetime(2026, 11, 17, 12, 0)
@@ -42,6 +43,7 @@ def _transaction(
         Decimal("0.00030"),
         status,
         opened_at or signal_close,
+        signal_price,
     )
 
 
@@ -88,28 +90,46 @@ def test_entry_candle_can_close_transaction_and_stop_loss_has_priority() -> None
 
 
 @pytest.mark.parametrize(
-    ("direction", "low", "high"),
+    ("direction", "signal_price", "low", "high", "should_open"),
     [
-        ("long", "1.10100", "1.10200"),
-        ("short", "1.09800", "1.09900"),
+        ("long", Decimal("1.09900"), "1.09900", "1.10100", True),
+        ("long", Decimal("1.09900"), "1.09800", "1.09990", False),
+        ("long", Decimal("1.10100"), "1.09900", "1.10200", True),
+        ("long", Decimal("1.10100"), "1.10010", "1.10200", False),
+        ("short", Decimal("1.09900"), "1.09900", "1.10100", True),
+        ("short", Decimal("1.09900"), "1.09800", "1.09990", False),
+        ("short", Decimal("1.10100"), "1.09900", "1.10200", True),
+        ("short", Decimal("1.10100"), "1.10010", "1.10200", False),
     ],
 )
 def test_entry_uses_directional_price_threshold(
-    direction: str, low: str, high: str
+    direction: str,
+    signal_price: Decimal,
+    low: str,
+    high: str,
+    should_open: bool,
 ) -> None:
-    """Otwiera LONG po HIGH >= ENTRY i SHORT po LOW <= ENTRY."""
+    """Otwiera po HIGH albo LOW zależnie od położenia ENTRY względem sygnału."""
     cursor = Mock()
     cursor.fetchall.return_value = [
-        _transaction(direction=direction, status="awaiting", opened_at=None)
+        _transaction(
+            direction=direction,
+            status="awaiting",
+            opened_at=None,
+            signal_price=signal_price,
+        )
     ]
     cursor.fetchone.return_value = (1,)
 
     TransactionTracker().process_candles(cursor, [_candle(0, low, high)])
 
-    assert cursor.execute.call_count == 3
-    update_query, update_values = cursor.execute.call_args_list[2].args
-    assert "transaction_status = 'in progress'" in update_query
-    assert update_values == (1, datetime(2026, 11, 17, 12, 1), 41)
+    if should_open:
+        assert cursor.execute.call_count == 3
+        update_query, update_values = cursor.execute.call_args_list[2].args
+        assert "transaction_status = 'in progress'" in update_query
+        assert update_values == (1, datetime(2026, 11, 17, 12, 1), 41)
+    else:
+        assert cursor.execute.call_count == 1
 
 
 def test_time_to_open_is_the_number_of_m1_candles_not_wall_time() -> None:
@@ -294,7 +314,7 @@ def test_in_progress_transaction_requires_an_open_time() -> None:
     """Zgłasza niespójny rekord zamiast po cichu pomijać aktywną pozycję."""
     cursor = Mock()
     transaction = list(_transaction())
-    transaction[-1] = None
+    transaction[-2] = None
     cursor.fetchall.return_value = [tuple(transaction)]
 
     with pytest.raises(ValueError, match="czasu otwarcia"):

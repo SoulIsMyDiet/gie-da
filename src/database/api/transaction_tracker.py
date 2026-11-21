@@ -251,6 +251,7 @@ class TransactionTracker:
                         spread_value,
                         initial_status,
                         initial_opened_at,
+                        signal_price_value,
                     ),
                     historical_candles,
                 )
@@ -269,7 +270,8 @@ class TransactionTracker:
             f"""
             SELECT t.id, s.product, t.signal_close_utc, t.ai_decision_status,
                    t.open_price, t.stop_loss_price, t.take_profit_price,
-                   t.true_spread, t.transaction_status, t.opened_at_utc
+                   t.true_spread, t.transaction_status, t.opened_at_utc,
+                   s.price
             FROM `transactions` AS t
             JOIN signals AS s ON s.id = t.signal_id
             WHERE s.product IN ({placeholders})
@@ -307,9 +309,11 @@ class TransactionTracker:
             spread_value,
             transaction_status,
             opened_at_utc,
+            signal_price_value,
         ) = transaction
         signal_close = _as_utc_naive(signal_close_utc)
         open_price = Decimal(str(open_price_value))
+        signal_price = Decimal(str(signal_price_value))
         stop_loss = Decimal(str(stop_loss_value))
         take_profit = Decimal(str(take_profit_value))
         spread = Decimal(str(spread_value))
@@ -326,27 +330,43 @@ class TransactionTracker:
             opened_on_current_candle = False
 
             if status == "awaiting":
-                if not _entry_level_reached(direction, candle, open_price):
-                    continue
-                time_to_open = self._count_open_delay_minutes(
-                    cursor,
-                    symbol,
-                    signal_close,
-                    candle_open,
-                )
-                cursor.execute(
-                    """
-                    UPDATE `transactions`
-                    SET transaction_status = 'in progress',
-                        time_to_open = %s,
-                        opened_at_utc = %s
-                    WHERE id = %s AND transaction_status = 'awaiting'
-                    """,
-                    (time_to_open, candle_close, transaction_id),
-                )
-                status = "in progress"
-                opened_at = candle_close
-                opened_on_current_candle = True
+                if open_price == signal_price:
+                    cursor.execute(
+                        """
+                        UPDATE `transactions`
+                        SET transaction_status = 'in progress',
+                            time_to_open = 0,
+                            opened_at_utc = %s
+                        WHERE id = %s AND transaction_status = 'awaiting'
+                        """,
+                        (signal_close, transaction_id),
+                    )
+                    status = "in progress"
+                    opened_at = signal_close
+                else:
+                    if not _entry_level_reached(
+                        direction, candle, open_price, signal_price
+                    ):
+                        continue
+                    time_to_open = self._count_open_delay_minutes(
+                        cursor,
+                        symbol,
+                        signal_close,
+                        candle_open,
+                    )
+                    cursor.execute(
+                        """
+                        UPDATE `transactions`
+                        SET transaction_status = 'in progress',
+                            time_to_open = %s,
+                            opened_at_utc = %s
+                        WHERE id = %s AND transaction_status = 'awaiting'
+                        """,
+                        (time_to_open, candle_close, transaction_id),
+                    )
+                    status = "in progress"
+                    opened_at = candle_close
+                    opened_on_current_candle = True
 
             if status != "in progress":
                 continue
@@ -486,13 +506,16 @@ def _entry_level_reached(
     direction: str,
     candle: TransactionCandle,
     entry_price: Decimal,
+    signal_price: Decimal,
 ) -> bool:
-    """Sprawdza osiągnięcie progu ENTRY zgodnie z kierunkiem transakcji."""
-    if direction == "long":
+    """Sprawdza ruch ceny do ENTRY względem zamknięcia świecy sygnałowej."""
+    if direction not in ("long", "short"):
+        raise ValueError("Kierunek transakcji musi mieć wartość long albo short.")
+    if entry_price > signal_price:
         return candle.high >= entry_price
-    if direction == "short":
+    if entry_price < signal_price:
         return candle.low <= entry_price
-    raise ValueError("Kierunek transakcji musi mieć wartość long albo short.")
+    return False
 
 
 def _calculate_balance(
