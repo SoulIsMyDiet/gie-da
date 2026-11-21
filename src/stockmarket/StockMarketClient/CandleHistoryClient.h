@@ -48,13 +48,16 @@ struct SignalReportEntry {
 };
 
 /**
- * Przechowuje cztery końcowe wyniki przypisane do sygnału.
+ * Przechowuje wyniki 20- i 60-minutowe przypisane do sygnału.
  */
 struct SignalPotentialDetails {
     std::string saldo20;
     std::string maxCandle;
     std::string deal100Pln;
     std::string spread;
+    std::string bestCandle60Datetime;
+    std::string saldo60;
+    std::string deal100Pln60;
 };
 
 /**
@@ -287,9 +290,9 @@ public:
         std::string& error);
 
     /**
-     * Pobiera saldo, numer najlepszej świecy, wynik dla 100 zł i spread sygnału.
+     * Pobiera wyniki dla okien 20 i 60 świec oraz spread sygnału.
      * @param signalId Liczbowy identyfikator sygnału zapisany jako tekst.
-     * @param details Otrzymuje cztery wartości z tabeli signal_potention.
+     * @param details Otrzymuje wyniki dla obu okien z tabeli signal_potention.
      * @param error Otrzymuje opis błędu, jeśli żądanie się nie powiedzie.
      * @return true, jeśli API zwróciło poprawne szczegóły sygnału.
      */

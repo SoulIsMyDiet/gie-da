@@ -922,6 +922,9 @@ class MarketDataRepository:
                         saldo_20_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         max_candle INT NULL DEFAULT NULL,
                         `100zl_deal` DECIMAL(20, 5) NULL DEFAULT NULL,
+                        best_candle_60_datetime DATETIME NULL DEFAULT NULL,
+                        saldo_60_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
+                        `100zl_deal_60` DECIMAL(20, 5) NULL DEFAULT NULL,
                         spread DECIMAL(20, 5) NOT NULL,
                         UNIQUE KEY uq_signal_potention_signal_id (signal_id),
                         CONSTRAINT fk_signal_potention_signal
@@ -1314,6 +1317,36 @@ class MarketDataRepository:
             )
             column_names.add("100zl_deal")
 
+        new_60_minute_columns = (
+            (
+                "best_candle_60_datetime",
+                "DATETIME NULL DEFAULT NULL",
+                "`100zl_deal`",
+            ),
+            (
+                "saldo_60_aggr_candles",
+                "DECIMAL(20, 5) NULL DEFAULT NULL",
+                "best_candle_60_datetime",
+            ),
+            (
+                "100zl_deal_60",
+                "DECIMAL(20, 5) NULL DEFAULT NULL",
+                "saldo_60_aggr_candles",
+            ),
+        )
+        for column_name, column_definition, previous_column in (
+            new_60_minute_columns
+        ):
+            if column_name not in column_names:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE signal_potention
+                    ADD COLUMN `{column_name}` {column_definition}
+                        AFTER {previous_column}
+                    """
+                )
+                column_names.add(column_name)
+
         if "spread" not in column_names:
             cursor.execute(
                 """
@@ -1331,7 +1364,9 @@ class MarketDataRepository:
             "saldo_5th_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "saldo_10aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "saldo_20_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "saldo_60_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "100zl_deal": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "100zl_deal_60": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "spread": "DECIMAL(20, 5) NOT NULL",
         }
         cursor.execute("SHOW COLUMNS FROM signal_potention")
@@ -2762,8 +2797,8 @@ class MarketDataRepository:
 
     def fetch_signal_potential(
         self, signal_id: int
-    ) -> tuple[str, str, str, str] | None:
-        """Pobiera cztery końcowe wartości wyników dla wskazanego sygnału."""
+    ) -> tuple[str, ...] | None:
+        """Pobiera wyniki dla okien 20 i 60 minut wskazanego sygnału."""
         connection = mysql.connector.connect(**self.database_settings)
         try:
             cursor = connection.cursor()
@@ -2774,7 +2809,10 @@ class MarketDataRepository:
                         CAST(saldo_20_aggr_candles AS CHAR),
                         CAST(max_candle AS CHAR),
                         CAST(`100zl_deal` AS CHAR),
-                        CAST(spread AS CHAR)
+                        CAST(spread AS CHAR),
+                        CAST(best_candle_60_datetime AS CHAR),
+                        CAST(saldo_60_aggr_candles AS CHAR),
+                        CAST(`100zl_deal_60` AS CHAR)
                     FROM signal_potention
                     WHERE signal_id = %s
                     """,

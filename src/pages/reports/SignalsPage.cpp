@@ -714,7 +714,7 @@ void SignalsPage::drawDetails(
              {minute + L".", true},
              {L"minucie.", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
-        drawWrappedParagraph(
+        nextLine = drawWrappedParagraph(
             deviceContext, textBounds,
             nextLine + WindowScale::size(parent_, 12),
             {{L"Przy inwestycji 100 zł strata wyniosła", false},
@@ -724,12 +724,62 @@ void SignalsPage::drawDetails(
              {L".", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
     } else {
-        drawWrappedParagraph(
+        nextLine = drawWrappedParagraph(
             deviceContext, textBounds, nextLine,
             {{L"Sygnał nie odnotował ani zysku, ani straty w najlepszym możliwym przypadku w ciągu 20 najbliższych minut przy spreadzie wynoszącym", false},
              {spread, true},
              {L".", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
+    }
+
+    // Front
+    nextLine += WindowScale::size(parent_, 16);
+    if (details_.bestCandle60Datetime.empty() || details_.saldo60.empty() ||
+        details_.deal100Pln60.empty()) {
+        drawWrappedParagraph(
+            deviceContext, textBounds, nextLine,
+            {{L"Wynik dla 60 minut będzie dostępny po zebraniu 60 świec M1.", false}},
+            regularFont, boldFont, WindowScale::size(parent_, 6));
+    } else {
+        const int sign60 = decimalSign(details_.deal100Pln60);
+        if (sign60 == 2) {
+            drawWrappedParagraph(
+                deviceContext, textBounds, nextLine,
+                {{L"Wartość wyniku dla 60 minut jest nieprawidłowa.", false}},
+                regularFont, boldFont, WindowScale::size(parent_, 6));
+        } else {
+            std::wstring bestCandle60Datetime;
+            std::wstring saldo60;
+            std::wstring deal100Pln60;
+            if (!convertUtf8ToWide(
+                    details_.bestCandle60Datetime, bestCandle60Datetime)) {
+                bestCandle60Datetime = L"--";
+            }
+            if (!convertUtf8ToWide(details_.saldo60, saldo60)) {
+                saldo60 = L"--";
+            }
+            if (!convertUtf8ToWide(details_.deal100Pln60, deal100Pln60)) {
+                deal100Pln60 = L"--";
+            }
+            const COLORREF resultColor60 = sign60 > 0
+                ? RGB(0, 128, 0)
+                : (sign60 < 0 ? RGB(200, 0, 0) : RGB(0, 0, 0));
+            nextLine = drawWrappedParagraph(
+                deviceContext, textBounds, nextLine,
+                {{L"Najkorzystniejsza świeca w ciągu 60 minut wystąpiła o", false},
+                 {bestCandle60Datetime, true},
+                 {L"; saldo wyniosło", false},
+                 {saldo60, true, resultColor60},
+                 {L".", false}},
+                regularFont, boldFont, WindowScale::size(parent_, 6));
+            nextLine = drawWrappedParagraph(
+                deviceContext, textBounds,
+                nextLine + WindowScale::size(parent_, 8),
+                {{L"Szacowany wynik przy zaangażowaniu 100 zł wyniósł", false},
+                 {deal100Pln60, true, resultColor60},
+                 {L"zł.", false}},
+                regularFont, boldFont, WindowScale::size(parent_, 6));
+        }
     }
 
     SelectObject(deviceContext, previousFont);

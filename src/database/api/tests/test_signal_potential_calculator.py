@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -80,6 +80,62 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         self.assertIsNone(result["saldo_20_aggr_candles"])
         self.assertIsNone(result["max_candle"])
         self.assertIsNone(result["100zl_deal"])
+        self.assertIsNone(result["saldo_60_aggr_candles"])
+        self.assertIsNone(result["100zl_deal_60"])
+
+    def test_60_candle_window_uses_same_best_candle_and_profit_calculation(self) -> None:
+        """Okno 60 świec wybiera ekstremum bez zmiany wyniku dla 20 świec."""
+        candles = [
+            (Decimal("1.1001"), Decimal("1.0999"))
+            for _ in range(60)
+        ]
+        candles[12] = (Decimal("1.1020"), Decimal("1.0999"))
+        candles[42] = (Decimal("1.1030"), Decimal("1.0999"))
+        timestamps = [
+            datetime(2025, 1, 1) + timedelta(minutes=index)
+            for index in range(60)
+        ]
+
+        result = self.calculator.calculate(
+            "long",
+            self.entry_price,
+            candles,
+            candle_timestamps=timestamps,
+        )
+
+        self.assertEqual(result["saldo_20_aggr_candles"], Decimal("0.0017"))
+        self.assertEqual(result["max_candle"], 13)
+        self.assertEqual(result["100zl_deal"], Decimal("4.63636"))
+        self.assertEqual(result["saldo_60_aggr_candles"], Decimal("0.0027"))
+        self.assertEqual(result["100zl_deal_60"], Decimal("7.36363"))
+        self.assertEqual(
+            result["best_candle_60_datetime"], timestamps[42]
+        )
+
+    def test_60_candle_window_uses_lowest_low_for_short(self) -> None:
+        """Okno 60 świec SHORT wybiera najniższe low."""
+        candles = [
+            (Decimal("1.1001"), Decimal("1.0999"))
+            for _ in range(60)
+        ]
+        candles[47] = (Decimal("1.1001"), Decimal("1.0980"))
+        timestamps = [
+            datetime(2025, 1, 1) + timedelta(minutes=index)
+            for index in range(60)
+        ]
+
+        result = self.calculator.calculate(
+            "short",
+            self.entry_price,
+            candles,
+            candle_timestamps=timestamps,
+        )
+
+        self.assertEqual(result["saldo_60_aggr_candles"], Decimal("0.0017"))
+        self.assertEqual(result["100zl_deal_60"], Decimal("4.63636"))
+        self.assertEqual(
+            result["best_candle_60_datetime"], timestamps[47]
+        )
 
     def test_rejects_invalid_direction_and_entry_price(self) -> None:
         """Nieprawidłowy kierunek lub cena wejścia powodują jawny błąd."""

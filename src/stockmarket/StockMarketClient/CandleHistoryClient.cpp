@@ -1822,7 +1822,7 @@ bool CandleHistoryClient::fetchSignalPage(
 }
 
 /**
- * Pobiera cztery wartości tabeli signal_potention dla jednego sygnału.
+ * Pobiera wartości tabeli signal_potention dla jednego sygnału.
  */
 bool CandleHistoryClient::fetchSignalPotential(
     const std::string& signalId,
@@ -1891,9 +1891,12 @@ bool CandleHistoryClient::fetchSignalPotential(
         &details.saldo20,
         &details.maxCandle,
         &details.deal100Pln,
-        &details.spread
+        &details.spread,
+        &details.bestCandle60Datetime,
+        &details.saldo60,
+        &details.deal100Pln60
     };
-    constexpr std::size_t detailFieldCount = 4;
+    constexpr std::size_t detailFieldCount = 7;
     std::size_t fieldStart = 0;
     for (std::size_t index = 0; index < detailFieldCount; ++index) {
         const std::size_t fieldEnd = response.find('\t', fieldStart);
