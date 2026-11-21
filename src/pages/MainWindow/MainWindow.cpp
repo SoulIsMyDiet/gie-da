@@ -20,6 +20,7 @@ constexpr UINT candleUpdateMessage = WM_APP + 1;
 constexpr int reportsButtonId = 1001;
 constexpr int candleGapsButtonId = 1002;
 constexpr int signalsButtonId = 1003;
+constexpr int transactionsButtonId = 1004;
 constexpr int reportsButtonWidth = 140;
 constexpr int reportsButtonHeight = 36;
 constexpr int reportsButtonGap = 12;
@@ -156,6 +157,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             reportsPage_.positionControls();
             candleGapsPage_.positionControls();
             signalsPage_.positionControls();
+            transactionsPage_.positionControls();
             return 0;
         case WM_COMMAND:
             if (reportsPage_.handleCommand(
@@ -183,6 +185,11 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             if (LOWORD(wParam) == signalsButtonId &&
                 HIWORD(wParam) == BN_CLICKED) {
                 onSignalsClicked();
+                return 0;
+            }
+            if (LOWORD(wParam) == transactionsButtonId &&
+                HIWORD(wParam) == BN_CLICKED) {
+                onTransactionsClicked();
                 return 0;
             }
             break;
@@ -219,6 +226,11 @@ bool MainWindow::onCreate() {
             handle_, L"Nie udało się utworzyć przycisku sygnałów.");
         return false;
     }
+    if (!createTransactionsButton()) {
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć przycisku transakcji.");
+        return false;
+    }
     if (!reportsPage_.create(instance_, handle_)) {
         showErrorMessage(
             handle_, L"Nie udało się utworzyć przycisków raportu.");
@@ -234,11 +246,17 @@ bool MainWindow::onCreate() {
             handle_, L"Nie udało się utworzyć widoku sygnałów.");
         return false;
     }
+    if (!transactionsPage_.create(instance_, handle_)) {
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć widoku transakcji.");
+        return false;
+    }
 
     positionReportsButton();
     reportsPage_.positionControls();
     candleGapsPage_.positionControls();
     signalsPage_.positionControls();
+    transactionsPage_.positionControls();
 
     if (!candleMonitor_.start(handle_)) {
         showErrorMessage(
@@ -357,11 +375,33 @@ bool MainWindow::createSignalsButton() {
 }
 
 /**
- * Ustawia trzy przyciski widoków obok siebie pośrodku dolnej krawędzi okna.
+ * Tworzy przycisk „Transakcje” obok pozostałych widoków tabel.
+ */
+bool MainWindow::createTransactionsButton() {
+    transactionsButton_ = CreateWindowExW(
+        0,
+        L"BUTTON",
+        L"Transakcje",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, reportsButtonWidth, reportsButtonHeight,
+        handle_,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(transactionsButtonId)),
+        instance_,
+        nullptr);
+    if (transactionsButton_ == nullptr) {
+        return false;
+    }
+
+    positionReportsButton();
+    return true;
+}
+
+/**
+ * Ustawia przyciski widoków obok siebie pośrodku dolnej krawędzi okna.
  */
 void MainWindow::positionReportsButton() {
     if (reportsButton_ == nullptr && candleGapsButton_ == nullptr &&
-        signalsButton_ == nullptr) {
+        signalsButton_ == nullptr && transactionsButton_ == nullptr) {
         return;
     }
 
@@ -374,17 +414,22 @@ void MainWindow::positionReportsButton() {
     const int bottomMargin =
         WindowScale::size(handle_, reportsButtonBottomMargin);
     const int buttonBaseWidth = WindowScale::size(handle_, reportsButtonWidth);
-    const int availableButtonWidth =
-        std::max(1, (clientWidth - buttonGap * 2) / 3);
+    constexpr int navigationButtonCount = 4;
+    const int availableButtonWidth = std::max(
+        1, (clientWidth - buttonGap * (navigationButtonCount - 1)) /
+               navigationButtonCount);
     const int buttonWidth = std::min(buttonBaseWidth, availableButtonWidth);
-    const int buttonsWidth = buttonWidth * 3 + buttonGap * 2;
+    const int buttonsWidth =
+        buttonWidth * navigationButtonCount +
+        buttonGap * (navigationButtonCount - 1);
     const int visibleButtonHeight = std::min(buttonHeight, clientHeight);
     const int firstButtonX = std::max(0, (clientWidth - buttonsWidth) / 2);
     const int buttonY = std::max(
         0, clientHeight - visibleButtonHeight - bottomMargin);
     WindowScale::updateFont(
         handle_, navigationButtonFont_, navigationButtonFontHeight_, 14,
-        {reportsButton_, candleGapsButton_, signalsButton_});
+        {reportsButton_, candleGapsButton_, signalsButton_,
+         transactionsButton_});
 
     if (reportsButton_ != nullptr) {
         MoveWindow(
@@ -403,6 +448,12 @@ void MainWindow::positionReportsButton() {
             firstButtonX + (buttonWidth + buttonGap) * 2,
             buttonY, buttonWidth, visibleButtonHeight, TRUE);
     }
+    if (transactionsButton_ != nullptr) {
+        MoveWindow(
+            transactionsButton_,
+            firstButtonX + (buttonWidth + buttonGap) * 3,
+            buttonY, buttonWidth, visibleButtonHeight, TRUE);
+    }
 }
 
 /**
@@ -415,8 +466,10 @@ void MainWindow::onReportsClicked() {
     } else {
         candleGapsPage_.close();
         signalsPage_.close();
+        transactionsPage_.close();
         SetWindowTextW(candleGapsButton_, L"Luki świec");
         SetWindowTextW(signalsButton_, L"Sygnały");
+        SetWindowTextW(transactionsButton_, L"Transakcje");
         reportsPage_.open();
         SetWindowTextW(reportsButton_, L"Strona główna");
     }
@@ -433,8 +486,10 @@ void MainWindow::onCandleGapsClicked() {
     } else {
         reportsPage_.close();
         signalsPage_.close();
+        transactionsPage_.close();
         SetWindowTextW(reportsButton_, L"Raporty");
         SetWindowTextW(signalsButton_, L"Sygnały");
+        SetWindowTextW(transactionsButton_, L"Transakcje");
         candleGapsPage_.open();
         SetWindowTextW(candleGapsButton_, L"Strona główna");
     }
@@ -451,10 +506,32 @@ void MainWindow::onSignalsClicked() {
     } else {
         reportsPage_.close();
         candleGapsPage_.close();
+        transactionsPage_.close();
         SetWindowTextW(reportsButton_, L"Raporty");
         SetWindowTextW(candleGapsButton_, L"Luki świec");
+        SetWindowTextW(transactionsButton_, L"Transakcje");
         signalsPage_.open();
         SetWindowTextW(signalsButton_, L"Strona główna");
+    }
+    InvalidateRect(handle_, nullptr, TRUE);
+}
+
+/**
+ * Przełącza główną część okna na widok transakcji.
+ */
+void MainWindow::onTransactionsClicked() {
+    if (transactionsPage_.isVisible()) {
+        transactionsPage_.close();
+        SetWindowTextW(transactionsButton_, L"Transakcje");
+    } else {
+        reportsPage_.close();
+        candleGapsPage_.close();
+        signalsPage_.close();
+        SetWindowTextW(reportsButton_, L"Raporty");
+        SetWindowTextW(candleGapsButton_, L"Luki świec");
+        SetWindowTextW(signalsButton_, L"Sygnały");
+        transactionsPage_.open();
+        SetWindowTextW(transactionsButton_, L"Strona główna");
     }
     InvalidateRect(handle_, nullptr, TRUE);
 }
@@ -477,6 +554,8 @@ void MainWindow::onPaint() {
         candleGapsPage_.draw(deviceContext, clientArea);
     } else if (signalsPage_.isVisible()) {
         signalsPage_.draw(deviceContext, clientArea);
+    } else if (transactionsPage_.isVisible()) {
+        transactionsPage_.draw(deviceContext, clientArea);
     } else {
         std::string dailySentence;
         {

@@ -11,6 +11,7 @@
 #include "CandleGapsPage.h"
 #include "ReportsPage.h"
 #include "SignalsPage.h"
+#include "TransactionsPage.h"
 #include "StockPriceMonitor.h"
 
 class MainWindow {
@@ -67,6 +68,12 @@ private:
     bool createSignalsButton();
 
     /**
+     * Tworzy przycisk „Transakcje” obok pozostałych widoków tabel.
+     * @return true, jeśli przycisk utworzono poprawnie.
+     */
+    bool createTransactionsButton();
+
+    /**
      * Dopasowuje położenie przycisków widoków do aktualnego rozmiaru okna.
      */
     void positionReportsButton();
@@ -85,6 +92,11 @@ private:
      * Przełącza główną część okna na tabelę signals.
      */
     void onSignalsClicked();
+
+    /**
+     * Przełącza główną część okna na widok transakcji.
+     */
+    void onTransactionsClicked();
 
     /**
      * Pobiera sentencję w osobnym wątku, aby nie blokować okna aplikacji.
@@ -108,6 +120,7 @@ private:
     HWND reportsButton_ = nullptr;
     HWND candleGapsButton_ = nullptr;
     HWND signalsButton_ = nullptr;
+    HWND transactionsButton_ = nullptr;
     HFONT navigationButtonFont_ = nullptr;
     int navigationButtonFontHeight_ = 0;
     std::mutex dailySentenceMutex_;
@@ -118,4 +131,5 @@ private:
     ReportsPage reportsPage_;
     CandleGapsPage candleGapsPage_;
     SignalsPage signalsPage_;
+    TransactionsPage transactionsPage_;
 };

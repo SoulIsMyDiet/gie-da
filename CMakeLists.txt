@@ -11,6 +11,7 @@ add_executable(gieda WIN32
     src/pages/reports/ReportsPage.cpp
     src/pages/reports/CandleGapsPage.cpp
     src/pages/reports/SignalsPage.cpp
+    src/pages/reports/TransactionsPage.cpp
     src/stockmarket/StockPriceMonitor.cpp
     src/stockmarket/CandlePromptContextBuilder.cpp
     src/pages/MainWindow/MainWindowDisplay.cpp
@@ -33,6 +34,7 @@ target_include_directories(gieda PRIVATE
     src/algorithms/Grok-45/EURUSD
 )
 target_link_libraries(gieda PRIVATE
+    comctl32
     winmm
     winhttp
 )
