@@ -270,6 +270,24 @@ public:
         std::string& error);
 
     /**
+     * Pobiera stronę do 10 świec z podanego zakresu dat.
+     * @param startDate Początkowa data w formacie YYYY-MM-DD.
+     * @param endDate Końcowa data w formacie YYYY-MM-DD, włącznie.
+     * @param page Numer strony liczony od zera.
+     * @param candles Otrzymuje świece z wybranego zakresu dat.
+     * @param hasNextPage Otrzymuje informację, czy istnieje kolejna strona.
+     * @param error Otrzymuje opis błędu pobierania lub odpowiedzi API.
+     * @return true, jeśli API zwróciło poprawną stronę świec.
+     */
+    static bool fetchFilteredCandlePage(
+        const std::string& startDate,
+        const std::string& endDate,
+        std::size_t page,
+        std::vector<CandleReportEntry>& candles,
+        bool& hasNextPage,
+        std::string& error);
+
+    /**
      * Pobiera stronę 20 wpisów z historii brakujących świec.
      * @param page Numer strony liczony od zera.
      * @param gaps Otrzymuje wpisy luk świecowych.

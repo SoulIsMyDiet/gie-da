@@ -43,6 +43,7 @@ constexpr DWORD maxResponseSize = 64 * 1024;
 constexpr DWORD apiRequestTimeoutMs = 3000;
 constexpr DWORD singleCandleReceiveTimeoutMs = 70000;
 constexpr std::size_t pageSize = 20;
+constexpr std::size_t filteredCandlePageSize = 10;
 constexpr std::size_t signalPageSize = 15;
 
 /**
@@ -818,6 +819,102 @@ bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
 }
 
 /**
+ * Wysyła żądanie strony świec i sprawdza jego nagłówek oraz wiersze TSV.
+ */
+bool fetchCandlePageFromApi(
+    const std::wstring& requestPath,
+    std::size_t maximumRows,
+    std::vector<CandleReportEntry>& candles,
+    bool& hasNextPage,
+    std::string& error) {
+    InternetHandle session{WinHttpOpen(
+        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (session.value == nullptr) {
+        error = "Nie udało się rozpocząć żądania raportu świec.";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
+
+    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
+    if (connection.value == nullptr) {
+        error = "Nie można połączyć się z lokalnym API raportów.";
+        return false;
+    }
+
+    InternetHandle request{WinHttpOpenRequest(
+        connection.value, L"GET", requestPath.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
+    if (request.value == nullptr ||
+        !WinHttpSendRequest(
+            request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "Lokalne API raportów nie odpowiedziało.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(
+            request.value,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        error = "Nie udało się odczytać odpowiedzi lokalnego API.";
+        return false;
+    }
+    if (statusCode != 200) {
+        error = "Lokalne API raportów zwróciło HTTP " +
+                std::to_string(statusCode) + ".";
+        return false;
+    }
+
+    std::string response;
+    if (!readResponse(request.value, response, error)) {
+        return false;
+    }
+    const std::size_t headerEnd = response.find('\n');
+    const std::string_view hasNextPageText =
+        headerEnd == std::string::npos
+            ? std::string_view(response)
+            : std::string_view(response).substr(0, headerEnd);
+    if (hasNextPageText != "0" && hasNextPageText != "1") {
+        error = "Lokalne API raportów zwróciło nieprawidłową flagę paginacji.";
+        return false;
+    }
+
+    std::vector<CandleReportEntry> receivedCandles;
+    std::size_t lineStart = headerEnd == std::string::npos
+        ? response.size()
+        : headerEnd + 1;
+    while (lineStart < response.size()) {
+        const std::size_t lineEnd = response.find('\n', lineStart);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? response.size() : lineEnd;
+        if (effectiveEnd > lineStart) {
+            const std::string_view row = std::string_view(response).substr(
+                lineStart, effectiveEnd - lineStart);
+            CandleReportEntry candle;
+            if (receivedCandles.size() == maximumRows ||
+                !splitCandleRow(row, candle)) {
+                error = "Lokalne API raportów zwróciło nieprawidłowe dane świec.";
+                return false;
+            }
+            receivedCandles.push_back(std::move(candle));
+        }
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    candles = std::move(receivedCandles);
+    hasNextPage = hasNextPageText == "1";
+    return true;
+}
+
+/**
  * Dzieli wiersz raportu luki na pięć wymaganych pól.
  */
 bool splitCandleGapRow(std::string_view row, CandleGapReportEntry& gap) {
@@ -1564,93 +1661,37 @@ bool CandleHistoryClient::fetchCandlePage(
         return false;
     }
 
-    InternetHandle session{WinHttpOpen(
-        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
-        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
-    if (session.value == nullptr) {
-        error = "Nie udało się rozpocząć żądania raportu świec.";
-        return false;
-    }
-    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 3000);
-
-    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
-    if (connection.value == nullptr) {
-        error = "Nie można połączyć się z lokalnym API raportów.";
-        return false;
-    }
-
     const std::wstring requestPath =
         L"/api/candles/report?page=" + std::to_wstring(page);
-    InternetHandle request{WinHttpOpenRequest(
-        connection.value, L"GET", requestPath.c_str(), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
-    if (request.value == nullptr ||
-        !WinHttpSendRequest(
-            request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(request.value, nullptr)) {
-        error = "Lokalne API raportów nie odpowiedziało.";
+    return fetchCandlePageFromApi(
+        requestPath, pageSize, candles, hasNextPage, error);
+}
+
+/**
+ * Pobiera maksymalnie 10 świec z datami wybranymi w widoku transakcji.
+ */
+bool CandleHistoryClient::fetchFilteredCandlePage(
+    const std::string& startDate,
+    const std::string& endDate,
+    std::size_t page,
+    std::vector<CandleReportEntry>& candles,
+    bool& hasNextPage,
+    std::string& error) {
+    if (page > 1000000 ||
+        page > static_cast<std::size_t>(
+                   std::numeric_limits<unsigned long long>::max() /
+                   filteredCandlePageSize)) {
+        error = "Numer strony filtrowanej tabeli świec jest poza zakresem.";
         return false;
     }
 
-    DWORD statusCode = 0;
-    DWORD statusCodeSize = sizeof(statusCode);
-    if (!WinHttpQueryHeaders(
-            request.value,
-            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
-            WINHTTP_NO_HEADER_INDEX)) {
-        error = "Nie udało się odczytać odpowiedzi lokalnego API.";
-        return false;
-    }
-    if (statusCode != 200) {
-        error = "Lokalne API raportów zwróciło HTTP " +
-                std::to_string(statusCode) + ".";
-        return false;
-    }
-
-    std::string response;
-    if (!readResponse(request.value, response, error)) {
-        return false;
-    }
-    const std::size_t headerEnd = response.find('\n');
-    const std::string_view hasNextPageText =
-        headerEnd == std::string::npos
-            ? std::string_view(response)
-            : std::string_view(response).substr(0, headerEnd);
-    if (hasNextPageText != "0" && hasNextPageText != "1") {
-        error = "Lokalne API raportów zwróciło nieprawidłową flagę paginacji.";
-        return false;
-    }
-
-    std::vector<CandleReportEntry> receivedCandles;
-    std::size_t lineStart = headerEnd == std::string::npos
-        ? response.size()
-        : headerEnd + 1;
-    while (lineStart < response.size()) {
-        const std::size_t lineEnd = response.find('\n', lineStart);
-        const std::size_t effectiveEnd =
-            lineEnd == std::string::npos ? response.size() : lineEnd;
-        if (effectiveEnd > lineStart) {
-            const std::string_view row =
-                std::string_view(response).substr(lineStart, effectiveEnd - lineStart);
-            CandleReportEntry candle;
-            if (receivedCandles.size() == pageSize ||
-                !splitCandleRow(row, candle)) {
-                error = "Lokalne API raportów zwróciło nieprawidłowe dane świec.";
-                return false;
-            }
-            receivedCandles.push_back(std::move(candle));
-        }
-        if (lineEnd == std::string::npos) {
-            break;
-        }
-        lineStart = lineEnd + 1;
-    }
-
-    candles = std::move(receivedCandles);
-    hasNextPage = hasNextPageText == "1";
-    return true;
+    const std::wstring wideStartDate(startDate.begin(), startDate.end());
+    const std::wstring wideEndDate(endDate.begin(), endDate.end());
+    const std::wstring requestPath =
+        L"/api/candles/filtered-report?start_date=" + wideStartDate +
+        L"&end_date=" + wideEndDate + L"&page=" + std::to_wstring(page);
+    return fetchCandlePageFromApi(
+        requestPath, filteredCandlePageSize, candles, hasNextPage, error);
 }
 
 /**

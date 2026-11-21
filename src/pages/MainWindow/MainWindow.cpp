@@ -172,6 +172,10 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
             }
+            if (transactionsPage_.handleCommand(
+                    LOWORD(wParam), HIWORD(wParam))) {
+                return 0;
+            }
             if (LOWORD(wParam) == reportsButtonId &&
                 HIWORD(wParam) == BN_CLICKED) {
                 onReportsClicked();

@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -2784,6 +2784,61 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_filtered_candle_page(
+        self, start_date: date, end_date: date, page: int
+    ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
+        """Pobiera do 10 świec z datami włącznie i zwraca informację o kolejnej stronie."""
+        page_size = 10
+        offset = page * page_size
+        end_exclusive = end_date + timedelta(days=1)
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        symbol,
+                        datetime,
+                        CAST(open AS CHAR),
+                        CAST(high AS CHAR),
+                        CAST(low AS CHAR),
+                        CAST(close AS CHAR),
+                        CAST(volume AS CHAR)
+                    FROM candles
+                    WHERE datetime >= %s AND datetime < %s
+                    ORDER BY datetime DESC, symbol ASC, utc_offset_minutes DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (start_date, end_exclusive, page_size + 1, offset),
+                )
+                rows = cursor.fetchall()
+                has_next_page = len(rows) > page_size
+                return [
+                    (
+                        symbol,
+                        _format_api_timestamp(candle_datetime),
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        volume if volume is not None else "",
+                    )
+                    for (
+                        symbol,
+                        candle_datetime,
+                        open_price,
+                        high_price,
+                        low_price,
+                        close_price,
+                        volume,
+                    ) in rows[:page_size]
+                ], has_next_page
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     def fetch_latest_analysis_candles(
         self, limit: int
     ) -> list[tuple[str, str, str, str, str, str]]:
@@ -4064,6 +4119,38 @@ def candle_report(
     """Zwraca stronę 20 najnowszych świec jako TSV z flagą kolejnej strony."""
     try:
         rows, has_next_page = request.app.state.repository.fetch_candle_page(page)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać świec z bazy MySQL.",
+        ) from error
+
+    report_lines = ["1" if has_next_page else "0"]
+    report_lines.extend("\t".join(row) for row in rows)
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/candles/filtered-report", response_class=Response)
+def filtered_candle_report(
+    request: Request,
+    start_date: date,
+    end_date: date,
+    page: int = Query(ge=0, le=1000000),
+) -> Response:
+    """Zwraca stronę 10 świec z wybranego, obustronnie włącznego zakresu dat."""
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="Data końcowa nie może być wcześniejsza niż data początkowa.",
+        )
+
+    try:
+        rows, has_next_page = request.app.state.repository.fetch_filtered_candle_page(
+            start_date, end_date, page
+        )
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
