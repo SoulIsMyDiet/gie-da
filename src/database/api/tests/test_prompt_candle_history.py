@@ -48,7 +48,7 @@ def test_repository_returns_utc_prices_and_marks_open_market_gaps() -> None:
     with patch("app.mysql.connector.connect", return_value=connection), patch.object(
         repository, "_is_market_open", return_value=True
     ):
-        candles = repository.fetch_prompt_candle_history("EURUSD/USD", 1000)
+        candles = repository.fetch_prompt_candle_history("EUR/USD", 1000)
 
     assert candles == [
         {

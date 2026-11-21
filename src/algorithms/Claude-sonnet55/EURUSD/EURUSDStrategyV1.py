@@ -84,7 +84,7 @@ logger = logging.getLogger(__name__)
 
 # Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
 STRATEGY_CONTEXT = (
-    "Instrument EURUSD/USD; decyzja po zamknięciu M1 z potwierdzeniem M5. "
+    "Instrument EUR/USD; decyzja po zamknięciu M1 z potwierdzeniem M5. "
     "LONG: wzrostowy układ EMA9/21/55 na M1 i EMA20 M5, cofnięcie z odbiciem RSI "
     "(ER >= 0.30); w konsolidacji (ER <= 0.20) odbicie od dolnego pasma Bollingera, "
     "wyprzedanie RSI i powrót ceny ku VWAP. SHORT stosuje warunki lustrzane. "

@@ -2,7 +2,7 @@
 
 Strategia analizuje zamknięte świece M1 zapisane w bazie pod symbolem `GER30`.
 Wyniki publikuje jako instrument `DAX40` i algorytm
-`Chat-gpt6/DAX40/DAX40StrategyV1`. Działa równolegle ze strategią Claude DAX40;
+`Chat-gpt6/DAX40StrategyV1`. Działa równolegle ze strategią Claude DAX40;
 nie zmienia jej ani strategii innych instrumentów.
 
 ## Integracja i czas

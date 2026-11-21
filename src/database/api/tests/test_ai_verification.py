@@ -390,20 +390,20 @@ def test_strategy_registry_maps_known_signal_names() -> None:
     registry = load_strategy_context_registry(api_directory)
 
     expected_names = {
-        "Chat-gpt6/EURUSD/EURUSDStrategyV1",
-        "Chat-gpt6/DAX40/DAX40StrategyV1",
-        "Chat-gpt6/USDJPY/USDJPYStrategyV1",
-        "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+        "Chat-gpt6/EURUSDStrategyV1",
+        "Chat-gpt6/DAX40StrategyV1",
+        "Chat-gpt6/USDJPYStrategyV1",
+        "Chat-gpt6/USDMXNStrategyV1",
         "Chat-gpt6/XAUUSDStrategyV1",
         "Claude-sonnet55/DAX40",
-        "Claude-sonnet55/EURUSD/MicroTransactions",
+        "Claude-sonnet55/MicroTransactions",
         "Claude-sonnet55/S&P500",
         "Claude-sonnet55/USDJPYStrategyV1",
         "Claude-sonnet55/XAUUSDStrategyV1",
-        "Grok-45",
-        "Grok-45/EURUSD/EURUSDStrategyV2",
+        "Grok-45/EURUSDC++StrategyV1",
+        "Grok-45/EURUSDStrategyV2",
         "Grok-45/S&P500",
-        "Grok-45/USDMXN/USDMXNStrategyV1",
+        "Grok-45/USDMXNStrategyV1",
     }
 
     assert expected_names <= registry.keys()

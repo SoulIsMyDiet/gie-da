@@ -17,7 +17,7 @@ class SignalPotentialCalculator:
     SPREAD_PRICE = Decimal("0.00030")
     SPREADS_BY_PRODUCT = {
         "EUR/USD": Decimal("0.00030"),
-        "EURUSD/USD": Decimal("0.00030"),
+        "EUR/USD": Decimal("0.00030"),
         "USD/MXN": Decimal("0.01000"),
         "USD/JPY": Decimal("0.03000"),
         "XAU/USD": Decimal("0.30000"),

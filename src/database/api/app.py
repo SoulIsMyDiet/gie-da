@@ -153,6 +153,7 @@ from EURUSDStrategyV2 import (  # noqa: E402
     EURUSDStrategyV2,
     STRATEGY_NAME as GROK45_V2_STRATEGY_NAME,
 )
+GROK45_CPP_STRATEGY_NAME = "Grok-45/EURUSDC++StrategyV1"
 from market_products import (  # noqa: E402
     get_monitored_symbols,
     get_open_symbols,
@@ -723,7 +724,7 @@ class Grok45SignalRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    instrument: Literal["EURUSD/USD"]
+    instrument: Literal["EUR/USD"]
     price: Decimal = Field(gt=Decimal("0"), max_digits=20, decimal_places=10)
     timestamp: int = Field(gt=0)
     signal: Literal["LONG", "SHORT"]
@@ -938,6 +939,8 @@ class MarketDataRepository:
                     """
                 )
                 self._migrate_signal_potention_schema(cursor)
+                self._migrate_eurusd_symbol(cursor)
+                self._migrate_algorithm_names(cursor)
                 self._migrate_candle_timestamps(cursor)
                 self._sync_signal_potention_spreads(cursor)
                 self.signal_potential_calculator.update_pending(cursor)
@@ -946,6 +949,118 @@ class MarketDataRepository:
                 cursor.close()
         finally:
             connection.close()
+
+    @staticmethod
+    def _migrate_eurusd_symbol(cursor: mysql.connector.cursor.MySQLCursor) -> None:
+        """Przenosi dane EURUSD/USD do symbolu EUR/USD bez nadpisywania rekordow."""
+        old_symbol = "EURUSD/USD"
+        new_symbol = "EUR/USD"
+        duplicate_queries = (
+            (
+                "candles",
+                """SELECT COUNT(*) FROM candles old JOIN candles new
+                   ON old.datetime = new.datetime
+                   AND old.utc_offset_minutes = new.utc_offset_minutes
+                   WHERE old.symbol = %s AND new.symbol = %s""",
+            ),
+            (
+                "candle_gaps",
+                """SELECT COUNT(*) FROM candle_gaps old JOIN candle_gaps new
+                   ON old.candle_datetime_utc = new.candle_datetime_utc
+                   WHERE old.symbol = %s AND new.symbol = %s""",
+            ),
+            (
+                "signals",
+                """SELECT COUNT(*) FROM signals old JOIN signals new
+                   ON old.algorithm_name = new.algorithm_name
+                   AND old.source_timestamp = new.source_timestamp
+                   WHERE old.product = %s AND new.product = %s
+                   AND old.source_timestamp IS NOT NULL""",
+            ),
+            (
+                "algorithm_evaluations",
+                """SELECT COUNT(*) FROM algorithm_evaluations old
+                   JOIN algorithm_evaluations new
+                   ON old.algorithm_name = new.algorithm_name
+                   AND old.source_timestamp = new.source_timestamp
+                   WHERE old.product = %s AND new.product = %s""",
+            ),
+        )
+        for table_name, query in duplicate_queries:
+            cursor.execute(query, (old_symbol, new_symbol))
+            if int(cursor.fetchone()[0]) > 0:
+                raise RuntimeError(
+                    f"Nie mozna scalic symboli EUR/USD: tabela {table_name} "
+                    "zawiera nakladajace sie rekordy."
+                )
+
+        cursor.execute(
+            "INSERT IGNORE INTO products (symbol) "
+            "SELECT %s FROM products WHERE symbol = %s",
+            (new_symbol, old_symbol),
+        )
+        for table_name, column_name in (
+            ("candles", "symbol"),
+            ("candle_gaps", "symbol"),
+            ("signals", "product"),
+            ("algorithm_evaluations", "product"),
+        ):
+            cursor.execute(
+                f"UPDATE `{table_name}` SET `{column_name}` = %s "
+                f"WHERE `{column_name}` = %s",
+                (new_symbol, old_symbol),
+            )
+        cursor.execute(
+            "UPDATE signals SET signal_parameters = "
+            "JSON_SET(signal_parameters, '$.instrument', %s) "
+            "WHERE JSON_UNQUOTE(JSON_EXTRACT(signal_parameters, '$.instrument')) = %s",
+            (new_symbol, old_symbol),
+        )
+        cursor.execute("DELETE FROM products WHERE symbol = %s", (old_symbol,))
+
+    @staticmethod
+    def _migrate_algorithm_names(
+        cursor: mysql.connector.cursor.MySQLCursor,
+    ) -> None:
+        """Normalizuje historyczne nazwy strategii bez utraty rekordow."""
+        name_mappings = (
+            ("Grok-45", "Grok-45/EURUSDC++StrategyV1"),
+            ("Grok-45/EURUSD/EURUSDStrategyV2", "Grok-45/EURUSDStrategyV2"),
+            ("Grok-45/USDMXN/USDMXNStrategyV1", "Grok-45/USDMXNStrategyV1"),
+            ("Chat-gpt6/EURUSD/EURUSDStrategyV1", "Chat-gpt6/EURUSDStrategyV1"),
+            ("Chat-gpt6/DAX40/DAX40StrategyV1", "Chat-gpt6/DAX40StrategyV1"),
+            ("Chat-gpt6/USDMXN/USDMXNStrategyV1", "Chat-gpt6/USDMXNStrategyV1"),
+            ("Chat-gpt6/USDJPY/USDJPYStrategyV1", "Chat-gpt6/USDJPYStrategyV1"),
+            ("Claude-sonnet55/EURUSD/MicroTransactions", "Claude-sonnet55/MicroTransactions"),
+        )
+        for old_name, new_name in name_mappings:
+            for table_name in ("signals", "algorithm_evaluations"):
+                if table_name == "signals":
+                    collision_query = """SELECT COUNT(*) FROM signals old
+                        JOIN signals new ON old.product = new.product
+                        AND old.source_timestamp = new.source_timestamp
+                        AND old.source_timestamp IS NOT NULL
+                        WHERE old.algorithm_name = %s
+                        AND new.algorithm_name = %s"""
+                else:
+                    collision_query = """SELECT COUNT(*) FROM algorithm_evaluations old
+                        JOIN algorithm_evaluations new
+                        ON old.product = new.product
+                        AND old.source_timestamp = new.source_timestamp
+                        WHERE old.algorithm_name = %s
+                        AND new.algorithm_name = %s"""
+                cursor.execute(collision_query, (old_name, new_name))
+                if int(cursor.fetchone()[0]) > 0:
+                    raise RuntimeError(
+                        f"Nie mozna zmienic nazwy algorytmu {old_name!r}: "
+                        f"tabela {table_name} zawiera nakladajace sie rekordy "
+                        f"dla {new_name!r}."
+                    )
+                cursor.execute(
+                    f"UPDATE `{table_name}` SET algorithm_name = %s "
+                    "WHERE algorithm_name = %s",
+                    (new_name, old_name),
+                )
 
     def _migrate_prompt_used_candles(
         self, cursor: mysql.connector.cursor.MySQLCursor
@@ -2037,7 +2152,7 @@ class MarketDataRepository:
             """,
             (
                 local_signal_time,
-                "EURUSD/USD",
+                "EUR/USD",
                 Decimal(str(signal_payload["price"])),
                 signal.direction.lower(),
                 STRATEGY_NAME,
@@ -2054,7 +2169,7 @@ class MarketDataRepository:
             """,
             (
                 cursor.lastrowid,
-                SignalPotentialCalculator.spread_for_product("EURUSD/USD"),
+                SignalPotentialCalculator.spread_for_product("EUR/USD"),
             ),
         )
 
@@ -2464,7 +2579,7 @@ class MarketDataRepository:
         try:
             cursor = connection.cursor()
             signal_was_saved = self._insert_grok45_signal(
-                cursor, signal, algorithm_name="Grok-45"
+                cursor, signal, algorithm_name=GROK45_CPP_STRATEGY_NAME
             )
             if signal_was_saved:
                 self.signal_potential_calculator.update_pending(
@@ -2672,7 +2787,7 @@ class MarketDataRepository:
     def fetch_latest_analysis_candles(
         self, limit: int
     ) -> list[tuple[str, str, str, str, str, str]]:
-        """Pobiera do 100 ostatnich świec EURUSD/USD w kolejności od najnowszej."""
+        """Pobiera do 100 ostatnich świec EUR/USD w kolejności od najnowszej."""
         connection = mysql.connector.connect(**self.database_settings)
         try:
             cursor = connection.cursor()
@@ -2688,7 +2803,7 @@ class MarketDataRepository:
                         CAST(close AS CHAR),
                         CAST(volume AS CHAR)
                     FROM candles
-                    WHERE symbol = 'EURUSD/USD'
+                    WHERE symbol = 'EUR/USD'
                     ORDER BY DATE_SUB(
                         datetime, INTERVAL utc_offset_minutes MINUTE
                     ) DESC
@@ -3013,7 +3128,7 @@ async def lifespan(application: FastAPI):
             )
     
     with strategy_lock:
-        candle_history = repository.fetch_candle_history("EURUSD/USD")
+        candle_history = repository.fetch_candle_history("EUR/USD")
         eurusd_strategy.warm_up(candle_history)
         app.state.grok45_v2_candles = _grok45_candles_from_history(
             candle_history
@@ -3428,7 +3543,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 )
                 candle_history = (
                     request.app.state.repository.fetch_candle_history(
-                        "EURUSD/USD"
+                        "EUR/USD"
                     )
                 )
                 recovered_strategy.warm_up(candle_history)
@@ -3444,7 +3559,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                 request.app.state.grok45_v2_candles
             )
             grok45_v2_signal = None
-            if candle.symbol == "EURUSD/USD":
+            if candle.symbol == "EUR/USD":
                 candle_timestamp = candle.datetime.astimezone(timezone.utc)
                 signal = updated_strategy.process_candle(
                     Candle(
@@ -3695,7 +3810,7 @@ def analysis_candles(
     request: Request,
     limit: int = Query(ge=1, le=GROK45_ANALYSIS_WINDOW),
 ) -> Response:
-    """Zwraca świece EURUSD/USD do analizy w formacie TSV z czasem Unix."""
+    """Zwraca świece EUR/USD do analizy w formacie TSV z czasem Unix."""
     try:
         rows = request.app.state.repository.fetch_latest_analysis_candles(limit)
     except mysql.connector.Error as error:
@@ -3799,7 +3914,7 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
             )
             updated_strategy = copy.deepcopy(request.app.state.eurusd_strategy)
             candle_history = (
-                request.app.state.repository.fetch_candle_history("EURUSD/USD")
+                request.app.state.repository.fetch_candle_history("EUR/USD")
             )
             updated_strategy.warm_up(candle_history)
             request.app.state.eurusd_strategy = updated_strategy

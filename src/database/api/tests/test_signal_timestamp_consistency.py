@@ -52,7 +52,7 @@ def test_grok_eurusd_stores_close_time_and_keeps_open_epoch_as_deduplication_key
     opened_epoch = 5940
     closed = datetime.fromtimestamp(opened_epoch + 60, timezone.utc)
     signal = Grok45SignalRecord(
-        instrument="EURUSD/USD",
+        instrument="EUR/USD",
         price=Decimal("1.08"),
         timestamp=opened_epoch,
         signal="LONG",

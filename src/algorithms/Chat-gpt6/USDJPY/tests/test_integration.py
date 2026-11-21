@@ -103,7 +103,7 @@ class USDJPYIntegrationTests(unittest.TestCase):
             repository.has_algorithm_evaluation.call_args.args,
             (
                 "USD/JPY",
-                "Chat-gpt6/USDJPY/USDJPYStrategyV1",
+                "Chat-gpt6/USDJPYStrategyV1",
                 int(opened.timestamp()),
             ),
         )

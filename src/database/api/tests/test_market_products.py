@@ -27,7 +27,7 @@ class MarketProductsTests(unittest.TestCase):
         before_friday_close = datetime(2026, 11, 20, 21, 59, tzinfo=timezone.utc)
         friday_close = datetime(2026, 11, 20, 22, 0, tzinfo=timezone.utc)
 
-        for symbol in ("EURUSD/USD", "USD/MXN", "USD/JPY"):
+        for symbol in ("EUR/USD", "USD/MXN", "USD/JPY"):
             with self.subTest(symbol=symbol):
                 self.assertFalse(is_market_open(symbol, before_sunday_open))
                 self.assertTrue(is_market_open(symbol, sunday_open))
@@ -91,7 +91,7 @@ class MarketProductsTests(unittest.TestCase):
                 self.assertEqual(profile.is_open(timestamp), expected_open)
 
     def test_only_available_products_are_monitored(self) -> None:
-        expected_symbols = ("EURUSD/USD", "USD/MXN", "USD/JPY", "XAU/USD")
+        expected_symbols = ("EUR/USD", "USD/MXN", "USD/JPY", "XAU/USD")
         self.assertEqual(get_monitored_symbols(), expected_symbols)
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)),
@@ -103,7 +103,7 @@ class MarketProductsTests(unittest.TestCase):
         )
         self.assertFalse(is_monitored_product("GER30"))
         self.assertFalse(is_monitored_product("ES"))
-        self.assertTrue(is_monitored_product("EURUSD/USD"))
+        self.assertTrue(is_monitored_product("EUR/USD"))
         self.assertTrue(is_monitored_product("USD/MXN"))
         self.assertTrue(is_monitored_product("USD/JPY"))
         self.assertTrue(is_monitored_product("XAU/USD"))

@@ -1,4 +1,4 @@
-"""Testy jednostkowe wskaźników, agregacji M5 i strategii EURUSD/USD."""
+"""Testy jednostkowe wskaźników, agregacji M5 i strategii EUR/USD."""
 
 from __future__ import annotations
 

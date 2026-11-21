@@ -244,7 +244,7 @@ def test_none_storage_flag_is_central_and_signal_name_is_independent() -> None:
     from grok45_usdmxn_test.config import STRATEGY_NAME
     from grok45_usdmxn_test.storage import USDMXNSignalStorage
 
-    assert STRATEGY_NAME == "Grok-45/USDMXN/USDMXNStrategyV1"
+    assert STRATEGY_NAME == "Grok-45/USDMXNStrategyV1"
     repository = Mock()
     storage = USDMXNSignalStorage(repository)
     result = {

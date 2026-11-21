@@ -1,7 +1,7 @@
 # Grok-45 USDMXNStrategyV1
 
 Niezależna strategia micro-tradingowa dla USD/MXN. Działa obok istniejącej
-strategii `Chat-gpt6/USDMXN/USDMXNStrategyV1`; każda ma osobną nazwę algorytmu,
+strategii `Chat-gpt6/USDMXNStrategyV1`; każda ma osobną nazwę algorytmu,
 trwały marker ewaluacji oraz rekord w tabeli `signals`.
 
 ## Wskaźniki i reguły

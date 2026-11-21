@@ -1,4 +1,4 @@
-"""Wskaźniki techniczne używane przez strategię EURUSD/USD."""
+"""Wskaźniki techniczne używane przez strategię EUR/USD."""
 
 from __future__ import annotations
 

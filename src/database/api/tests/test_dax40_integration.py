@@ -304,7 +304,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         with patch("app.mysql.connector.connect", return_value=connection) as connect:
             inserted = repository.save_algorithm_signal(
                 "GER30",
-                "Chat-gpt6/DAX40/DAX40StrategyV1",
+                "Chat-gpt6/DAX40StrategyV1",
                 signal,
                 100,
             )
@@ -319,7 +319,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(signal_parameters[3], "long")
         self.assertEqual(
             signal_parameters[4],
-            "Chat-gpt6/DAX40/DAX40StrategyV1",
+            "Chat-gpt6/DAX40StrategyV1",
         )
         self.assertEqual(
             signal_parameters[6],

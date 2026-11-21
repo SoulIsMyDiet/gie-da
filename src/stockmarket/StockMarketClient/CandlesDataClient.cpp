@@ -14,9 +14,6 @@ namespace {
  * @return Symbol rozpoznawany przez dostawcę danych.
  */
 std::string getTwelveDataSymbol(const std::string& internalSymbol) {
-    if (internalSymbol == "EURUSD/USD") {
-        return "EUR/USD";
-    }
     return internalSymbol;
 }
 

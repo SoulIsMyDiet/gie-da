@@ -100,12 +100,12 @@ public:
 };
 
 /**
- * Tworzy krótkoterminowy sygnał EURUSD/USD i zwraca go jako dokument JSON.
+ * Tworzy krótkoterminowy sygnał EUR/USD i zwraca go jako dokument JSON.
  */
 class SignalGenerator {
 public:
     static constexpr std::string_view strategyContext =
-        "Instrument EURUSD/USD; zamknięte świece M1. LONG wymaga EMA9 > EMA21 "
+        "Instrument EUR/USD; zamknięte świece M1. LONG wymaga EMA9 > EMA21 "
         "lub świeżego przecięcia w górę, RSI14 > 40 i rośnie (do 70), ceny przy "
         "lub poniżej środka albo blisko dolnego pasma Bollingera, świecy wzrostowej "
         "lub dolnego knota oraz minimalnej zmienności. SHORT stosuje warunki "
@@ -121,7 +121,7 @@ public:
     static constexpr std::size_t analysisWindowCandles = 100;
 
     /**
-     * Analizuje zamknięte świece EURUSD/USD i zwraca wynik w formacie JSON.
+     * Analizuje zamknięte świece EUR/USD i zwraca wynik w formacie JSON.
      * @param candles Świece 1-minutowe, unikalne i ułożone od najstarszej do najnowszej.
      *        Do wskaźników używanych jest maksymalnie ostatnie 100 świec.
      * @return JSON z instrumentem, ceną, czasem, sygnałem i obliczonymi wskaźnikami.

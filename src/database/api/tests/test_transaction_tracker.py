@@ -34,7 +34,7 @@ def _transaction(
         take_profit = Decimal("1.09000")
     return (
         41,
-        "EURUSD/USD",
+        "EUR/USD",
         signal_close,
         direction,
         Decimal("1.10000"),
@@ -52,7 +52,7 @@ def _candle(
 ) -> TransactionCandle:
     """Buduje świecę M1 z czasem otwarcia UTC."""
     return TransactionCandle(
-        symbol="EURUSD/USD",
+        symbol="EUR/USD",
         datetime=datetime(
             2026, 11, 17, 12, 0, tzinfo=timezone.utc
         )
@@ -191,14 +191,14 @@ def test_transaction_duration_counts_candles_across_weekend_gap() -> None:
 
     elapsed_candles = TransactionTracker._count_transaction_candles(
         cursor,
-        "EURUSD/USD",
+        "EUR/USD",
         opened_at,
         exit_candle_open,
     )
 
     assert elapsed_candles == 1
     _, query_values = cursor.execute.call_args.args
-    assert query_values == ("EURUSD/USD", opened_at, exit_candle_open)
+    assert query_values == ("EUR/USD", opened_at, exit_candle_open)
 
 
 def test_repaired_gap_recalculates_an_affected_closed_transaction() -> None:
@@ -209,7 +209,7 @@ def test_repaired_gap_recalculates_an_affected_closed_transaction() -> None:
         [
             (
                 41,
-                "EURUSD/USD",
+                "EUR/USD",
                 signal_close,
                 "long",
                 Decimal("1.10000"),
@@ -269,7 +269,7 @@ def test_repaired_gap_replays_an_active_transaction_from_signal_time() -> None:
         [
             (
                 42,
-                "EURUSD/USD",
+                "EUR/USD",
                 signal_close,
                 "long",
                 Decimal("1.10100"),

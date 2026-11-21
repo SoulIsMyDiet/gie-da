@@ -580,7 +580,7 @@ void StockPriceMonitor::run() {
         }
         backfillResult.savedCandleCount += productResult.savedCandleCount;
         backfillResult.detectedGapCount += productResult.detectedGapCount;
-        if (symbol == "EURUSD/USD" &&
+        if (symbol == "EUR/USD" &&
             !productResult.latestCandle.datetime.empty()) {
             backfillResult.latestCandle = std::move(productResult.latestCandle);
         }
@@ -629,7 +629,7 @@ void StockPriceMonitor::run() {
 bool StockPriceMonitor::updateCandle() {
     CandleData candle;
     std::string error;
-    constexpr char monitoredSymbol[] = "EURUSD/USD";
+    constexpr char monitoredSymbol[] = "EUR/USD";
     const bool fetched =
         CandlesDataClient::fetchLatestOneMinuteCandle(
             monitoredSymbol, candle, error);
@@ -657,7 +657,7 @@ bool StockPriceMonitor::updateCandle() {
     } else if (newlyDetectedGapCount > 0) {
         ErrorLogger::warning(
             "Wykryto " + std::to_string(newlyDetectedGapCount) +
-            " brakujących świec dla EURUSD/USD.");
+            " brakujących świec dla EUR/USD.");
         updateStatus = "Wykryto " +
             std::to_string(newlyDetectedGapCount) +
             " brakujących świec.";
@@ -819,7 +819,7 @@ void StockPriceMonitor::updateAdditionalProducts() {
                 } else {
                     backfilledSymbols_.insert(symbol);
                     backfillRetryAfter_.erase(symbol);
-                    if (symbol == "EURUSD/USD" &&
+                    if (symbol == "EUR/USD" &&
                         !backfillResult.latestCandle.datetime.empty()) {
                         AcquireSRWLockExclusive(&statusLock_);
                         oneMinuteCandle_ =
@@ -836,7 +836,7 @@ void StockPriceMonitor::updateAdditionalProducts() {
             }
         }
 
-        if (symbol == "EURUSD/USD") {
+        if (symbol == "EUR/USD") {
             updateCandle();
             continue;
         }
@@ -924,7 +924,7 @@ void StockPriceMonitor::updateAdditionalProducts() {
 
     AcquireSRWLockExclusive(&statusLock_);
     const bool eurusdIsOpen = std::find(
-        openSymbols.begin(), openSymbols.end(), "EURUSD/USD") !=
+        openSymbols.begin(), openSymbols.end(), "EUR/USD") !=
         openSymbols.end();
     if (!eurusdIsOpen) {
         status_ = additionalStatus;

@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from typing import Sequence
 
 
-STRATEGY_NAME = "Grok-45/EURUSD/EURUSDStrategyV2"
+STRATEGY_NAME = "Grok-45/EURUSDStrategyV2"
 # Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
 STRATEGY_CONTEXT = (
-    "Instrument EURUSD/USD; zamknięte świece M1. LONG: EMA9 > EMA21 lub świeże "
+    "Instrument EUR/USD; zamknięte świece M1. LONG: EMA9 > EMA21 lub świeże "
     "przecięcie w górę, RSI14 > 40 i rośnie (do 70), cena przy/poniżej środka "
     "lub blisko dolnego pasma Bollingera oraz świeca wzrostowa albo dolny knot; "
     "wymagana minimalna zmienność. SHORT stosuje warunki lustrzane; inaczej NONE."
@@ -542,7 +542,7 @@ def _create_json_response(
     price = _format_number(latest_candle.close if latest_candle else None)
     timestamp = str(latest_candle.timestamp) if latest_candle else "null"
     return (
-        '{"instrument":"EURUSD/USD","price":'
+        '{"instrument":"EUR/USD","price":'
         + price
         + ',"timestamp":'
         + timestamp

@@ -258,7 +258,7 @@ class StrategyTests(unittest.TestCase):
             self.assertFalse(storage.save(result, 100))
         repository.save_algorithm_signal.assert_called_once_with(
             "USD/MXN",
-            "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+            "Chat-gpt6/USDMXNStrategyV1",
             {
                 **result,
                 "signal_parameters": {

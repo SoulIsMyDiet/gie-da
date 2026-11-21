@@ -97,7 +97,7 @@ class EURUSDStrategyV2Tests(unittest.TestCase):
         response = self.strategy.generate(create_market_candles(75, 0.000025))
         payload = json.loads(response)
 
-        self.assertEqual(payload["instrument"], "EURUSD/USD")
+        self.assertEqual(payload["instrument"], "EUR/USD")
         self.assertEqual(payload["signal"], "LONG")
         self.assertEqual(payload["timestamp"], 5940)
         self.assertEqual(

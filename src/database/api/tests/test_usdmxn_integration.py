@@ -140,7 +140,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
             [
                 unittest.mock.call(
                     "USD/MXN",
-                    "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                    "Chat-gpt6/USDMXNStrategyV1",
                     int(opened.timestamp()),
                 ),
                 unittest.mock.call(
@@ -355,7 +355,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
         with patch("app.mysql.connector.connect", return_value=connection):
             inserted = repository.save_algorithm_signal(
                 "USD/MXN",
-                "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                "Chat-gpt6/USDMXNStrategyV1",
                 result,
                 100,
                 record_evaluation=True,
@@ -420,7 +420,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
             with self.assertRaises(mysql.connector.Error):
                 repository.save_algorithm_signal(
                     "USD/MXN",
-                    "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                    "Chat-gpt6/USDMXNStrategyV1",
                     result,
                     100,
                     record_evaluation=True,
@@ -476,7 +476,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
             self.assertTrue(
                 repository.save_algorithm_signal(
                     "USD/MXN",
-                    "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                    "Chat-gpt6/USDMXNStrategyV1",
                     result,
                     100,
                     record_evaluation=True,
@@ -516,7 +516,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
         with patch("app.mysql.connector.connect", return_value=connection):
             exists = repository.has_algorithm_evaluation(
                 "USD/MXN",
-                "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                "Chat-gpt6/USDMXNStrategyV1",
                 123,
             )
 
@@ -525,10 +525,10 @@ class USDMXNIntegrationTests(unittest.TestCase):
         self.assertIn("FROM signals", connection.cursor_value.query)
         self.assertEqual(connection.cursor_value.parameters, (
             "USD/MXN",
-            "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+            "Chat-gpt6/USDMXNStrategyV1",
             123,
             "USD/MXN",
-            "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+            "Chat-gpt6/USDMXNStrategyV1",
             123,
         ))
 
@@ -640,7 +640,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
         with patch("app.mysql.connector.connect", return_value=connection):
             inserted = repository.save_algorithm_signal(
                 "USD/MXN",
-                "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                "Chat-gpt6/USDMXNStrategyV1",
                 signal,
                 600,
                 record_evaluation=True,
@@ -711,7 +711,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
         with patch("app.mysql.connector.connect", return_value=connection):
             inserted = repository.save_algorithm_signal(
                 "USD/MXN",
-                "Chat-gpt6/USDMXN/USDMXNStrategyV1",
+                "Chat-gpt6/USDMXNStrategyV1",
                 result,
                 600,
                 record_evaluation=True,

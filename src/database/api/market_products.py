@@ -143,7 +143,7 @@ MARKET_PROFILES = {
 
 # Lista określa instrumenty udostępniane monitorowi i endpointom API.
 MONITORED_PRODUCTS = (
-    MarketProduct("EURUSD/USD", "forex_ny_24_5"),
+    MarketProduct("EUR/USD", "forex_ny_24_5"),
     MarketProduct("USD/MXN", "forex_ny_24_5"),
     MarketProduct("USD/JPY", "forex_ny_24_5"),
     MarketProduct("XAU/USD", "gold_spot"),

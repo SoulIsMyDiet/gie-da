@@ -140,12 +140,12 @@ def test_batch_evaluates_both_xauusd_strategies_without_sound():
     thread.assert_not_called()
 
 
-@pytest.mark.parametrize("saved,minutes,symbol", [(0, 2, "XAU/USD"), (1, 0, "XAU/USD"), (1, 2, "EURUSD/USD")])
+@pytest.mark.parametrize("saved,minutes,symbol", [(0, 2, "XAU/USD"), (1, 0, "XAU/USD"), (1, 2, "EUR/USD")])
 def test_nonqualifying_candles_do_not_trigger(saved, minutes, symbol):
     """Brak zapisu, otwarta świeca i inny instrument nie wyzwalają XAU."""
     opened = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=minutes)
     request, candle, _ = request_and_candle(opened, symbol, saved)
-    if symbol == "EURUSD/USD":
+    if symbol == "EUR/USD":
         request.app.state.eurusd_strategy = Mock()
         request.app.state.eurusd_strategy.process_candle.return_value = None
     with patch.object(app, "_run_xauusd_strategy") as run, \

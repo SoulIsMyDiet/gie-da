@@ -18,6 +18,7 @@ os.environ.setdefault("MYSQL_DATABASE", "test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import (  # noqa: E402
+    GROK45_CPP_STRATEGY_NAME,
     GROK45_V2_STRATEGY_NAME,
     CandleRecord,
     Grok45SignalRecord,
@@ -84,7 +85,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
         assert signal is not None
         self.assertEqual(signal.signal, "LONG")
         self.assertEqual(signal.timestamp, 5940)
-        self.assertEqual(signal.instrument, "EURUSD/USD")
+        self.assertEqual(signal.instrument, "EUR/USD")
 
     def test_history_warmup_excludes_the_current_open_candle(self) -> None:
         current_minute = datetime.now(timezone.utc).replace(
@@ -114,7 +115,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
 
     def test_signal_insert_keeps_python_and_cpp_algorithms_distinct(self) -> None:
         signal = Grok45SignalRecord(
-            instrument="EURUSD/USD",
+            instrument="EUR/USD",
             price="1.08",
             timestamp=5940,
             signal="LONG",
@@ -122,7 +123,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
         )
         repository = MarketDataRepository.__new__(MarketDataRepository)
 
-        for expected_name in (GROK45_V2_STRATEGY_NAME, "Grok-45"):
+        for expected_name in (GROK45_V2_STRATEGY_NAME, GROK45_CPP_STRATEGY_NAME):
             cursor = FakeCursor()
             was_inserted = repository._insert_grok45_signal(
                 cursor,
@@ -176,7 +177,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
             }
         )
         candle = CandleRecord(
-            symbol="EURUSD/USD",
+            symbol="EUR/USD",
             datetime=datetime.fromtimestamp(
                 candles[-1].timestamp, timezone.utc
             ),

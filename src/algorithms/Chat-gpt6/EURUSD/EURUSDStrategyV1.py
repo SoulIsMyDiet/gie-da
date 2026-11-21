@@ -1,4 +1,4 @@
-"""Strategia EMA/RSI dla EURUSD/USD w interwale M1 z potwierdzeniem M5.
+"""Strategia EMA/RSI dla EUR/USD w interwale M1 z potwierdzeniem M5.
 
 Spread jest obecnie wartością testową 3 pipsy, równą limitowi 3 pipsów.
 Strategia nie otrzymuje jeszcze rzeczywistych notowań BID/ASK.
@@ -20,10 +20,10 @@ from market_data import (
 )
 from signal_serializer import Signal
 
-STRATEGY_NAME = "Chat-gpt6/EURUSD/EURUSDStrategyV1"
+STRATEGY_NAME = "Chat-gpt6/EURUSDStrategyV1"
 # Backend: krótki opis reguł strategii do wykorzystania przez przyszły walidator.
 STRATEGY_CONTEXT = (
-    "Instrument EURUSD/USD; zamknięte M1 z potwierdzeniem ukończonego M5. "
+    "Instrument EUR/USD; zamknięte M1 z potwierdzeniem ukończonego M5. "
     "LONG: EMA9 > EMA21 na M1 i M5, dotknięcie EMA9 z zamknięciem nad nią oraz "
     "RSI14 przecięciem w górę przez 50; SHORT stosuje warunki lustrzane. "
     "Wymagane są gotowe wskaźniki i dopuszczalny spread; inaczej brak sygnału (NONE)."

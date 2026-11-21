@@ -51,11 +51,9 @@ def load_strategy_context_registry(api_directory: Path) -> dict[str, str]:
             )
         registry[algorithm_name] = strategy_context
 
-    compatible_cpp_context = registry.get(
-        "Grok-45/EURUSD/EURUSDStrategyV2"
-    )
+    compatible_cpp_context = registry.get("Grok-45/EURUSDStrategyV2")
     if compatible_cpp_context is not None:
-        registry["Grok-45"] = compatible_cpp_context
+        registry["Grok-45/EURUSDC++StrategyV1"] = compatible_cpp_context
     return registry
 
 

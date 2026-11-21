@@ -49,7 +49,7 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu 
 
 ## Struktura danych
 
-- `products`: unikalne symbole wewnętrzne produktów (np. `EURUSD/USD`). Przed wysłaniem żądania aplikacja mapuje `EURUSD/USD` na symbol Twelve Data `EUR/USD`; nazwa w lokalnej bazie pozostaje bez zmian.
+- `products`: unikalne symbole wewnętrzne produktów (np. `EUR/USD`). Przed wysłaniem żądania aplikacja mapuje `EUR/USD` na symbol Twelve Data `EUR/USD`; nazwa w lokalnej bazie pozostaje bez zmian.
 - `candles`: kolumny `symbol`, `datetime`, `open`, `high`, `low`, `close`, `volume` oraz `utc_offset_minutes`. `datetime` jest zapisywany w czasie lokalnym `Europe/Warsaw`; offset rozróżnia powtarzającą się godzinę przy zmianie czasu. Klucz główny `(symbol, datetime, utc_offset_minutes)` zapobiega duplikatom, a ponowne pobranie świecy aktualizuje wpis. `volume` jest `NULL`, jeśli dostawca go nie podał.
 - `candle_gaps`: osobny wiersz dla każdej wykrytej brakującej świecy. `candle_datetime_utc` oznacza oczekiwany początek świecy w UTC, `status` ma wartość `missing` albo `filled`, a pola `detected_at_utc` i `filled_at_utc` zapisują moment wykrycia i uzupełnienia. Klucz `(symbol, candle_datetime_utc)` zapobiega duplikatom.
 - `daily_sentences`: `id`, `sentence` i `created_at_utc`; unikalny indeks treści zapobiega duplikatom. Aplikacja losuje sentencję po stronie C++ i nie odpytuje modelu przy każdym uruchomieniu.
@@ -59,7 +59,7 @@ Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu 
   describe signals;
 Tabela `candles` zostanie utworzona automatycznie przy uruchomieniu lokalnego API. Istniejące wpisy, które wcześniej zapisano w UTC, zostaną jednorazowo przeliczone na `Europe/Warsaw`. Po zmianach kodu API lub konfiguracji bazy przebuduj i uruchom usługę poleceniem `docker compose up -d --build`.
 
-Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każdej nowej zamkniętej świecy EUR/USD API uruchamia strategię `Chat-gpt6/EURUSD/EURUSDStrategyV1`; wygenerowany sygnał zapisuje w tej samej transakcji bazodanowej co świecę, a jego pakiet JSON trafia do `signal_parameters`.
+Tabela `signals` również jest tworzona automatycznie przy starcie API. Po każdej nowej zamkniętej świecy EUR/USD API uruchamia strategię `Chat-gpt6/EURUSDStrategyV1`; wygenerowany sygnał zapisuje w tej samej transakcji bazodanowej co świecę, a jego pakiet JSON trafia do `signal_parameters`.
 
 ### Jednorazowe zasilenie sentencji dnia
 
@@ -85,14 +85,14 @@ Przypisanie instrumentu ma postać:
 }
 ```
 
-Wartość może być nazwą jednego dostawcy albo listą nazw dostawców do równoległego uruchomienia. Każda nazwa musi wskazywać element z `providers`; symbole instrumentów muszą dokładnie odpowiadać `signals.product`, np. `EURUSD/USD`, `USD/MXN`, `USD/JPY` albo `XAU/USD`. Klucz API pozostaje w lokalnym `.env` jako `CLAUDE_API_KEY`; Docker Compose przekazuje go do kontenera. Nie umieszczaj klucza w pliku JSON ani w repozytorium. Inni dostawcy Anthropic mogą być dodani jako `type: "anthropic"`; dla usług zgodnych z OpenAI Chat Completions dostępny jest także typ `openai_compatible`.
+Wartość może być nazwą jednego dostawcy albo listą nazw dostawców do równoległego uruchomienia. Każda nazwa musi wskazywać element z `providers`; symbole instrumentów muszą dokładnie odpowiadać `signals.product`, np. `EUR/USD`, `USD/MXN`, `USD/JPY` albo `XAU/USD`. Klucz API pozostaje w lokalnym `.env` jako `CLAUDE_API_KEY`; Docker Compose przekazuje go do kontenera. Nie umieszczaj klucza w pliku JSON ani w repozytorium. Inni dostawcy Anthropic mogą być dodani jako `type: "anthropic"`; dla usług zgodnych z OpenAI Chat Completions dostępny jest także typ `openai_compatible`.
 
 Po zmianie routingu lub klucza odtwórz wyłącznie kontener API poleceniem `docker compose up -d --force-recreate --no-deps price-history-api` (bez `--build`, ponieważ plik routingu jest montowany z hosta). Zmiana kodu wymaga przebudowy kontenera. Routing jest wczytywany przy starcie workera. Jeśli którykolwiek z równolegle uruchomionych modeli zwróci błąd lub niepoprawną odpowiedź, zadanie zostanie oznaczone jako `failed` i żaden z wyników tego zadania nie zostanie zapisany; ponowienie jest ręczne i ponownie odpytuje wszystkie modele z trasy.
 
 Tabela `transactions` przechowuje identyfikator modelu weryfikującego, kierunek sygnału i kierunek AI, poziomy wejścia/SL/TP, spread oraz stan `awaiting`, `in progress` albo `closed`. Gdy cena wejścia jest równa cenie zamknięcia świecy sygnałowej, transakcja rozpoczyna się od razu, a `time_to_open` wynosi `0`. W pozostałych przypadkach pozostaje `awaiting` do pierwszej świecy po sygnale, która osiąga ENTRY: gdy ENTRY jest powyżej ceny zamknięcia sygnału, warunkiem jest `HIGH >= ENTRY`; gdy jest poniżej, warunkiem jest `LOW <= ENTRY`. Reguła progu jest taka sama dla LONG i SHORT; kierunek AI określa później sposób sprawdzania SL i TP. `time_to_open` zapisuje numer świecy wejścia wśród zapisanych świec M1, a nie czas kalendarzowy. Jeśli na świecy wejścia zostanie trafiony SL lub TP, transakcja może zamknąć się na tej samej świecy i `time_from_open_to_close` wynosi wtedy `0`. W pozostałych przypadkach ten czas również liczy świece M1, więc pierwsza kolejna dostępna świeca po przerwie, np. weekendowej, daje wartość `1`. Gdy jedna świeca dotknie jednocześnie SL i TP, przyjmowany jest Stop Loss. Po uzupełnieniu wcześniej brakującej świecy ponownie przetwarzane są transakcje, których wynik mogła ona zmienić. Saldo oraz wynik dla 100 zł pozostają `NULL` do zamknięcia. Błędne odpowiedzi i błędy API nie blokują zapisu sygnału; szczegóły można odczytać z `GET /api/ai-verification/jobs?status=failed`, a zadania `failed` lub `skipped` ponowić ręcznie przez `POST /api/ai-verification/jobs/{signal_id}/retry`. Ponowienie wykonuje nowe żądanie do każdego modelu z trasy, więc nie jest automatyczne. Do kontenera API klucz Groq jest przekazywany ze zmiennej `GROK_API_KEY` w lokalnym pliku `.env`; klucza nie należy umieszczać w repozytorium.
 
 Po każdej nowej zamkniętej świecy `USD/MXN` API uruchamia strategię
-`Chat-gpt6/USDMXN/USDMXNStrategyV1`. Odczyt ograniczony do ostatnich 1200 świec
+`Chat-gpt6/USDMXNStrategyV1`. Odczyt ograniczony do ostatnich 1200 świec
 odtwarza czas UTC z `datetime` i `utc_offset_minutes`; pełny wynik LONG, SHORT
 lub NONE jest ograniczany do `price`, `signal`, `timestamp`, `instrument` i
 krótkiego `reason` w `signal_parameters`; szczegółowa diagnostyka pozostaje
@@ -108,7 +108,7 @@ Paczki `/api/candles/batch` również uruchamiają obie strategie USD/MXN dla
 zamkniętych świec, ale nie odtwarzają dźwięków dla historycznych danych.
 
 Po każdej nowej zamkniętej świecy `USD/JPY` API uruchamia niezależną strategię
-`Chat-gpt6/USDJPY/USDJPYStrategyV1`. Historia jest ograniczona do 1200 świec,
+`Chat-gpt6/USDJPYStrategyV1`. Historia jest ograniczona do 1200 świec,
 a zamknięte M5 powstają wyłącznie z pięciu kolejnych świec M1. Pełny wynik
 LONG, SHORT albo NONE trafia do `signal_parameters` jako `price`, `signal`,
 `timestamp`, `instrument` i krótki `reason`; pełna diagnostyka pozostaje
@@ -130,8 +130,8 @@ EMA21, RSI14, krótkim powodem i pasmami Bollingera. Pełne dane diagnostyczne
 algorytmu nie są zapisywane, a istniejące rekordy pozostają bez zmian.
 
 Po każdej zamkniętej świecy XAU/USD API uruchamia strategie
-`Chat-gpt6/XAUUSD/XAUUSDStrategyV1` i
-`Claude-sonnet55/XAUUSD/XAUUSDStrategyV1`. Dotyczy to zarówno pojedynczych
+`Chat-gpt6/XAUUSDStrategyV1` i
+`Claude-sonnet55/XAUUSDStrategyV1`. Dotyczy to zarówno pojedynczych
 zapisów, jak i świec dostarczonych w paczce `/api/candles/batch`. Obie strategie zapisują wyłącznie sygnały LONG i SHORT; powiadomienie
 dźwiękowe jest naliczane wyłącznie dla zapisanych sygnałów.
 Uzupełnianie historii w paczce nie odtwarza dźwięków.
@@ -140,7 +140,7 @@ Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączo
 ponieważ dotychczasowe symbole nie zapewniały danych dla oczekiwanych indeksów.
 API nie zwraca tych instrumentów jako monitorowanych ani otwartych i odrzuca
 nowe zapisy oraz żądania uzupełnienia; zapisane wcześniej świece pozostają
-w bazie. Monitor pobiera obecnie `EURUSD/USD`, `USD/MXN`, `USD/JPY` i `XAU/USD`.
+w bazie. Monitor pobiera obecnie `EUR/USD`, `USD/MXN`, `USD/JPY` i `XAU/USD`.
 
 Strategia `Claude-sonnet55/S&P500` pozostaje w kodzie. Po ponownym włączeniu
 instrumentu API może uruchamiać ją po zapisaniu pojedynczej zamkniętej świecy
