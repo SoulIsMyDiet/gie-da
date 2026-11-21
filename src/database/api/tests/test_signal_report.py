@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import MarketDataRepository  # noqa: E402
 
 
-def test_signal_report_includes_ai_decision_and_profit_after_20_minutes() -> None:
-    """Zwraca decyzję AI i wynik z tabeli potencjału dla sygnału."""
+def test_signal_report_returns_aggregated_decision_without_price() -> None:
+    """Zwraca decyzję zagregowaną, pomija cenę i nie duplikuje sygnałów."""
     connection = Mock()
     cursor = Mock()
     connection.cursor.return_value = cursor
@@ -27,10 +27,9 @@ def test_signal_report_includes_ai_decision_and_profit_after_20_minutes() -> Non
             42,
             datetime(2026, 11, 18, 12, 30, 0),
             "EUR/USD",
-            "1.10485",
             "long",
             "Chat-gpt6/EURUSDStrategyV1",
-            '{"decision":"buy"}',
+            "ZGODA",
             "--",
             250,
             '{"reason":"test"}',
@@ -49,10 +48,9 @@ def test_signal_report_includes_ai_decision_and_profit_after_20_minutes() -> Non
             "42",
             "2026-11-18 12:30:00",
             "EUR/USD",
-            "1.10485",
             "long",
             "Chat-gpt6/EURUSDStrategyV1",
-            '{"decision":"buy"}',
+            "ZGODA",
             "--",
             "250",
             '{"reason":"test"}',
@@ -62,6 +60,13 @@ def test_signal_report_includes_ai_decision_and_profit_after_20_minutes() -> Non
     query = cursor.execute.call_args.args[0]
     assert "LEFT JOIN signal_potention AS p ON p.signal_id = s.id" in query
     assert "p.`100zl_deal_20`" in query
+    assert "CAST(s.price AS CHAR)" not in query
+    assert "LEFT JOIN ai_decisions AS ad" in query
+    assert "GROUP BY t.signal_id" in query
+    assert "ai_summary.accept_count, 0) > 0" in query
+    assert "verification_job.status = 'completed'" in query
+    assert "ELSE 'OCZEKUJE'" in query
+    assert "THEN 'ODRZUCENIE'" in query
 
 
 def test_signal_potential_schema_preserves_values_when_old_and_new_columns_coexist() -> None:

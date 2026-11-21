@@ -37,7 +37,6 @@ struct SignalReportEntry {
     std::string id;
     std::string datetime;
     std::string product;
-    std::string price;
     std::string direction;
     std::string algorithmName;
     std::string aiDecision;

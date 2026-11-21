@@ -2787,16 +2787,51 @@ class MarketDataRepository:
                         s.id,
                         s.`datetime`,
                         s.product,
-                        CAST(s.price AS CHAR),
                         s.`signal`,
                         s.algorithm_name,
-                        COALESCE(CAST(s.ai_decision AS CHAR), 'NULL'),
+                        CASE
+                            WHEN COALESCE(ai_summary.accept_count, 0) > 0
+                                THEN 'ZGODA'
+                            WHEN verification_job.status = 'completed'
+                                AND ai_summary.transaction_count > 0
+                                AND ai_summary.complete_transaction_count =
+                                    ai_summary.transaction_count
+                                AND ai_summary.decision_count > 0
+                                AND ai_summary.decline_count =
+                                    ai_summary.decision_count
+                                THEN 'ODRZUCENIE'
+                            ELSE 'OCZEKUJE'
+                        END,
                         COALESCE(CAST(s.transaction_id AS CHAR), '--'),
                         s.candles_count,
                         CAST(s.signal_parameters AS CHAR),
                         COALESCE(CAST(p.`100zl_deal_20` AS CHAR), '')
                     FROM signals AS s
                     LEFT JOIN signal_potention AS p ON p.signal_id = s.id
+                    LEFT JOIN (
+                        SELECT
+                            t.signal_id,
+                            COUNT(DISTINCT t.id) AS transaction_count,
+                            COUNT(DISTINCT CASE
+                                WHEN ad.ai_decision IN ('accept', 'decline')
+                                    THEN t.id
+                            END) AS complete_transaction_count,
+                            COUNT(ad.id) AS decision_count,
+                            SUM(CASE
+                                WHEN ad.ai_decision = 'accept' THEN 1
+                                ELSE 0
+                            END) AS accept_count,
+                            SUM(CASE
+                                WHEN ad.ai_decision = 'decline' THEN 1
+                                ELSE 0
+                            END) AS decline_count
+                        FROM transactions AS t
+                        LEFT JOIN ai_decisions AS ad
+                            ON ad.transaction_id = t.id
+                        GROUP BY t.signal_id
+                    ) AS ai_summary ON ai_summary.signal_id = s.id
+                    LEFT JOIN ai_verification_jobs AS verification_job
+                        ON verification_job.signal_id = s.id
                     ORDER BY s.`datetime` DESC, s.id DESC
                     LIMIT %s OFFSET %s
                     """,
@@ -2809,7 +2844,6 @@ class MarketDataRepository:
                         str(signal_id),
                         _format_api_timestamp(signal_datetime),
                         product,
-                        price,
                         signal_direction,
                         algorithm_name,
                         ai_decision,
@@ -2822,7 +2856,6 @@ class MarketDataRepository:
                         signal_id,
                         signal_datetime,
                         product,
-                        price,
                         signal_direction,
                         algorithm_name,
                         ai_decision,

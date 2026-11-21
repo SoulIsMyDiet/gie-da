@@ -19,7 +19,7 @@ constexpr int pageButtonHeight = 36;
 constexpr int detailsButtonHeight = 22;
 constexpr int pageContentBottomMargin = pageButtonHeight + 32;
 constexpr int pageLabelHeight = 20;
-constexpr int signalColumnWidths[] = {18, 10, 8, 19, 16, 17, 12};
+constexpr int signalColumnWidths[] = {20, 12, 22, 18, 16, 12};
 
 struct StyledText {
     std::wstring value;
@@ -350,13 +350,13 @@ void SignalsPage::positionControls() {
             WindowScale::size(parent_, detailsButtonHeight),
             std::max<LONG>(1, rowHeight - WindowScale::size(parent_, 2)));
     LONG buttonX = 0;
-    for (std::size_t column = 0; column < 6; ++column) {
+    for (std::size_t column = 0; column < 5; ++column) {
         buttonX += clientWidth * signalColumnWidths[column] / 100;
     }
     buttonX += WindowScale::size(parent_, 4);
     const LONG buttonWidth =
         std::max<LONG>(
-            1, clientWidth * signalColumnWidths[6] / 100 -
+            1, clientWidth * signalColumnWidths[5] / 100 -
                    WindowScale::size(parent_, 8));
     for (std::size_t index = 0; index < detailsButtons_.size(); ++index) {
         const LONG rowTop = rowHeight * static_cast<LONG>(index + 1);
@@ -410,8 +410,8 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
         1, (tableArea.bottom - tableArea.top) /
                static_cast<LONG>(signals_.size() + 1));
     const wchar_t* columnNames[] = {
-        L"Czas (Polska)", L"Produkt", L"Cena", L"Algorytm",
-        L"Decyzja AI", L"Max zysk (po 20 min)", L""
+        L"Czas (Polska)", L"Produkt", L"Algorytm", L"Decyzja AI",
+        L"Max zysk (po 20 min)", L""
     };
     const UINT textFormat =
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
@@ -421,7 +421,7 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
     LONG rowTop = tableArea.top;
     LONG columnLeft = tableArea.left;
     const LONG totalWidth = tableArea.right - tableArea.left;
-    for (std::size_t column = 0; column < 7; ++column) {
+    for (std::size_t column = 0; column < 6; ++column) {
         const LONG columnWidth =
             totalWidth * signalColumnWidths[column] / 100;
         const LONG padding = WindowScale::size(parent_, 2);
@@ -436,7 +436,6 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
         const std::string values[] = {
             signal.datetime,
             signal.product,
-            signal.price,
             signal.algorithmName,
             signal.aiDecision,
             signal.maxProfitAfter20Minutes.empty()
@@ -444,12 +443,12 @@ void SignalsPage::draw(HDC deviceContext, RECT& clientArea) const {
                 : signal.maxProfitAfter20Minutes,
         };
         columnLeft = tableArea.left;
-        for (std::size_t column = 0; column < 6; ++column) {
+        for (std::size_t column = 0; column < 5; ++column) {
             std::wstring wideValue;
             if (!convertUtf8ToWide(values[column], wideValue)) {
                 wideValue = L"Nieprawidłowy tekst";
             }
-            if (column == 5) {
+            if (column == 4) {
                 const int sign = decimalSign(signal.maxProfitAfter20Minutes);
                 SetTextColor(
                     deviceContext,

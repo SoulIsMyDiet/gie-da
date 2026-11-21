@@ -847,13 +847,13 @@ bool splitCandleGapRow(std::string_view row, CandleGapReportEntry& gap) {
 }
 
 /**
- * Sprawdza i rozdziela wiersz raportu zawierający jedenaście pól sygnału.
+ * Sprawdza i rozdziela wiersz raportu zawierający dziesięć pól sygnału.
  */
 bool splitSignalReportRow(
     std::string_view row, SignalReportEntry& signal) {
-    std::string_view fields[11];
+    std::string_view fields[10];
     std::size_t fieldStart = 0;
-    for (std::size_t index = 0; index < 10; ++index) {
+    for (std::size_t index = 0; index < 9; ++index) {
         const std::size_t separator = row.find('\t', fieldStart);
         if (separator == std::string_view::npos) {
             return false;
@@ -864,11 +864,11 @@ bool splitSignalReportRow(
     if (row.find('\t', fieldStart) != std::string_view::npos) {
         return false;
     }
-    fields[10] = row.substr(fieldStart);
+    fields[9] = row.substr(fieldStart);
 
-    for (std::size_t index = 0; index < 11; ++index) {
-        if ((index != 10 && fields[index].empty()) ||
-            fields[index].size() > (index == 9 ? 8192 : 512)) {
+    for (std::size_t index = 0; index < 10; ++index) {
+        if ((index != 9 && fields[index].empty()) ||
+            fields[index].size() > (index == 8 ? 8192 : 512)) {
             return false;
         }
     }
@@ -876,14 +876,13 @@ bool splitSignalReportRow(
     signal.id.assign(fields[0]);
     signal.datetime.assign(fields[1]);
     signal.product.assign(fields[2]);
-    signal.price.assign(fields[3]);
-    signal.direction.assign(fields[4]);
-    signal.algorithmName.assign(fields[5]);
-    signal.aiDecision.assign(fields[6]);
-    signal.transactionId.assign(fields[7]);
-    signal.candlesCount.assign(fields[8]);
-    signal.signalParameters.assign(fields[9]);
-    signal.maxProfitAfter20Minutes.assign(fields[10]);
+    signal.direction.assign(fields[3]);
+    signal.algorithmName.assign(fields[4]);
+    signal.aiDecision.assign(fields[5]);
+    signal.transactionId.assign(fields[6]);
+    signal.candlesCount.assign(fields[7]);
+    signal.signalParameters.assign(fields[8]);
+    signal.maxProfitAfter20Minutes.assign(fields[9]);
     return true;
 }
 
