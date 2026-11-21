@@ -22,6 +22,7 @@ constexpr wchar_t singleCandleApiPath[] = L"/api/candles";
 constexpr wchar_t batchApiPath[] = L"/api/candles/batch";
 constexpr wchar_t monitoredProductsApiPath[] = L"/api/products/monitored";
 constexpr wchar_t openProductsApiPath[] = L"/api/products/open";
+constexpr wchar_t dailySentencesApiPath[] = L"/api/daily-sentences";
 constexpr wchar_t analysisCandlesApiPath[] = L"/api/candles/analysis?limit=";
 constexpr wchar_t promptCandleHistoryApiPath[] =
     L"/api/candles/prompt-history?symbol=";
@@ -204,7 +205,11 @@ bool encodeSymbolForUrl(
 /**
  * Odczytuje odpowiedź do bufora o ograniczonym rozmiarze.
  */
-bool readResponse(HINTERNET request, std::string& response, std::string& error) {
+bool readResponse(
+    HINTERNET request,
+    std::string& response,
+    std::string& error,
+    std::size_t maximumResponseBytes = maxResponseSize) {
     while (true) {
         DWORD bytesAvailable = 0;
         if (!WinHttpQueryDataAvailable(request, &bytesAvailable)) {
@@ -214,8 +219,8 @@ bool readResponse(HINTERNET request, std::string& response, std::string& error) 
         if (bytesAvailable == 0) {
             return true;
         }
-        if (response.size() + bytesAvailable > maxResponseSize) {
-            error = "Odpowiedź raportu świec jest zbyt duża.";
+        if (response.size() + bytesAvailable > maximumResponseBytes) {
+            error = "Odpowiedź lokalnego API przekroczyła dozwolony rozmiar.";
             return false;
         }
 
@@ -327,7 +332,8 @@ bool sendApiRequest(
 bool fetchApiResponse(
     const std::wstring& path,
     std::string& responseBody,
-    std::string& error) {
+    std::string& error,
+    std::size_t maximumResponseBytes = maxResponseSize) {
     InternetHandle session{WinHttpOpen(
         L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
@@ -370,7 +376,8 @@ bool fetchApiResponse(
                 std::to_string(statusCode) + " podczas pobierania danych.";
         return false;
     }
-    return readResponse(request.value, responseBody, error);
+    return readResponse(
+        request.value, responseBody, error, maximumResponseBytes);
 }
 
 // Backend
@@ -1182,6 +1189,51 @@ bool CandleHistoryClient::fetchMonitoredSymbols(
 bool CandleHistoryClient::fetchOpenSymbols(
     std::vector<std::string>& symbols, std::string& error) {
     return fetchSymbolList(openProductsApiPath, symbols, error, false);
+}
+
+/**
+ * Pobiera pule sentencji tekstem rozdzielonym wierszami.
+ */
+bool CandleHistoryClient::fetchDailySentences(
+    std::vector<std::string>& sentences, std::string& error) {
+    constexpr std::size_t maximumPoolResponseBytes = 5 * 1024 * 1024;
+    std::string response;
+    if (!fetchApiResponse(
+            dailySentencesApiPath,
+            response,
+            error,
+            maximumPoolResponseBytes)) {
+        return false;
+    }
+
+    std::vector<std::string> parsedSentences;
+    std::size_t lineStart = 0;
+    while (lineStart < response.size()) {
+        const std::size_t lineEnd = response.find('\n', lineStart);
+        const std::size_t lineLength = lineEnd == std::string::npos
+            ? response.size() - lineStart
+            : lineEnd - lineStart;
+        std::string sentence = response.substr(lineStart, lineLength);
+        if (!sentence.empty() && sentence.back() == '\r') {
+            sentence.pop_back();
+        }
+        if (sentence.empty()) {
+            error = "Lokalne API zwróciło pustą sentencję.";
+            return false;
+        }
+        parsedSentences.push_back(std::move(sentence));
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    if (parsedSentences.empty()) {
+        error = "Baza nie zawiera sentencji dnia. Uruchom jednorazowe zasilenie.";
+        return false;
+    }
+    sentences = std::move(parsedSentences);
+    return true;
 }
 
 /**

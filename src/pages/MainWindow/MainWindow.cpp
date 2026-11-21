@@ -1,7 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "DailySentenceClient.h"
+#include "DailySentencePicker.h"
 #include "ErrorLogger.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
@@ -270,7 +270,7 @@ void MainWindow::startDailySentenceRequest() {
         bool succeeded = false;
         try {
             succeeded =
-                DailySentenceClient::fetchDailySentence(sentence, error);
+                dailySentencePicker_.fetchRandomSentence(sentence, error);
         } catch (const std::exception& exception) {
             error = "Nieobsłużony wyjątek podczas pobierania sentencji: " +
                 std::string(exception.what());

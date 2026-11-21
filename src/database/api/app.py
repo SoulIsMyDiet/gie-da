@@ -169,6 +169,10 @@ from market_data import Candle  # noqa: E402
 from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
 from signal_serializer import Signal  # noqa: E402
 from transaction_tracker import TransactionTracker  # noqa: E402
+from daily_sentences import (  # noqa: E402
+    create_daily_sentences_table,
+    fetch_daily_sentences,
+)
 from claude_sonnet55_dax40.DAX40StrategyV1 import (  # noqa: E402
     DAX40StrategyV1,
 )
@@ -799,6 +803,7 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+                create_daily_sentences_table(cursor)
 
                 cursor.execute(
                     """
@@ -3176,6 +3181,24 @@ def monitored_products() -> Response:
     """Udostępnia monitorowi aktywne symbole bez powielania ich w C++."""
     return Response(
         content="\n".join(get_monitored_symbols()),
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+@app.get("/api/daily-sentences", response_class=Response)
+def daily_sentence_pool(request: Request) -> Response:
+    """Udostępnia pulę sentencji do losowania po stronie aplikacji C++."""
+    try:
+        sentences = fetch_daily_sentences(
+            request.app.state.repository.database_settings
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się pobrać puli sentencji dnia.",
+        ) from error
+    return Response(
+        content="\n".join(sentences),
         media_type="text/plain; charset=utf-8",
     )
 

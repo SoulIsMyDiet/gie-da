@@ -177,6 +177,15 @@ public:
         std::vector<std::string>& symbols, std::string& error);
 
     /**
+     * Pobiera wszystkie sentencje z lokalnej bazy do losowania po stronie C++.
+     * @param sentences Otrzymuje sentencje w kolejności ich zapisania.
+     * @param error Otrzymuje opis błędu żądania lub niepoprawnej odpowiedzi.
+     * @return true, jeśli API zwróciło co najmniej jedną prawidłową sentencję.
+     */
+    static bool fetchDailySentences(
+        std::vector<std::string>& sentences, std::string& error);
+
+    /**
      * Pobiera ostatnie świece EURUSD/USD do analizy wskaźników.
      * @param maximumCandles Maksymalna liczba świec do pobrania (1-100).
      * @param candles Otrzymuje świece uporządkowane chronologicznie.

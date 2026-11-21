@@ -7,7 +7,7 @@
 #include <string>
 #include <thread>
 
-#include "DailySentenceClient.h"
+#include "DailySentencePicker.h"
 #include "CandleGapsPage.h"
 #include "ReportsPage.h"
 #include "SignalsPage.h"
@@ -113,6 +113,7 @@ private:
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;
+    DailySentencePicker dailySentencePicker_;
     StockPriceMonitor candleMonitor_;
     ReportsPage reportsPage_;
     CandleGapsPage candleGapsPage_;

@@ -20,6 +20,7 @@ COPY database/api/error_file_logging.py ./error_file_logging.py
 COPY database/api/candle_prompt_context.py ./candle_prompt_context.py
 COPY database/api/prompt_templates.py ./prompt_templates.py
 COPY database/api/signal_potential_calculator.py ./signal_potential_calculator.py
+COPY database/api/daily_sentences.py ./daily_sentences.py
 COPY database/api/market_products.py ./market_products.py
 COPY database/api/sound_alert.py ./sound_alert.py
 COPY database/api/strategy_context_registry.py ./strategy_context_registry.py

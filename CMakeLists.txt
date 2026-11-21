@@ -18,14 +18,13 @@ add_executable(gieda WIN32
     src/stockmarket/StockMarketClient/CandlesDataClient.cpp
     src/stockmarket/StockMarketClient/CandleHistoryClient.cpp
     src/stockmarket/StockMarketClient/CandleBackfillClient.cpp
-    src/ai/AiClient/DailySentenceClient.cpp
+    src/utility/DailySentencePicker.cpp
     src/utility/AudioSignal.cpp
     src/utility/ErrorLogger.cpp
     src/algorithms/Grok-45/EURUSD/SignalGenerator.cpp
 )
 set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
 target_include_directories(gieda PRIVATE
-    src/ai/AiClient
     src/stockmarket
     src/pages/MainWindow
     src/pages/reports
@@ -96,5 +95,29 @@ if(BUILD_TESTING)
     add_test(
         NAME candle_prompt_context_tests
         COMMAND candle_prompt_context_tests
+    )
+
+    add_executable(daily_sentence_picker_tests
+        src/utility/DailySentencePicker.cpp
+        src/stockmarket/StockMarketClient/CandleHistoryClient.cpp
+        src/utility/ErrorLogger.cpp
+        src/utility/tests/DailySentencePickerTests.cpp
+    )
+    set_property(
+        TARGET daily_sentence_picker_tests
+        PROPERTY CXX_SCAN_FOR_MODULES OFF
+    )
+    target_include_directories(daily_sentence_picker_tests PRIVATE
+        src/stockmarket/StockMarketClient
+        src/utility
+    )
+    target_link_libraries(daily_sentence_picker_tests PRIVATE winhttp)
+    target_link_options(daily_sentence_picker_tests PRIVATE
+        -static-libgcc
+        -static-libstdc++
+    )
+    add_test(
+        NAME daily_sentence_picker_tests
+        COMMAND daily_sentence_picker_tests
     )
 endif()
