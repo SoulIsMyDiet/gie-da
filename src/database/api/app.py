@@ -1627,6 +1627,46 @@ class MarketDataRepository:
                     for candle in open_market_candles
                 ],
             )
+            filled_gap_candles = []
+            if cursor.rowcount > 0:
+                for symbol in product_symbols:
+                    symbol_candles = [
+                        candle
+                        for candle in open_market_candles
+                        if candle.symbol == symbol
+                    ]
+                    candle_times_utc = [
+                        candle.datetime.astimezone(timezone.utc).replace(
+                            tzinfo=None
+                        )
+                        for candle in symbol_candles
+                    ]
+                    cursor.execute(
+                        """
+                        SELECT candle_datetime_utc
+                        FROM candle_gaps
+                        WHERE symbol = %s AND status = 'filled'
+                            AND filled_at_utc = %s
+                            AND candle_datetime_utc >= %s
+                            AND candle_datetime_utc <= %s
+                        """,
+                        (
+                            symbol,
+                            current_utc,
+                            min(candle_times_utc),
+                            max(candle_times_utc),
+                        ),
+                    )
+                    filled_times_utc = {
+                        row[0] for row in cursor.fetchall()
+                    }
+                    filled_gap_candles.extend(
+                        candle
+                        for candle, candle_time_utc in zip(
+                            symbol_candles, candle_times_utc
+                        )
+                        if candle_time_utc in filled_times_utc
+                    )
             if signal is not None:
                 self._insert_signal(cursor, signal)
             grok45_v2_signal_saved = False
@@ -1637,9 +1677,12 @@ class MarketDataRepository:
             self.signal_potential_calculator.update_pending(
                 cursor, product_symbols
             )
-            TransactionTracker().process_candles(
-                cursor, open_market_candles
-            )
+            transaction_tracker = TransactionTracker()
+            transaction_tracker.process_candles(cursor, open_market_candles)
+            if filled_gap_candles:
+                transaction_tracker.recalculate_transactions(
+                    cursor, filled_gap_candles
+                )
             connection.commit()
         except (mysql.connector.Error, ValueError):
             connection.rollback()

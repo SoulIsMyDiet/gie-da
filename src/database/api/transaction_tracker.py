@@ -84,6 +84,16 @@ class TransactionTracker:
         ):
             raise ValueError("Czas sygnału musi zawierać strefę czasową.")
         cutoff = signal_close_utc.astimezone(timezone.utc).replace(tzinfo=None)
+        candles = self._fetch_historical_candles(cursor, symbol, cutoff)
+        self._process_candles_by_symbol(cursor, {symbol: candles})
+
+    @staticmethod
+    def _fetch_historical_candles(
+        cursor: Any,
+        symbol: str,
+        cutoff_utc: datetime,
+    ) -> list[TransactionCandle]:
+        """Pobiera świece instrumentu od wskazanego czasu UTC w kolejności."""
         cursor.execute(
             """
             SELECT datetime, utc_offset_minutes, high, low
@@ -92,9 +102,9 @@ class TransactionTracker:
                 AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE) >= %s
             ORDER BY DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE)
             """,
-            (symbol, cutoff),
+            (symbol, cutoff_utc),
         )
-        candles = [
+        return [
             TransactionCandle(
                 symbol=symbol,
                 datetime=local_datetime.replace(
@@ -105,7 +115,145 @@ class TransactionTracker:
             )
             for local_datetime, offset_minutes, high, low in cursor.fetchall()
         ]
-        self._process_candles_by_symbol(cursor, {symbol: candles})
+
+    def recalculate_transactions(
+        self,
+        cursor: Any,
+        repaired_candles: Sequence[CandleLike],
+    ) -> None:
+        """Ponownie przetwarza transakcje, na które wpłynęła uzupełniona luka.
+
+        Args:
+            cursor: Kursor MySQL należący do bieżącej transakcji bazy.
+            repaired_candles: Świece, które wcześniej były oznaczone jako brakujące.
+
+        Raises:
+            ValueError: Gdy zapisane parametry transakcji są błędne.
+            mysql.connector.Error: Gdy odczyt lub aktualizacja bazy nie powiedzie się.
+        """
+        repaired_by_symbol: dict[str, set[datetime]] = {}
+        for candle in repaired_candles:
+            candle_open = candle.datetime.astimezone(timezone.utc).replace(
+                tzinfo=None
+            )
+            repaired_by_symbol.setdefault(candle.symbol, set()).add(candle_open)
+
+        for symbol, repaired_times in repaired_by_symbol.items():
+            if not repaired_times:
+                continue
+            first_repaired_time = min(repaired_times)
+            last_repaired_time = max(repaired_times)
+            cursor.execute(
+                """
+                SELECT t.id, s.product, t.signal_close_utc,
+                       t.ai_decision_status, t.open_price,
+                       t.stop_loss_price, t.take_profit_price, t.true_spread,
+                       t.transaction_status, t.closed_at_utc, s.price
+                FROM `transactions` AS t
+                JOIN signals AS s ON s.id = t.signal_id
+                WHERE s.product = %s
+                    AND t.transaction_status IN (
+                        'awaiting', 'in progress', 'closed'
+                    )
+                    AND t.signal_close_utc <= %s
+                    AND (
+                        t.transaction_status != 'closed'
+                        OR t.closed_at_utc > %s
+                    )
+                ORDER BY t.id
+                FOR UPDATE
+                """,
+                (symbol, last_repaired_time, first_repaired_time),
+            )
+            affected_transactions = []
+            for transaction in cursor.fetchall():
+                signal_close = _as_utc_naive(transaction[2])
+                transaction_status = transaction[8]
+                closed_at = (
+                    _as_utc_naive(transaction[9])
+                    if transaction[9] is not None
+                    else None
+                )
+                if any(
+                    signal_close <= repaired_time
+                    and (
+                        transaction_status != "closed"
+                        or (closed_at is not None and repaired_time < closed_at)
+                    )
+                    for repaired_time in repaired_times
+                ):
+                    affected_transactions.append(transaction)
+
+            if not affected_transactions:
+                continue
+
+            earliest_signal_close = min(
+                _as_utc_naive(transaction[2])
+                for transaction in affected_transactions
+            )
+            historical_candles = self._fetch_historical_candles(
+                cursor, symbol, earliest_signal_close
+            )
+            for transaction in affected_transactions:
+                (
+                    transaction_id,
+                    transaction_symbol,
+                    signal_close_value,
+                    direction,
+                    open_price_value,
+                    stop_loss_value,
+                    take_profit_value,
+                    spread_value,
+                    previous_status,
+                    _closed_at,
+                    signal_price_value,
+                ) = transaction
+                signal_close = _as_utc_naive(signal_close_value)
+                opened_immediately = (
+                    Decimal(str(open_price_value))
+                    == Decimal(str(signal_price_value))
+                )
+                initial_status = (
+                    "in progress" if opened_immediately else "awaiting"
+                )
+                initial_time_to_open = 0 if opened_immediately else None
+                initial_opened_at = signal_close if opened_immediately else None
+                cursor.execute(
+                    """
+                    UPDATE `transactions`
+                    SET transaction_status = %s,
+                        time_to_open = %s,
+                        time_from_open_to_close = NULL,
+                        transaction_saldo = NULL,
+                        transaction_100zl_deal = NULL,
+                        opened_at_utc = %s,
+                        closed_at_utc = NULL
+                    WHERE id = %s AND transaction_status = %s
+                    """,
+                    (
+                        initial_status,
+                        initial_time_to_open,
+                        initial_opened_at,
+                        transaction_id,
+                        previous_status,
+                    ),
+                )
+                self._process_transaction(
+                    cursor,
+                    (
+                        transaction_id,
+                        transaction_symbol,
+                        signal_close_value,
+                        direction,
+                        open_price_value,
+                        stop_loss_value,
+                        take_profit_value,
+                        spread_value,
+                        initial_status,
+                        initial_opened_at,
+                    ),
+                    historical_candles,
+                )
 
     def _process_candles_by_symbol(
         self,
@@ -147,7 +295,7 @@ class TransactionTracker:
         transaction: tuple[Any, ...],
         candles: Sequence[TransactionCandle],
     ) -> None:
-        """Przetwarza świece jednej transakcji, pomijając świecę wejścia."""
+        """Przetwarza transakcję od pierwszej świecy po sygnale."""
         (
             transaction_id,
             symbol,
@@ -175,28 +323,30 @@ class TransactionTracker:
             if candle_open < signal_close:
                 continue
             candle_close = candle_open + timedelta(minutes=1)
+            opened_on_current_candle = False
 
             if status == "awaiting":
-                if candle.low <= open_price <= candle.high:
-                    time_to_open = self._count_open_delay_minutes(
-                        cursor,
-                        symbol,
-                        signal_close,
-                        candle_open,
-                    )
-                    cursor.execute(
-                        """
-                        UPDATE `transactions`
-                        SET transaction_status = 'in progress',
-                            time_to_open = %s,
-                            opened_at_utc = %s
-                        WHERE id = %s AND transaction_status = 'awaiting'
-                        """,
-                        (time_to_open, candle_close, transaction_id),
-                    )
-                    status = "in progress"
-                    opened_at = candle_close
-                continue
+                if not _entry_level_reached(direction, candle, open_price):
+                    continue
+                time_to_open = self._count_open_delay_minutes(
+                    cursor,
+                    symbol,
+                    signal_close,
+                    candle_open,
+                )
+                cursor.execute(
+                    """
+                    UPDATE `transactions`
+                    SET transaction_status = 'in progress',
+                        time_to_open = %s,
+                        opened_at_utc = %s
+                    WHERE id = %s AND transaction_status = 'awaiting'
+                    """,
+                    (time_to_open, candle_close, transaction_id),
+                )
+                status = "in progress"
+                opened_at = candle_close
+                opened_on_current_candle = True
 
             if status != "in progress":
                 continue
@@ -204,7 +354,7 @@ class TransactionTracker:
                 raise ValueError(
                     f"Transakcja {transaction_id} nie ma czasu otwarcia."
                 )
-            if candle_open < opened_at:
+            if not opened_on_current_candle and candle_open < opened_at:
                 continue
 
             stop_hit, take_profit_hit = _exit_levels_touched(
@@ -226,8 +376,15 @@ class TransactionTracker:
                 SignalPotentialCalculator.BALANCE_DECIMAL_PLACES,
                 rounding=ROUND_DOWN,
             )
-            elapsed_minutes = int(
-                (candle_close - opened_at).total_seconds() // 60
+            elapsed_candles = (
+                0
+                if opened_on_current_candle
+                else self._count_transaction_candles(
+                    cursor,
+                    symbol,
+                    opened_at,
+                    candle_open,
+                )
             )
             cursor.execute(
                 """
@@ -240,7 +397,7 @@ class TransactionTracker:
                 WHERE id = %s AND transaction_status = 'in progress'
                 """,
                 (
-                    max(0, elapsed_minutes),
+                    elapsed_candles,
                     saldo,
                     deal_value,
                     candle_close,
@@ -276,6 +433,33 @@ class TransactionTracker:
             )
         return int(row[0])
 
+    @staticmethod
+    def _count_transaction_candles(
+        cursor: Any,
+        symbol: str,
+        opened_at_utc: datetime,
+        exit_candle_open_utc: datetime,
+    ) -> int:
+        """Liczy świece od otwarcia do świecy wyjścia, niezależnie od przerw."""
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM candles
+            WHERE symbol = %s
+                AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE)
+                    >= %s
+                AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE)
+                    <= %s
+            """,
+            (symbol, opened_at_utc, exit_candle_open_utc),
+        )
+        row = cursor.fetchone()
+        if row is None or row[0] < 1:
+            raise ValueError(
+                "Nie znaleziono świec M1 potrzebnych do obliczenia czasu transakcji."
+            )
+        return int(row[0])
+
 
 def _as_utc_naive(value: datetime) -> datetime:
     """Normalizuje czas UTC do postaci naiwnej używanej przez kolumnę DATETIME."""
@@ -295,6 +479,19 @@ def _exit_levels_touched(
         return candle.low <= stop_loss, candle.high >= take_profit
     if direction == "short":
         return candle.high >= stop_loss, candle.low <= take_profit
+    raise ValueError("Kierunek transakcji musi mieć wartość long albo short.")
+
+
+def _entry_level_reached(
+    direction: str,
+    candle: TransactionCandle,
+    entry_price: Decimal,
+) -> bool:
+    """Sprawdza osiągnięcie progu ENTRY zgodnie z kierunkiem transakcji."""
+    if direction == "long":
+        return candle.high >= entry_price
+    if direction == "short":
+        return candle.low <= entry_price
     raise ValueError("Kierunek transakcji musi mieć wartość long albo short.")
 
 
