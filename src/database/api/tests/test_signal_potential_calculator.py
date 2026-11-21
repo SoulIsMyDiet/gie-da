@@ -48,8 +48,8 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
 
         self.assertEqual(result["saldo_10aggr_candles"], Decimal("-0.0002"))
         self.assertEqual(result["saldo_20_aggr_candles"], Decimal("0.0017"))
-        self.assertEqual(result["max_candle"], 13)
-        self.assertEqual(result["100zl_deal"], Decimal("4.63636"))
+        self.assertEqual(result["best_candle_20_minute"], 13)
+        self.assertEqual(result["100zl_deal_20"], Decimal("4.63636"))
 
     def test_short_aggregates_lowest_low(self) -> None:
         """Salda SHORT wybierają najniższe low i odejmują spread."""
@@ -64,7 +64,7 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         self.assertEqual(result["saldo_1st_candle"], Decimal("-0.0002"))
         self.assertEqual(result["saldo_10aggr_candles"], Decimal("0.0017"))
         self.assertEqual(result["saldo_20_aggr_candles"], Decimal("0.0017"))
-        self.assertEqual(result["max_candle"], 7)
+        self.assertEqual(result["best_candle_20_minute"], 7)
 
     def test_aggregate_fields_remain_empty_until_their_windows_are_complete(self) -> None:
         """Agregaty pozostają puste, dopóki nie wpłynie 10 lub 20 świec."""
@@ -78,8 +78,8 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         self.assertEqual(result["saldo_5th_candle"], Decimal("-0.0002"))
         self.assertEqual(result["saldo_10aggr_candles"], Decimal("-0.0002"))
         self.assertIsNone(result["saldo_20_aggr_candles"])
-        self.assertIsNone(result["max_candle"])
-        self.assertIsNone(result["100zl_deal"])
+        self.assertIsNone(result["best_candle_20_minute"])
+        self.assertIsNone(result["100zl_deal_20"])
         self.assertIsNone(result["saldo_60_aggr_candles"])
         self.assertIsNone(result["100zl_deal_60"])
 
@@ -104,8 +104,8 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         )
 
         self.assertEqual(result["saldo_20_aggr_candles"], Decimal("0.0017"))
-        self.assertEqual(result["max_candle"], 13)
-        self.assertEqual(result["100zl_deal"], Decimal("4.63636"))
+        self.assertEqual(result["best_candle_20_minute"], 13)
+        self.assertEqual(result["100zl_deal_20"], Decimal("4.63636"))
         self.assertEqual(result["saldo_60_aggr_candles"], Decimal("0.0027"))
         self.assertEqual(result["100zl_deal_60"], Decimal("7.36363"))
         self.assertEqual(

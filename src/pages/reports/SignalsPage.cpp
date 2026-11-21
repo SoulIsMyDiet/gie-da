@@ -614,9 +614,10 @@ void SignalsPage::drawDetails(
         return;
     }
 
-    const int sign = decimalSign(details_.deal100Pln);
-    if (details_.deal100Pln.empty() || details_.saldo20.empty() ||
-        details_.maxCandle.empty() || details_.spread.empty()) {
+    const int sign = decimalSign(details_.deal100Pln20);
+    if (details_.deal100Pln20.empty() || details_.saldo20.empty() ||
+        details_.bestCandle20Minute.empty() ||
+        details_.averageSpread.empty()) {
         WindowScale::drawText(
             deviceContext, parent_,
             L"Wynik będzie dostępny po zebraniu danych z 20 kolejnych świec.",
@@ -667,20 +668,21 @@ void SignalsPage::drawDetails(
         ? RGB(0, 128, 0)
         : (sign < 0 ? RGB(200, 0, 0) : RGB(0, 0, 0));
     std::wstring saldo;
-    std::wstring minute;
+    std::wstring bestCandle20Minute;
     std::wstring deal;
-    std::wstring spread;
+    std::wstring averageSpread;
     if (!convertUtf8ToWide(details_.saldo20, saldo)) {
         saldo = L"--";
     }
-    if (!convertUtf8ToWide(details_.maxCandle, minute)) {
-        minute = L"--";
+    if (!convertUtf8ToWide(
+            details_.bestCandle20Minute, bestCandle20Minute)) {
+        bestCandle20Minute = L"--";
     }
-    if (!convertUtf8ToWide(details_.deal100Pln, deal)) {
+    if (!convertUtf8ToWide(details_.deal100Pln20, deal)) {
         deal = L"--";
     }
-    if (!convertUtf8ToWide(details_.spread, spread)) {
-        spread = L"--";
+    if (!convertUtf8ToWide(details_.averageSpread, averageSpread)) {
+        averageSpread = L"--";
     }
 
     RECT textBounds = clientArea;
@@ -693,7 +695,7 @@ void SignalsPage::drawDetails(
             {{L"Największe odchylenie dla sygnału w ciągu ostatnich 20 minut wyniosło", false},
              {saldo, true, resultColor},
              {L"; wystąpiło w", false},
-             {minute + L".", true},
+             {bestCandle20Minute + L".", true},
              {L"minucie.", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
         nextLine = drawWrappedParagraph(
@@ -702,7 +704,7 @@ void SignalsPage::drawDetails(
             {{L"Przy inwestycji 100 zł zysk wyniósł", false},
              {deal, true, resultColor},
              {L"przy spreadzie wynoszącym", false},
-             {spread, true},
+             {averageSpread, true},
              {L".", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
     } else if (sign < 0) {
@@ -711,7 +713,7 @@ void SignalsPage::drawDetails(
             {{L"Najmniejsze odchylenie dla sygnału w ciągu ostatnich 20 minut wyniosło", false},
              {saldo, true, resultColor},
              {L"; wystąpiło w", false},
-             {minute + L".", true},
+             {bestCandle20Minute + L".", true},
              {L"minucie.", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
         nextLine = drawWrappedParagraph(
@@ -720,14 +722,14 @@ void SignalsPage::drawDetails(
             {{L"Przy inwestycji 100 zł strata wyniosła", false},
              {deal, true, resultColor},
              {L"przy spreadzie wynoszącym", false},
-             {spread, true},
+             {averageSpread, true},
              {L".", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
     } else {
         nextLine = drawWrappedParagraph(
             deviceContext, textBounds, nextLine,
             {{L"Sygnał nie odnotował ani zysku, ani straty w najlepszym możliwym przypadku w ciągu 20 najbliższych minut przy spreadzie wynoszącym", false},
-             {spread, true},
+             {averageSpread, true},
              {L".", false}},
             regularFont, boldFont, WindowScale::size(parent_, 6));
     }

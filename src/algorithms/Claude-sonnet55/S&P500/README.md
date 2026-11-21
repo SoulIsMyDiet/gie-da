@@ -69,7 +69,7 @@ są wyłącznie LONG i SHORT. Po udanym zapisie C++ odtwarza dwa dźwięki;
 duplikat jest cichy. `BEEP_ENABLED` pozwala wyłączyć dźwięk.
 LONG/SHORT tworzy również wiersz `signal_potention` z kosztem z konfiguracji
 w tej samej transakcji. Raport potencjału nie jest backtestem: nie symuluje
-SL/TP, a jego wyliczenie `100zl_deal` nie uwzględnia specyfikacji futures.
+SL/TP, a jego wyliczenie `100zl_deal_20` nie uwzględnia specyfikacji futures.
 
 **Ograniczenie wybranego wyzwalania API:** bez osobnej pętli aplikacja nie
 wykryje braku świecy po 20 sekundach, nie przeanalizuje automatycznie świecy

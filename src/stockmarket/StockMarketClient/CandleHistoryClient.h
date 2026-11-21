@@ -52,9 +52,9 @@ struct SignalReportEntry {
  */
 struct SignalPotentialDetails {
     std::string saldo20;
-    std::string maxCandle;
-    std::string deal100Pln;
-    std::string spread;
+    std::string bestCandle20Minute;
+    std::string deal100Pln20;
+    std::string averageSpread;
     std::string bestCandle60Datetime;
     std::string saldo60;
     std::string deal100Pln60;

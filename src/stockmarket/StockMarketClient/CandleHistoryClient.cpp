@@ -1889,9 +1889,9 @@ bool CandleHistoryClient::fetchSignalPotential(
 
     std::string* fields[] = {
         &details.saldo20,
-        &details.maxCandle,
-        &details.deal100Pln,
-        &details.spread,
+        &details.bestCandle20Minute,
+        &details.deal100Pln20,
+        &details.averageSpread,
         &details.bestCandle60Datetime,
         &details.saldo60,
         &details.deal100Pln60

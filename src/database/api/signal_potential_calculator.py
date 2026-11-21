@@ -92,8 +92,8 @@ class SignalPotentialCalculator:
             "saldo_5th_candle": None,
             "saldo_10aggr_candles": None,
             "saldo_20_aggr_candles": None,
-            "max_candle": None,
-            "100zl_deal": None,
+            "best_candle_20_minute": None,
+            "100zl_deal_20": None,
             "best_candle_60_datetime": None,
             "saldo_60_aggr_candles": None,
             "100zl_deal_60": None,
@@ -127,8 +127,8 @@ class SignalPotentialCalculator:
                 effective_spread,
             )
             results["saldo_20_aggr_candles"] = balance_20
-            results["max_candle"] = selected_index + 1
-            results["100zl_deal"] = (
+            results["best_candle_20_minute"] = selected_index + 1
+            results["100zl_deal_20"] = (
                 self.DEPOSIT_PLN * self.LEVERAGE * balance_20 / entry_price
             )
 
@@ -183,7 +183,8 @@ class SignalPotentialCalculator:
 
         cursor.execute(
             f"""
-            SELECT p.signal_id, s.product, s.price, s.`signal`, p.spread,
+            SELECT p.signal_id, s.product, s.price, s.`signal`,
+                   p.average_spread,
                    s.signal_parameters
             FROM signal_potention AS p
             JOIN signals AS s ON s.id = p.signal_id
@@ -253,8 +254,9 @@ class SignalPotentialCalculator:
                         COALESCE(saldo_10aggr_candles, %s),
                     saldo_20_aggr_candles =
                         COALESCE(saldo_20_aggr_candles, %s),
-                    max_candle = COALESCE(max_candle, %s),
-                    `100zl_deal` = COALESCE(`100zl_deal`, %s),
+                    best_candle_20_minute =
+                        COALESCE(best_candle_20_minute, %s),
+                    `100zl_deal_20` = COALESCE(`100zl_deal_20`, %s),
                     best_candle_60_datetime =
                         COALESCE(best_candle_60_datetime, %s),
                     saldo_60_aggr_candles =
@@ -271,8 +273,8 @@ class SignalPotentialCalculator:
                     balances["saldo_5th_candle"],
                     balances["saldo_10aggr_candles"],
                     balances["saldo_20_aggr_candles"],
-                    balances["max_candle"],
-                    balances["100zl_deal"],
+                    balances["best_candle_20_minute"],
+                    balances["100zl_deal_20"],
                     balances["best_candle_60_datetime"],
                     balances["saldo_60_aggr_candles"],
                     balances["100zl_deal_60"],

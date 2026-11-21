@@ -298,7 +298,7 @@ def test_potential_calculator_uses_saved_es_cost(direction, expected):
     calculation_cursor = Mock()
     calculation_cursor.fetchall.side_effect = [
         [(signal_id, "ES", Decimal("6000"), direction.lower(), spread, payload)],
-        [(Decimal("6002"), Decimal("5999"))],
+        [(datetime(2025, 1, 1), Decimal("6002"), Decimal("5999"))],
     ]
     module.SignalPotentialCalculator().update_pending(calculation_cursor, {"ES"})
     assert calculation_cursor.execute.call_args_list[-1].args[1][0] == expected

@@ -189,13 +189,14 @@ class CandleDatabase:
             if signal_type.lower() in ("long", "short"):
                 cursor.execute(
                     """
-                    INSERT INTO signal_potention (signal_id, spread)
+                    INSERT INTO signal_potention (signal_id, average_spread)
                     SELECT id, %s
                     FROM signals
                     WHERE product = %s
                         AND algorithm_name = %s
                         AND source_timestamp = %s
-                    ON DUPLICATE KEY UPDATE spread = VALUES(spread)
+                    ON DUPLICATE KEY UPDATE
+                        average_spread = VALUES(average_spread)
                     """,
                     (
                         Decimal(str(SIGNAL_POTENTIAL_SPREAD)),

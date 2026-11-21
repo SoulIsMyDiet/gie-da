@@ -226,7 +226,7 @@ class SP500Storage:
                 raise
             if signal != "NONE":
                 cursor.execute(
-                    "INSERT INTO signal_potention (signal_id, spread) VALUES (%s, %s)",
+                    "INSERT INTO signal_potention (signal_id, average_spread) VALUES (%s, %s)",
                     (cursor.lastrowid, Decimal(str(config.ASSUMED_COST_POINTS))),
                 )
             connection.commit()

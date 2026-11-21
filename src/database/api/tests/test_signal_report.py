@@ -61,4 +61,64 @@ def test_signal_report_includes_ai_decision_and_profit_after_20_minutes() -> Non
     ]
     query = cursor.execute.call_args.args[0]
     assert "LEFT JOIN signal_potention AS p ON p.signal_id = s.id" in query
-    assert "p.`100zl_deal`" in query
+    assert "p.`100zl_deal_20`" in query
+
+
+def test_signal_potential_schema_preserves_values_when_old_and_new_columns_coexist() -> None:
+    """Migruje nazwy kolumn, zachowując istniejące wartości z obu wersji."""
+    decimal_columns = {
+        "saldo_1st_candle",
+        "saldo_2nd_candle",
+        "saldo_3rd_candle",
+        "saldo_4th_candle",
+        "saldo_5th_candle",
+        "saldo_10aggr_candles",
+        "saldo_20_aggr_candles",
+        "saldo_60_aggr_candles",
+        "100zl_deal",
+        "100zl_deal_20",
+        "100zl_deal_60",
+        "spread",
+        "average_spread",
+    }
+    initial_columns = {
+        *decimal_columns,
+        "signal_id",
+        "max_candle",
+        "best_candle_20_minute",
+        "best_candle_60_datetime",
+    }
+    migrated_columns = initial_columns - {
+        "max_candle",
+        "100zl_deal",
+        "spread",
+    }
+    cursor = Mock()
+    cursor.fetchall.side_effect = [
+        [
+            (column, "decimal(20,5)" if column in decimal_columns else "int")
+            for column in initial_columns
+        ],
+        [
+            (column, "decimal(20,5)" if column in decimal_columns else "int")
+            for column in migrated_columns
+        ],
+    ]
+    repository = MarketDataRepository.__new__(MarketDataRepository)
+
+    repository._migrate_signal_potention_schema(cursor)
+
+    statements = [call.args[0] for call in cursor.execute.call_args_list]
+    for old_name, new_name in (
+        ("max_candle", "best_candle_20_minute"),
+        ("100zl_deal", "100zl_deal_20"),
+        ("spread", "average_spread"),
+    ):
+        assert any(
+            f"COALESCE(`{new_name}`, `{old_name}`)" in statement
+            for statement in statements
+        )
+        assert any(
+            f"DROP COLUMN `{old_name}`" in statement
+            for statement in statements
+        )

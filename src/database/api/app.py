@@ -920,12 +920,12 @@ class MarketDataRepository:
                         saldo_5th_candle DECIMAL(20, 5) NULL DEFAULT NULL,
                         saldo_10aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         saldo_20_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
-                        max_candle INT NULL DEFAULT NULL,
-                        `100zl_deal` DECIMAL(20, 5) NULL DEFAULT NULL,
+                        best_candle_20_minute INT NULL DEFAULT NULL,
+                        `100zl_deal_20` DECIMAL(20, 5) NULL DEFAULT NULL,
                         best_candle_60_datetime DATETIME NULL DEFAULT NULL,
                         saldo_60_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         `100zl_deal_60` DECIMAL(20, 5) NULL DEFAULT NULL,
-                        spread DECIMAL(20, 5) NOT NULL,
+                        average_spread DECIMAL(20, 5) NOT NULL,
                         UNIQUE KEY uq_signal_potention_signal_id (signal_id),
                         CONSTRAINT fk_signal_potention_signal
                             FOREIGN KEY (signal_id) REFERENCES signals(id)
@@ -1286,6 +1286,46 @@ class MarketDataRepository:
             )
             column_names.remove(old_saldo_column)
 
+        column_renames = (
+            (
+                "max_candle",
+                "best_candle_20_minute",
+                "INT NULL DEFAULT NULL",
+            ),
+            (
+                "100zl_deal",
+                "100zl_deal_20",
+                "DECIMAL(20, 5) NULL DEFAULT NULL",
+            ),
+            (
+                "spread",
+                "average_spread",
+                "DECIMAL(20, 5) NOT NULL",
+            ),
+        )
+        for old_name, new_name, column_definition in column_renames:
+            if old_name in column_names and new_name not in column_names:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE signal_potention
+                    CHANGE COLUMN `{old_name}` `{new_name}`
+                    {column_definition}
+                    """
+                )
+                column_names.remove(old_name)
+                column_names.add(new_name)
+            elif old_name in column_names and new_name in column_names:
+                cursor.execute(
+                    f"""
+                    UPDATE signal_potention
+                    SET `{new_name}` = COALESCE(`{new_name}`, `{old_name}`)
+                    """
+                )
+                cursor.execute(
+                    f"ALTER TABLE signal_potention DROP COLUMN `{old_name}`"
+                )
+                column_names.remove(old_name)
+
         if "saldo_20_aggr_candles" not in column_names:
             cursor.execute(
                 """
@@ -1297,31 +1337,31 @@ class MarketDataRepository:
             )
             column_names.add("saldo_20_aggr_candles")
 
-        if "max_candle" not in column_names:
+        if "best_candle_20_minute" not in column_names:
             cursor.execute(
                 """
                 ALTER TABLE signal_potention
-                ADD COLUMN max_candle INT NULL DEFAULT NULL
+                ADD COLUMN best_candle_20_minute INT NULL DEFAULT NULL
                     AFTER saldo_20_aggr_candles
                 """
             )
-            column_names.add("max_candle")
+            column_names.add("best_candle_20_minute")
 
-        if "100zl_deal" not in column_names:
+        if "100zl_deal_20" not in column_names:
             cursor.execute(
                 """
                 ALTER TABLE signal_potention
-                ADD COLUMN `100zl_deal` DECIMAL(20, 5) NULL DEFAULT NULL
-                    AFTER max_candle
+                ADD COLUMN `100zl_deal_20` DECIMAL(20, 5) NULL DEFAULT NULL
+                    AFTER best_candle_20_minute
                 """
             )
-            column_names.add("100zl_deal")
+            column_names.add("100zl_deal_20")
 
         new_60_minute_columns = (
             (
                 "best_candle_60_datetime",
                 "DATETIME NULL DEFAULT NULL",
-                "`100zl_deal`",
+                "`100zl_deal_20`",
             ),
             (
                 "saldo_60_aggr_candles",
@@ -1347,14 +1387,16 @@ class MarketDataRepository:
                 )
                 column_names.add(column_name)
 
-        if "spread" not in column_names:
+        if "average_spread" not in column_names:
             cursor.execute(
                 """
                 ALTER TABLE signal_potention
-                ADD COLUMN spread DECIMAL(20, 5) NOT NULL DEFAULT 0.0003
-                    AFTER `100zl_deal`
+                ADD COLUMN average_spread
+                    DECIMAL(20, 5) NOT NULL DEFAULT 0.0003
+                    AFTER `100zl_deal_60`
                 """
             )
+            column_names.add("average_spread")
 
         decimal_columns = {
             "saldo_1st_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
@@ -1365,9 +1407,9 @@ class MarketDataRepository:
             "saldo_10aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "saldo_20_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "saldo_60_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
-            "100zl_deal": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            "100zl_deal_20": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "100zl_deal_60": "DECIMAL(20, 5) NULL DEFAULT NULL",
-            "spread": "DECIMAL(20, 5) NOT NULL",
+            "average_spread": "DECIMAL(20, 5) NOT NULL",
         }
         cursor.execute("SHOW COLUMNS FROM signal_potention")
         column_types = {
@@ -1395,7 +1437,7 @@ class MarketDataRepository:
                 f"ALTER TABLE signal_potention {modified_columns}"
             )
         cursor.execute(
-            "ALTER TABLE signal_potention ALTER COLUMN spread DROP DEFAULT"
+            "ALTER TABLE signal_potention ALTER COLUMN average_spread DROP DEFAULT"
         )
 
     def _sync_signal_potention_spreads(
@@ -1419,7 +1461,7 @@ class MarketDataRepository:
 
         cursor.execute(
             f"""
-            INSERT IGNORE INTO signal_potention (signal_id, spread)
+            INSERT IGNORE INTO signal_potention (signal_id, average_spread)
             SELECT s.id, {case_expression}
             FROM signals AS s
             WHERE s.`signal` IN ('short', 'long')
@@ -1431,7 +1473,7 @@ class MarketDataRepository:
             f"""
             UPDATE signal_potention AS p
             JOIN signals AS s ON s.id = p.signal_id
-            SET p.spread = {case_expression}
+            SET p.average_spread = {case_expression}
             WHERE s.`signal` IN ('short', 'long')
                 AND s.product IN ({product_placeholders})
             """,
@@ -1959,7 +2001,7 @@ class MarketDataRepository:
         )
         cursor.execute(
             """
-            INSERT INTO signal_potention (signal_id, spread)
+            INSERT INTO signal_potention (signal_id, average_spread)
             VALUES (%s, %s)
             """,
             (
@@ -2041,7 +2083,7 @@ class MarketDataRepository:
         if signal_was_inserted:
             cursor.execute(
                 """
-                INSERT INTO signal_potention (signal_id, spread)
+                INSERT INTO signal_potention (signal_id, average_spread)
                 VALUES (%s, %s)
                 """,
                 (
@@ -2175,7 +2217,7 @@ class MarketDataRepository:
                 if inserted and potential_spread is not None:
                     cursor.execute(
                         """
-                        INSERT INTO signal_potention (signal_id, spread)
+                        INSERT INTO signal_potention (signal_id, average_spread)
                         VALUES (%s, %s)
                         """,
                         (
@@ -2752,7 +2794,7 @@ class MarketDataRepository:
                         COALESCE(CAST(s.transaction_id AS CHAR), '--'),
                         s.candles_count,
                         CAST(s.signal_parameters AS CHAR),
-                        COALESCE(CAST(p.`100zl_deal` AS CHAR), '')
+                        COALESCE(CAST(p.`100zl_deal_20` AS CHAR), '')
                     FROM signals AS s
                     LEFT JOIN signal_potention AS p ON p.signal_id = s.id
                     ORDER BY s.`datetime` DESC, s.id DESC
@@ -2807,9 +2849,9 @@ class MarketDataRepository:
                     """
                     SELECT
                         CAST(saldo_20_aggr_candles AS CHAR),
-                        CAST(max_candle AS CHAR),
-                        CAST(`100zl_deal` AS CHAR),
-                        CAST(spread AS CHAR),
+                        CAST(best_candle_20_minute AS CHAR),
+                        CAST(`100zl_deal_20` AS CHAR),
+                        CAST(average_spread AS CHAR),
                         CAST(best_candle_60_datetime AS CHAR),
                         CAST(saldo_60_aggr_candles AS CHAR),
                         CAST(`100zl_deal_60` AS CHAR)

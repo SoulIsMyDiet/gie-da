@@ -306,7 +306,7 @@ class XAUUSDStorage:
             if signal in {"LONG", "SHORT"}:
                 cursor.execute(
                     """
-                    INSERT INTO signal_potention (signal_id, spread)
+                    INSERT INTO signal_potention (signal_id, average_spread)
                     VALUES (%s, %s)
                     """,
                     (
