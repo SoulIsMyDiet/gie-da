@@ -467,8 +467,8 @@ def test_weekly_review_rolls_back_if_subtask_insert_fails() -> None:
     connection.commit.assert_not_called()
 
 
-def test_weekly_endpoint_waits_until_six_on_monday(monkeypatch) -> None:
-    """Nie tworzy cotygodniowego zadania przed 06:00 czasu warszawskiego."""
+def test_weekly_endpoint_waits_until_ten_on_monday(monkeypatch) -> None:
+    """Nie tworzy cotygodniowego zadania przed 10:00 czasu warszawskiego."""
     repository = Mock()
     request = SimpleNamespace(
         app=SimpleNamespace(
@@ -481,7 +481,7 @@ def test_weekly_endpoint_waits_until_six_on_monday(monkeypatch) -> None:
 
         @classmethod
         def now(cls, tz):
-            return RealDateTime(2026, 11, 23, 5, 59, tzinfo=tz)
+            return RealDateTime(2026, 11, 23, 9, 59, tzinfo=tz)
 
     monkeypatch.setattr(market_data_api, "datetime", FixedDateTime)
 
@@ -513,7 +513,7 @@ def test_weekly_endpoint_uses_registered_views_and_iso_week(monkeypatch) -> None
 
         @classmethod
         def now(cls, tz):
-            return RealDateTime(2026, 11, 23, 6, 0, tzinfo=tz)
+            return RealDateTime(2026, 11, 23, 10, 0, tzinfo=tz)
 
     monkeypatch.setattr(market_data_api, "datetime", FixedDateTime)
     view_names = ["Raporty", "To-do List"]
@@ -533,10 +533,38 @@ def test_weekly_endpoint_uses_registered_views_and_iso_week(monkeypatch) -> None
     )
 
 
-def test_weekly_endpoint_catches_up_after_missed_monday(monkeypatch) -> None:
-    """Po restarcie we wtorek tworzy zadanie dla bieżącego tygodnia ISO."""
+@pytest.mark.parametrize(
+    "local_now",
+    [
+        pytest.param(
+            RealDateTime(
+                2026,
+                11,
+                23,
+                10,
+                1,
+                tzinfo=ZoneInfo("Europe/Warsaw"),
+            ),
+            id="minute-after-scheduled-time",
+        ),
+        pytest.param(
+            RealDateTime(
+                2026,
+                11,
+                24,
+                1,
+                0,
+                tzinfo=ZoneInfo("Europe/Warsaw"),
+            ),
+            id="after-restart-on-tuesday",
+        ),
+    ],
+)
+def test_weekly_endpoint_does_not_catch_up_outside_scheduled_minute(
+    local_now, monkeypatch
+) -> None:
+    """Nie nadrabia zadania, jeśli aplikacja ominęła poniedziałkowe 10:00."""
     repository = Mock()
-    repository.create_weekly_review.return_value = True
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(todo_repository=repository)
@@ -544,11 +572,11 @@ def test_weekly_endpoint_catches_up_after_missed_monday(monkeypatch) -> None:
     )
 
     class FixedDateTime:
-        """Zwraca wtorek nad ranem w strefie Europe/Warsaw."""
+        """Zwraca ustalony czas lokalny na potrzeby testu harmonogramu."""
 
         @classmethod
         def now(cls, tz):
-            return RealDateTime(2026, 11, 24, 1, 0, tzinfo=tz)
+            return local_now
 
     monkeypatch.setattr(market_data_api, "datetime", FixedDateTime)
 
@@ -560,17 +588,18 @@ def test_weekly_endpoint_catches_up_after_missed_monday(monkeypatch) -> None:
     )
 
     assert result == {
-        "created": True,
-        "week_key": "2026-W48",
-        "next_check_seconds": 536400,
+        "created": False,
+        "week_key": None,
+        "next_check_seconds":
+            market_data_api._seconds_until_next_todo_review(local_now),
     }
-    repository.create_weekly_review.assert_called_once()
+    repository.create_weekly_review.assert_not_called()
 
 
 def test_next_review_delay_accounts_for_warsaw_dst_change() -> None:
-    """Wylicza rzeczywisty czas do 06:00 po zmianie czasu letniego."""
+    """Wylicza rzeczywisty czas do 10:00 po zmianie czasu letniego."""
     local_now = RealDateTime(
-        2026, 3, 23, 6, 0,
+        2026, 3, 23, 10, 0,
         tzinfo=ZoneInfo("Europe/Warsaw"),
     )
 

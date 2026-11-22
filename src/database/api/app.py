@@ -3361,10 +3361,10 @@ class TodoWeeklyReviewRequest(BaseModel):
 
 
 def _seconds_until_next_todo_review(now: datetime) -> int:
-    """Wylicza czas do następnego poniedziałku o 06:00 w Warszawie."""
-    if now.weekday() == 0 and now.hour < 6:
+    """Wylicza czas do następnego poniedziałku o 10:00 w Warszawie."""
+    if now.weekday() == 0 and now.hour < 10:
         next_review = now.replace(
-            hour=6, minute=0, second=0, microsecond=0
+            hour=10, minute=0, second=0, microsecond=0
         )
     else:
         days_until_monday = (7 - now.weekday()) % 7
@@ -3375,7 +3375,7 @@ def _seconds_until_next_todo_review(now: datetime) -> int:
             year=next_monday.year,
             month=next_monday.month,
             day=next_monday.day,
-            hour=6,
+            hour=10,
             minute=0,
             second=0,
             microsecond=0,
@@ -3762,9 +3762,13 @@ def delete_todo_subtask(subtask_id: int, request: Request) -> None:
 def create_weekly_todo_review(
     payload: TodoWeeklyReviewRequest, request: Request
 ) -> dict[str, bool | int | str | None]:
-    """Tworzy zadanie dla bieżącego tygodnia w strefie Europe/Warsaw."""
+    """Tworzy zadanie tylko w poniedziałek o 10:00 czasu warszawskiego."""
     local_now = datetime.now(WARSAW_TIME_ZONE)
-    if local_now.weekday() == 0 and local_now.hour < 6:
+    if (
+        local_now.weekday() != 0
+        or local_now.hour != 10
+        or local_now.minute != 0
+    ):
         return {
             "created": False,
             "week_key": None,
