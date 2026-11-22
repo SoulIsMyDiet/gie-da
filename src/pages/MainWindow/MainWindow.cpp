@@ -417,14 +417,19 @@ bool MainWindow::createNavigationButtons() {
 }
 
 /**
- * Ustawia przyciski z rejestru pośrodku dolnej krawędzi okna.
+ * Ustawia przyciski nawigacji; w To-do zostawia tylko powrót na stronę główną.
  */
 void MainWindow::positionNavigationButtons() {
-    const int buttonCount =
+    const int allButtonCount =
         static_cast<int>(navigationButtons_.size());
-    if (buttonCount == 0) {
+    if (allButtonCount == 0) {
         return;
     }
+
+    const std::vector<ViewDescriptor>& views = viewRegistry_.views();
+    const bool showOnlyTodoHomeButton =
+        currentViewId() == todoListButtonId;
+    const int buttonCount = showOnlyTodoHomeButton ? 1 : allButtonCount;
 
     RECT clientArea{};
     GetClientRect(handle_, &clientArea);
@@ -448,11 +453,23 @@ void MainWindow::positionNavigationButtons() {
         handle_, navigationButtonFont_, navigationButtonFontHeight_, 14,
         navigationButtons_);
 
-    for (int index = 0; index < buttonCount; ++index) {
+    int visibleButtonIndex = 0;
+    for (int index = 0; index < allButtonCount; ++index) {
+        const bool shouldShowButton =
+            !showOnlyTodoHomeButton
+            || (static_cast<std::size_t>(index) < views.size()
+                && views[static_cast<std::size_t>(index)].commandId
+                    == todoListButtonId);
+        HWND button = navigationButtons_[static_cast<std::size_t>(index)];
+        ShowWindow(button, shouldShowButton ? SW_SHOW : SW_HIDE);
+        if (!shouldShowButton) {
+            continue;
+        }
         MoveWindow(
-            navigationButtons_[static_cast<std::size_t>(index)],
-            firstButtonX + (buttonWidth + buttonGap) * index,
+            button,
+            firstButtonX + (buttonWidth + buttonGap) * visibleButtonIndex,
             buttonY, buttonWidth, visibleButtonHeight, TRUE);
+        ++visibleButtonIndex;
     }
 }
 
@@ -473,6 +490,7 @@ void MainWindow::onNavigationClicked(int commandId) {
         }
         updateNavigationButtons(commandId);
     }
+    positionNavigationButtons();
     InvalidateRect(handle_, nullptr, TRUE);
 }
 
