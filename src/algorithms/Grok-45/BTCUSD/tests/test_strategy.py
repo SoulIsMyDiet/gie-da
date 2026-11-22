@@ -275,7 +275,7 @@ def test_storage_skips_none_and_keeps_signal_json_compact() -> None:
 
 
 def test_storage_uses_hypothetical_spread_for_directional_signals() -> None:
-    """Zapis potencjału używa 0,2% ceny wejścia BTC/USD."""
+    """Zapis potencjału używa stałego spreadu 190 dla BTC/USD."""
     repository = Mock()
     storage = BTCUSDSignalStorage(repository)
     result = {
@@ -299,7 +299,7 @@ def test_storage_uses_hypothetical_spread_for_directional_signals() -> None:
     ] is True
     assert repository.save_algorithm_signal.call_args.kwargs[
         "spread_price"
-    ] == Decimal("134.0000")
+    ] == Decimal("190")
 
 
 def test_none_signals_are_not_saved_by_default() -> None:

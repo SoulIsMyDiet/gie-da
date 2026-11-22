@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from .config import (
-    BTC_SPREAD_RATE,
+    BTC_SPREAD_PRICE,
     DATABASE_SYMBOL,
     SAVE_NONE_SIGNALS,
     STRATEGY_NAME,
@@ -94,7 +94,7 @@ class BTCUSDSignalStorage:
                 ) from error
             if not entry_price.is_finite() or entry_price <= 0:
                 raise ValueError("Cena sygnału BTC/USD musi być dodatnia.")
-            spread_price = entry_price * BTC_SPREAD_RATE
+            spread_price = BTC_SPREAD_PRICE
 
         return self.repository.save_algorithm_signal(
             DATABASE_SYMBOL,

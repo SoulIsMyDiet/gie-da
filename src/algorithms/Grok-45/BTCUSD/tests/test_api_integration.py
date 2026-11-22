@@ -267,14 +267,14 @@ def test_repository_saves_btc_signal_with_strategy_spread() -> None:
             save_signal=True,
             save_signal_potential=True,
             enqueue_notification=False,
-            spread_price=Decimal("134.00"),
+            spread_price=Decimal("190"),
         )
 
     assert inserted
     spread_lookup.assert_not_called()
     assert cursor.execute.call_count == 3
     assert "INSERT INTO signal_potention" in cursor.execute.call_args_list[2].args[0]
-    assert cursor.execute.call_args_list[2].args[1] == (42, Decimal("134.00"))
+    assert cursor.execute.call_args_list[2].args[1] == (42, Decimal("190"))
 
 
 def test_repository_queries_only_recent_directional_signals() -> None:
