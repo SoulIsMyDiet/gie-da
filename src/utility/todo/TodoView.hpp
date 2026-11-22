@@ -122,6 +122,14 @@ private:
     };
 
     /**
+     * Przechowuje tekst i stan checkboxa zadania podrzędnego.
+     */
+    struct SubtaskCheckboxInfo {
+        std::wstring title;
+        bool completed;
+    };
+
+    /**
      * Pobiera listę i zachowuje dotychczasowe dane, jeśli API zwróci błąd.
      */
     void refresh();
@@ -205,6 +213,7 @@ private:
     HWND parent_ = nullptr;
     HWND addMainTaskButton_ = nullptr;
     HWND scrollBar_ = nullptr;
+    HWND toolTip_ = nullptr;
     bool visible_ = false;
     int scrollPosition_ = 0;
     int contentHeight_ = 0;
@@ -214,5 +223,7 @@ private:
     std::vector<ControlPosition> controlPositions_;
     std::unordered_map<int, ControlAction> controlActions_;
     std::unordered_map<int, MainCheckboxInfo> mainCheckboxes_;
+    std::unordered_map<int, SubtaskCheckboxInfo> subtaskCheckboxes_;
+    std::vector<HWND> toolTipControls_;
     std::string status_;
 };

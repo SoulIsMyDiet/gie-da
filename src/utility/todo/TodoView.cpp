@@ -8,6 +8,7 @@
 #include "ErrorLogger.h"
 #include "../WindowScale.h"
 
+#include <commctrl.h>
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
@@ -24,6 +25,13 @@ constexpr int navigationBottomMargin = 16;
 constexpr wchar_t textDialogClassName[] = L"GieDaTodoTextDialog";
 constexpr int dialogSaveButtonId = 1;
 constexpr int dialogCancelButtonId = 2;
+
+/**
+ * Zmniejsza o połowę wymiary kontrolek To-do z uwzględnieniem skali DPI.
+ */
+int todoSize(HWND window, int baseSize) {
+    return std::max(1, WindowScale::size(window, baseSize) / 2);
+}
 
 /**
  * Przechowuje kontrolki i wynik modalnego okna edycji tekstu.
@@ -109,9 +117,9 @@ LRESULT CALLBACK textDialogProcedure(
     }
 
     if (message == WM_CREATE) {
-        const int margin = WindowScale::size(window, 16);
-        const int labelHeight = WindowScale::size(window, 24);
-        const int buttonHeight = WindowScale::size(window, 34);
+        const int margin = todoSize(window, 16);
+        const int labelHeight = todoSize(window, 24);
+        const int buttonHeight = todoSize(window, 34);
         RECT clientArea{};
         GetClientRect(window, &clientArea);
         const int clientWidth = clientArea.right - clientArea.left;
@@ -138,9 +146,9 @@ LRESULT CALLBACK textDialogProcedure(
         HWND saveButton = CreateWindowExW(
             0, L"BUTTON", L"Zapisz",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            clientWidth - 2 * margin - 2 * WindowScale::size(window, 110),
+            clientWidth - 2 * margin - 2 * todoSize(window, 110),
             clientHeight - margin - buttonHeight,
-            WindowScale::size(window, 110), buttonHeight,
+            todoSize(window, 110), buttonHeight,
             window,
             reinterpret_cast<HMENU>(
                 static_cast<INT_PTR>(dialogSaveButtonId)),
@@ -148,9 +156,9 @@ LRESULT CALLBACK textDialogProcedure(
         HWND cancelButton = CreateWindowExW(
             0, L"BUTTON", L"Anuluj",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-            clientWidth - margin - WindowScale::size(window, 110),
+            clientWidth - margin - todoSize(window, 110),
             clientHeight - margin - buttonHeight,
-            WindowScale::size(window, 110), buttonHeight,
+            todoSize(window, 110), buttonHeight,
             window,
             reinterpret_cast<HMENU>(
                 static_cast<INT_PTR>(dialogCancelButtonId)),
@@ -261,9 +269,9 @@ bool showTextInputDialog(
     if (GetMonitorInfoW(monitor, &monitorInfo)) {
         workArea = monitorInfo.rcWork;
     }
-    const int desiredWidth = WindowScale::size(owner, 560);
+    const int desiredWidth = todoSize(owner, 560);
     const int desiredHeight =
-        WindowScale::size(owner, multiline ? 420 : 190);
+        todoSize(owner, multiline ? 420 : 190);
     const int dialogWidth = std::min(
         desiredWidth,
         static_cast<int>(std::max<LONG>(
@@ -341,6 +349,9 @@ TodoView::TodoView(TodoManager& manager) : manager_(manager) {}
  */
 TodoView::~TodoView() {
     destroyTaskControls();
+    if (toolTip_ != nullptr) {
+        DestroyWindow(toolTip_);
+    }
 }
 
 /**
@@ -349,6 +360,20 @@ TodoView::~TodoView() {
 bool TodoView::create(HINSTANCE instance, HWND parent) {
     instance_ = instance;
     parent_ = parent;
+    INITCOMMONCONTROLSEX commonControls{};
+    commonControls.dwSize = sizeof(commonControls);
+    commonControls.dwICC = ICC_WIN95_CLASSES;
+    if (!InitCommonControlsEx(&commonControls)) {
+        return false;
+    }
+    toolTip_ = CreateWindowExW(
+        WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        parent_, nullptr, instance_, nullptr);
+    if (toolTip_ == nullptr) {
+        return false;
+    }
     addMainTaskButton_ = CreateWindowExW(
         0, L"BUTTON", L"+ Dodaj zadanie główne",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
@@ -441,7 +466,7 @@ bool TodoView::handleScroll(WPARAM scrollCommand) {
     GetScrollInfo(scrollBar_, SB_CTL, &scrollInfo);
 
     int nextPosition = scrollPosition_;
-    const int lineHeight = WindowScale::size(parent_, 44);
+    const int lineHeight = todoSize(parent_, 44);
     const int pageHeight = std::max(
         1, static_cast<int>(scrollInfo.nPage) - lineHeight);
     switch (LOWORD(scrollCommand)) {
@@ -506,35 +531,35 @@ bool TodoView::handleMouseWheel(short wheelDelta) {
 // Front
 void TodoView::draw(HDC deviceContext, RECT& clientArea) const {
     RECT titleBounds = clientArea;
-    titleBounds.left += WindowScale::size(parent_, 24);
-    titleBounds.top += WindowScale::size(parent_, 20);
-    titleBounds.bottom = titleBounds.top + WindowScale::size(parent_, 32);
+    titleBounds.left += todoSize(parent_, 24);
+    titleBounds.top += todoSize(parent_, 20);
+    titleBounds.bottom = titleBounds.top + todoSize(parent_, 32);
     WindowScale::drawText(
         deviceContext, parent_, L"To-do List", titleBounds,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE, 22);
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE, 11);
 
     if (!status_.empty()) {
         std::wstring wideStatus;
         if (convertUtf8ToWide(status_, wideStatus)) {
             RECT statusBounds = clientArea;
-            statusBounds.left += WindowScale::size(parent_, 24);
-            statusBounds.top += WindowScale::size(parent_, 72);
+            statusBounds.left += todoSize(parent_, 24);
+            statusBounds.top += todoSize(parent_, 72);
             statusBounds.bottom = statusBounds.top +
-                WindowScale::size(parent_, 48);
+                todoSize(parent_, 48);
             WindowScale::drawText(
                 deviceContext, parent_, wideStatus, statusBounds,
-                DT_LEFT | DT_WORDBREAK, 14);
+                DT_LEFT | DT_WORDBREAK, 7);
         }
         return;
     }
     if (tasks_.empty()) {
         RECT emptyBounds = clientArea;
-        emptyBounds.left += WindowScale::size(parent_, 24);
-        emptyBounds.top += WindowScale::size(parent_, 118);
-        emptyBounds.bottom = emptyBounds.top + WindowScale::size(parent_, 48);
+        emptyBounds.left += todoSize(parent_, 24);
+        emptyBounds.top += todoSize(parent_, 118);
+        emptyBounds.bottom = emptyBounds.top + todoSize(parent_, 48);
         WindowScale::drawText(
             deviceContext, parent_, L"Brak zadań. Dodaj pierwsze zadanie.",
-            emptyBounds, DT_LEFT | DT_WORDBREAK, 15);
+            emptyBounds, DT_LEFT | DT_WORDBREAK, 8);
     }
 }
 
@@ -553,7 +578,7 @@ bool TodoView::handleDrawItem(const DRAWITEMSTRUCT* drawItem) const {
             drawItem->hDC, &bounds,
             reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
         RECT checkboxBounds = bounds;
-        const int checkboxSize = WindowScale::size(parent_, 18);
+        const int checkboxSize = todoSize(parent_, 18);
         checkboxBounds.right = checkboxBounds.left + checkboxSize;
         checkboxBounds.top += (bounds.bottom - bounds.top - checkboxSize) / 2;
         checkboxBounds.bottom = checkboxBounds.top + checkboxSize;
@@ -565,9 +590,10 @@ bool TodoView::handleDrawItem(const DRAWITEMSTRUCT* drawItem) const {
             drawItem->hDC, &checkboxBounds, DFC_BUTTON, checkboxState);
 
         RECT textBounds = bounds;
-        textBounds.left = checkboxBounds.right + WindowScale::size(parent_, 8);
+        textBounds.left = checkboxBounds.right + todoSize(parent_, 8);
+        OffsetRect(&textBounds, 0, todoSize(parent_, 2));
         HFONT taskFont = CreateFontW(
-            -WindowScale::size(parent_, 16), 0, 0, 0, FW_BOLD,
+            -todoSize(parent_, 16), 0, 0, 0, FW_BOLD,
             FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -587,10 +613,78 @@ bool TodoView::handleDrawItem(const DRAWITEMSTRUCT* drawItem) const {
         return true;
     }
 
+    const auto subtaskCheckbox = subtaskCheckboxes_.find(drawItem->CtlID);
+    if (subtaskCheckbox != subtaskCheckboxes_.end()) {
+        RECT bounds = drawItem->rcItem;
+        FillRect(
+            drawItem->hDC, &bounds,
+            reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+        RECT checkboxBounds = bounds;
+        const int checkboxSize = todoSize(parent_, 18);
+        checkboxBounds.right = checkboxBounds.left + checkboxSize;
+        checkboxBounds.top += (bounds.bottom - bounds.top - checkboxSize) / 2;
+        checkboxBounds.bottom = checkboxBounds.top + checkboxSize;
+        UINT checkboxState = DFCS_BUTTONCHECK;
+        if (subtaskCheckbox->second.completed) {
+            checkboxState |= DFCS_CHECKED;
+        }
+        DrawFrameControl(
+            drawItem->hDC, &checkboxBounds, DFC_BUTTON, checkboxState);
+
+        RECT textBounds = bounds;
+        textBounds.left = checkboxBounds.right + todoSize(parent_, 8);
+        OffsetRect(&textBounds, 0, todoSize(parent_, 1));
+        HFONT taskFont = CreateFontW(
+            -todoSize(parent_, 16), 0, 0, 0, FW_NORMAL,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HGDIOBJ previousFont = taskFont == nullptr
+            ? nullptr
+            : SelectObject(drawItem->hDC, taskFont);
+        DrawTextW(
+            drawItem->hDC,
+            subtaskCheckbox->second.title.c_str(),
+            static_cast<int>(subtaskCheckbox->second.title.size()),
+            &textBounds,
+            DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
+        if (taskFont != nullptr) {
+            SelectObject(drawItem->hDC, previousFont);
+            DeleteObject(taskFont);
+        }
+        return true;
+    }
+
     const auto action = controlActions_.find(drawItem->CtlID);
-    if (action == controlActions_.end() ||
-        (action->second.kind != ActionKind::deleteMainTask &&
-         action->second.kind != ActionKind::deleteSubtask)) {
+    if (action == controlActions_.end()) {
+        return false;
+    }
+    if (action->second.kind == ActionKind::addSubtask) {
+        FillRect(
+            drawItem->hDC, &drawItem->rcItem,
+            reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+        SetBkMode(drawItem->hDC, TRANSPARENT);
+        SetTextColor(drawItem->hDC, RGB(28, 150, 65));
+        HFONT plusFont = CreateFontW(
+            -todoSize(parent_, 28), 0, 0, 0, FW_BOLD,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HGDIOBJ previousFont = plusFont == nullptr
+            ? nullptr
+            : SelectObject(drawItem->hDC, plusFont);
+        RECT plusBounds = drawItem->rcItem;
+        DrawTextW(
+            drawItem->hDC, L"+", 1, &plusBounds,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (plusFont != nullptr) {
+            SelectObject(drawItem->hDC, previousFont);
+            DeleteObject(plusFont);
+        }
+        return true;
+    }
+    if (action->second.kind != ActionKind::deleteMainTask &&
+        action->second.kind != ActionKind::deleteSubtask) {
         return false;
     }
 
@@ -623,18 +717,19 @@ void TodoView::positionControls() {
     RECT clientArea{};
     GetClientRect(parent_, &clientArea);
     const int clientWidth = clientArea.right - clientArea.left;
-    const int buttonX = WindowScale::size(parent_, 24);
-    const int buttonY = WindowScale::size(parent_, 58);
+    const int buttonX = todoSize(parent_, 24);
+    const int buttonY = todoSize(parent_, 58);
     const int buttonWidth = std::min(
-        WindowScale::size(parent_, 230),
+        todoSize(parent_, 230),
         std::max(1, clientWidth - 2 * buttonX));
-    const int buttonHeight = WindowScale::size(parent_, 36);
+    const int buttonHeight = todoSize(parent_, 36);
     MoveWindow(
         addMainTaskButton_, buttonX, buttonY,
         buttonWidth, buttonHeight, TRUE);
-    const int scrollBarWidth = GetSystemMetrics(SM_CXVSCROLL);
-    const int contentTop = WindowScale::size(parent_, 108);
-    const int contentBottom = clientArea.bottom - WindowScale::size(
+    const int scrollBarWidth = std::max(
+        1, GetSystemMetrics(SM_CXVSCROLL) / 2);
+    const int contentTop = todoSize(parent_, 108);
+    const int contentBottom = clientArea.bottom - todoSize(
         parent_, navigationButtonHeight + navigationBottomMargin * 2);
     const int scrollBarX = std::max(
         0, static_cast<int>(clientArea.right) - scrollBarWidth);
@@ -682,17 +777,18 @@ void TodoView::rebuildTaskControls() {
     GetClientRect(parent_, &clientArea);
     const int clientWidth = clientArea.right - clientArea.left;
     const int taskAreaWidth = std::max(
-        1, clientWidth - GetSystemMetrics(SM_CXVSCROLL));
+        1, clientWidth - std::max(
+            1, GetSystemMetrics(SM_CXVSCROLL) / 2));
     const int clientHeight = clientArea.bottom - clientArea.top;
-    const int horizontalPadding = WindowScale::size(parent_, 24);
-    const int rowGap = WindowScale::size(parent_, 10);
-    const int buttonHeight = WindowScale::size(parent_, 30);
-    const int moveButtonWidth = WindowScale::size(parent_, 32);
-    const int hideButtonWidth = WindowScale::size(parent_, 64);
-    const int deleteWidth = WindowScale::size(parent_, 34);
-    const int actionGap = WindowScale::size(parent_, 6);
-    const int contentTop = WindowScale::size(parent_, 108);
-    const int contentBottom = clientHeight - WindowScale::size(
+    const int horizontalPadding = todoSize(parent_, 24);
+    const int rowGap = todoSize(parent_, 10);
+    const int buttonHeight = todoSize(parent_, 30);
+    const int moveButtonWidth = todoSize(parent_, 32);
+    const int hideButtonWidth = todoSize(parent_, 64);
+    const int deleteWidth = todoSize(parent_, 34);
+    const int actionGap = todoSize(parent_, 6);
+    const int contentTop = todoSize(parent_, 108);
+    const int contentBottom = clientHeight - todoSize(
         parent_, navigationButtonHeight + navigationBottomMargin * 2);
     const int viewportHeight = std::max(1, contentBottom - contentTop);
     int rowTop = contentTop;
@@ -709,10 +805,14 @@ void TodoView::rebuildTaskControls() {
             actionGap * 3;
         const int mainActionsX =
             taskAreaWidth - horizontalPadding - mainActionsWidth;
+        const int addSubtaskButtonSize = todoSize(parent_, 40);
+        const int addSubtaskButtonX =
+            mainActionsX - rowGap - addSubtaskButtonSize;
         const int mainCheckboxWidth = std::max(
-            1, mainActionsX - horizontalPadding - rowGap);
-        const int mainRowHeight =
-            measureTextHeight(wideTitle, mainCheckboxWidth);
+            1, addSubtaskButtonX - horizontalPadding - rowGap);
+        const int mainRowHeight = std::max(
+            measureTextHeight(wideTitle, mainCheckboxWidth),
+            addSubtaskButtonSize);
         const int mainCheckboxId = allocateControlId();
         if (mainCheckboxId != 0) {
             HWND mainCheckbox = CreateWindowExW(
@@ -737,6 +837,17 @@ void TodoView::rebuildTaskControls() {
                 status_ = "Nie udało się utworzyć checkboxa zadania głównego.";
             }
         }
+
+        const int addSubtaskButtonY =
+            rowTop + (mainRowHeight - addSubtaskButtonSize) / 2;
+        HWND addSubtaskButton = createActionButton(
+            L"+", addSubtaskButtonX,
+            addSubtaskButtonY - scrollPosition_,
+            addSubtaskButtonSize, addSubtaskButtonSize,
+            ActionKind::addSubtask, task.id, true);
+        addPositionedControl(
+            addSubtaskButton, addSubtaskButtonX, addSubtaskButtonY,
+            addSubtaskButtonSize, addSubtaskButtonSize);
 
         int mainActionX = mainActionsX;
         HWND moveUpButton = createActionButton(
@@ -777,21 +888,7 @@ void TodoView::rebuildTaskControls() {
             mainDeleteButton, mainActionX, rowTop,
             deleteWidth, buttonHeight);
 
-        rowTop += mainRowHeight + WindowScale::size(parent_, 4);
-        const int addSubtaskX =
-            horizontalPadding + WindowScale::size(parent_, 24);
-        const int addSubtaskWidth = std::min(
-            WindowScale::size(parent_, 210),
-            std::max(1, taskAreaWidth - addSubtaskX - horizontalPadding));
-        HWND addSubtaskButton = createActionButton(
-            L"+ Dodaj zadanie podrzędne",
-            addSubtaskX, rowTop - scrollPosition_,
-            addSubtaskWidth, buttonHeight,
-            ActionKind::addSubtask, task.id);
-        addPositionedControl(
-            addSubtaskButton, addSubtaskX, rowTop,
-            addSubtaskWidth, buttonHeight);
-        rowTop += buttonHeight + WindowScale::size(parent_, 4);
+        rowTop += mainRowHeight + todoSize(parent_, 4);
 
         const std::size_t visibleSubtaskCount = static_cast<std::size_t>(
             std::count_if(
@@ -809,9 +906,9 @@ void TodoView::rebuildTaskControls() {
             }
 
             const int subtaskX =
-                horizontalPadding + WindowScale::size(parent_, 34);
-            const int desiredPromptWidth = WindowScale::size(parent_, 132);
-            const int desiredDescriptionWidth = WindowScale::size(parent_, 132);
+                horizontalPadding + todoSize(parent_, 34);
+            const int desiredPromptWidth = todoSize(parent_, 132);
+            const int desiredDescriptionWidth = todoSize(parent_, 132);
             const int actionRowWidth = std::max(
                 1, taskAreaWidth - subtaskX - horizontalPadding);
             const int fixedActionWidth =
@@ -830,7 +927,7 @@ void TodoView::rebuildTaskControls() {
                 taskAreaWidth - horizontalPadding - subtaskX -
                 horizontalPadding - actionsWidth - rowGap;
             const bool stackActions =
-                availableWidth < WindowScale::size(parent_, 140);
+                availableWidth < todoSize(parent_, 140);
             const int checkboxWidth = stackActions
                 ? actionRowWidth
                 : availableWidth;
@@ -839,10 +936,9 @@ void TodoView::rebuildTaskControls() {
             const int checkboxId = allocateControlId();
             if (checkboxId != 0) {
                 HWND checkbox = CreateWindowExW(
-                    0, L"BUTTON", wideSubtaskTitle.c_str(),
+                    0, L"BUTTON", L"",
                     WS_CHILD | (visible_ ? WS_VISIBLE : 0) |
-                        WS_TABSTOP | BS_AUTOCHECKBOX |
-                        BS_MULTILINE | BS_LEFT,
+                        WS_TABSTOP | BS_OWNERDRAW,
                     subtaskX, rowTop - scrollPosition_,
                     checkboxWidth, subtaskTextHeight,
                     parent_,
@@ -850,9 +946,6 @@ void TodoView::rebuildTaskControls() {
                         static_cast<INT_PTR>(checkboxId)),
                     instance_, nullptr);
                 if (checkbox != nullptr) {
-                    SendMessageW(
-                        checkbox, BM_SETCHECK,
-                        subtask.completed ? BST_CHECKED : BST_UNCHECKED, 0);
                     taskControls_.push_back(checkbox);
                     controlPositions_.push_back(
                         {checkbox, subtaskX, rowTop,
@@ -860,6 +953,10 @@ void TodoView::rebuildTaskControls() {
                     controlActions_.emplace(
                         checkboxId,
                         ControlAction{ActionKind::toggleSubtask, subtask.id});
+                    subtaskCheckboxes_.emplace(
+                        checkboxId,
+                        SubtaskCheckboxInfo{
+                            wideSubtaskTitle, subtask.completed});
                 } else {
                     status_ =
                         "Nie udało się utworzyć checkboxa zadania podrzędnego.";
@@ -868,7 +965,7 @@ void TodoView::rebuildTaskControls() {
 
             int actionsTop = rowTop;
             if (stackActions) {
-                actionsTop += subtaskTextHeight + WindowScale::size(parent_, 4);
+                actionsTop += subtaskTextHeight + todoSize(parent_, 4);
             } else {
                 actionsTop += std::max(
                     0, (subtaskTextHeight - buttonHeight) / 2);
@@ -956,7 +1053,7 @@ void TodoView::rebuildTaskControls() {
 
             rowTop += (stackActions
                     ? subtaskTextHeight + buttonHeight +
-                        WindowScale::size(parent_, 4)
+                        todoSize(parent_, 4)
                     : std::max(subtaskTextHeight, buttonHeight)) +
                 rowGap;
             ++visibleSubtaskIndex;
@@ -1032,9 +1129,12 @@ void TodoView::performAction(
             addSubtask(action.taskId);
             return;
         case ActionKind::toggleSubtask: {
-            HWND checkbox = GetDlgItem(parent_, controlId);
-            const bool completed =
-                SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            const auto checkbox = subtaskCheckboxes_.find(controlId);
+            if (checkbox == subtaskCheckboxes_.end()) {
+                showError("Nie można odczytać stanu klikniętego podzadania.");
+                return;
+            }
+            const bool completed = !checkbox->second.completed;
             if (!manager_.setSubtaskCompleted(
                     action.taskId, completed, error)) {
                 showError(error);
@@ -1226,6 +1326,24 @@ HWND TodoView::createActionButton(
         reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
     controlActions_.emplace(
         controlId, ControlAction{kind, taskId});
+    if (kind == ActionKind::addSubtask && toolTip_ != nullptr) {
+        TOOLINFOW toolInfo{};
+        toolInfo.cbSize = sizeof(toolInfo);
+        toolInfo.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        toolInfo.hwnd = parent_;
+        toolInfo.uId = reinterpret_cast<UINT_PTR>(control);
+        toolInfo.lpszText =
+            const_cast<LPWSTR>(L"Dodaj zadanie podrzędne");
+        if (!SendMessageW(
+                toolTip_, TTM_ADDTOOLW, 0,
+                reinterpret_cast<LPARAM>(&toolInfo))) {
+            controlActions_.erase(controlId);
+            DestroyWindow(control);
+            status_ = "Nie udało się dodać podpowiedzi przycisku dodawania.";
+            return nullptr;
+        }
+        toolTipControls_.push_back(control);
+    }
     taskControls_.push_back(control);
     return control;
 }
@@ -1245,6 +1363,17 @@ void TodoView::addPositionedControl(
  * Zwalnia kontrolki wierszy i przygotowuje mapy do kolejnego odczytu.
  */
 void TodoView::destroyTaskControls() {
+    for (HWND control : toolTipControls_) {
+        TOOLINFOW toolInfo{};
+        toolInfo.cbSize = sizeof(toolInfo);
+        toolInfo.uFlags = TTF_IDISHWND;
+        toolInfo.hwnd = parent_;
+        toolInfo.uId = reinterpret_cast<UINT_PTR>(control);
+        SendMessageW(
+            toolTip_, TTM_DELTOOLW, 0,
+            reinterpret_cast<LPARAM>(&toolInfo));
+    }
+    toolTipControls_.clear();
     for (HWND control : taskControls_) {
         if (control != nullptr) {
             DestroyWindow(control);
@@ -1254,6 +1383,7 @@ void TodoView::destroyTaskControls() {
     controlPositions_.clear();
     controlActions_.clear();
     mainCheckboxes_.clear();
+    subtaskCheckboxes_.clear();
     nextControlId_ = 2000;
 }
 
@@ -1275,7 +1405,7 @@ int TodoView::measureTextHeight(
     const std::wstring& text, int width) const {
     HDC deviceContext = GetDC(parent_);
     if (deviceContext == nullptr) {
-        return WindowScale::size(parent_, 42);
+        return todoSize(parent_, 42);
     }
     RECT bounds{0, 0, std::max(1, width), 0};
     DrawTextW(
@@ -1283,8 +1413,8 @@ int TodoView::measureTextHeight(
         &bounds, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
     ReleaseDC(parent_, deviceContext);
     return std::max(
-        WindowScale::size(parent_, 38),
-        static_cast<int>(bounds.bottom) + WindowScale::size(parent_, 12));
+        todoSize(parent_, 38),
+        static_cast<int>(bounds.bottom) + todoSize(parent_, 12));
 }
 
 /**
