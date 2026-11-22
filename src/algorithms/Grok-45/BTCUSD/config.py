@@ -28,8 +28,8 @@ SHORT_RSI_MAXIMUM = 48.0
 # Przyjęty spread to 0,2% ceny wejścia; jest to założenie, a nie bieżące kwotowanie.
 BTC_SPREAD_RATE = Decimal("0.002")
 
-# Ustaw tę flagę na False, aby zapisywać tylko sygnały LONG i SHORT.
-SAVE_NONE_SIGNALS = True
+# Sygnały NONE są pomijane w tabeli signals; ewaluacja świecy nadal jest zapisywana.
+SAVE_NONE_SIGNALS = False
 
 # Powiadomienia nie są wymagane do zapisu sygnału; można je włączyć osobno.
 BEEP_ENABLED = False

@@ -225,8 +225,8 @@ def test_short_history_and_open_candle_do_not_generate_entries() -> None:
         )
 
 
-def test_storage_saves_none_and_keeps_signal_json_compact() -> None:
-    """Flaga centralnie steruje zapisem NONE i adapter nie dodaje pól JSON."""
+def test_storage_skips_none_and_keeps_signal_json_compact() -> None:
+    """Adapter nie zapisuje NONE ani nie dodaje zbędnych pól JSON."""
     repository = Mock()
     storage = BTCUSDSignalStorage(repository)
     payload = {
@@ -266,8 +266,8 @@ def test_storage_saves_none_and_keeps_signal_json_compact() -> None:
         },
         60,
         record_evaluation=True,
-        save_signal=True,
-        save_none_signal=True,
+        save_signal=False,
+        save_none_signal=False,
         save_signal_potential=True,
         enqueue_notification=False,
         spread_price=None,
@@ -302,8 +302,10 @@ def test_storage_uses_hypothetical_spread_for_directional_signals() -> None:
     ] == Decimal("134.0000")
 
 
-def test_none_persistence_can_be_disabled_with_one_flag() -> None:
-    """Wyłączenie jednej flagi zapisuje ewaluację bez rekordu sygnału NONE."""
+def test_none_signals_are_not_saved_by_default() -> None:
+    """Zapisuje ewaluację, ale nie tworzy rekordu sygnału NONE."""
+    assert storage_module.SAVE_NONE_SIGNALS is False
+
     repository = Mock()
     storage = BTCUSDSignalStorage(repository)
     result = {
@@ -320,10 +322,12 @@ def test_none_persistence_can_be_disabled_with_one_flag() -> None:
         },
     }
 
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr(storage_module, "SAVE_NONE_SIGNALS", False)
-        storage.save(result, 60)
+    storage.save(result, 60)
 
+    assert (
+        repository.save_algorithm_signal.call_args.kwargs["record_evaluation"]
+        is True
+    )
     assert repository.save_algorithm_signal.call_args.kwargs["save_signal"] is False
     assert (
         repository.save_algorithm_signal.call_args.kwargs["save_none_signal"]
