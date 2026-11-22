@@ -2370,6 +2370,7 @@ class MarketDataRepository:
         save_none_signal: bool = False,
         save_signal_potential: bool = True,
         enqueue_notification: bool = True,
+        spread_price: Decimal | None = None,
     ) -> bool:
         """Zapisuje wynik strategii w jednej transakcji MySQL.
 
@@ -2381,8 +2382,9 @@ class MarketDataRepository:
             record_evaluation: Czy trwale oznaczyć świecę jako ocenioną.
             save_signal: Czy zapisać rekord również w tabeli ``signals``.
             save_none_signal: Czy zapisać ``NONE`` zamiast tylko ewaluacji.
-            save_signal_potential: Czy liczyć potencjał z skonfigurowanym spreadem.
+            save_signal_potential: Czy zapisać potencjał z podanym lub domyślnym spreadem.
             enqueue_notification: Czy po nowym zapisie przygotować dźwięk.
+            spread_price: Opcjonalny spread dla danego sygnału, w jednostkach ceny.
 
         Returns:
             ``True`` tylko wtedy, gdy powstał nowy rekord w ``signals``.
@@ -2424,11 +2426,19 @@ class MarketDataRepository:
             allow_nan=False,
             separators=(",", ":"),
         )
-        potential_spread = (
-            SignalPotentialCalculator.spread_for_product(product)
-            if save_signal and direction != "NONE" and save_signal_potential
-            else None
-        )
+        potential_spread = None
+        if save_signal and direction != "NONE" and save_signal_potential:
+            if spread_price is None:
+                potential_spread = SignalPotentialCalculator.spread_for_product(
+                    product
+                )
+            else:
+                try:
+                    potential_spread = Decimal(str(spread_price))
+                except (InvalidOperation, TypeError, ValueError) as error:
+                    raise ValueError("Spread sygnału jest nieprawidłowy.") from error
+                if not potential_spread.is_finite() or potential_spread < 0:
+                    raise ValueError("Spread sygnału musi być skończony i nieujemny.")
 
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
