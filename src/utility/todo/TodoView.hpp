@@ -201,7 +201,8 @@ private:
     /**
      * Mierzy wysokość zawijanego tekstu w aktualnej szerokości wiersza.
      */
-    int measureTextHeight(const std::wstring& text, int width) const;
+    int measureTextHeight(
+        const std::wstring& text, int width, bool mainTask) const;
 
     /**
      * Zapisuje błąd do logu i pokazuje jego treść użytkownikowi.

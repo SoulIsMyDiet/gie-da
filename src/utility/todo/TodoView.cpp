@@ -337,6 +337,66 @@ bool showTextInputDialog(
     return true;
 }
 
+/**
+ * Rysuje checkbox i centruje jego nazwę względem środka pola wyboru.
+ */
+void drawTaskCheckbox(
+    HDC deviceContext,
+    HWND window,
+    RECT bounds,
+    const std::wstring& title,
+    bool completed,
+    int fontWeight) {
+    FillRect(
+        deviceContext, &bounds, GetSysColorBrush(COLOR_WINDOW));
+
+    RECT checkboxBounds = bounds;
+    const int checkboxSize = todoSize(window, 18);
+    checkboxBounds.right = checkboxBounds.left + checkboxSize;
+    checkboxBounds.top +=
+        (bounds.bottom - bounds.top - checkboxSize) / 2;
+    checkboxBounds.bottom = checkboxBounds.top + checkboxSize;
+    UINT checkboxState = DFCS_BUTTONCHECK;
+    if (completed) {
+        checkboxState |= DFCS_CHECKED;
+    }
+    DrawFrameControl(
+        deviceContext, &checkboxBounds, DFC_BUTTON, checkboxState);
+
+    HFONT taskFont = CreateFontW(
+        -todoSize(window, 16), 0, 0, 0, fontWeight,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ previousFont = taskFont == nullptr
+        ? nullptr
+        : SelectObject(deviceContext, taskFont);
+
+    RECT labelBounds = bounds;
+    labelBounds.left = checkboxBounds.right + todoSize(window, 8);
+    labelBounds.right = std::max(labelBounds.left + 1, labelBounds.right);
+    RECT measuredBounds{
+        0, 0, labelBounds.right - labelBounds.left, 0};
+    DrawTextW(
+        deviceContext, title.c_str(), static_cast<int>(title.size()),
+        &measuredBounds, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+
+    const LONG labelHeight = std::max<LONG>(
+        1, measuredBounds.bottom - measuredBounds.top);
+    const LONG boundsHeight = bounds.bottom - bounds.top;
+    labelBounds.top =
+        bounds.top + std::max<LONG>(0, (boundsHeight - labelHeight) / 2);
+    labelBounds.bottom = labelBounds.top + labelHeight;
+    DrawTextW(
+        deviceContext, title.c_str(), static_cast<int>(title.size()),
+        &labelBounds, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+
+    if (taskFont != nullptr) {
+        SelectObject(deviceContext, previousFont);
+        DeleteObject(taskFont);
+    }
+}
+
 } // namespace
 
 /**
@@ -573,85 +633,19 @@ bool TodoView::handleDrawItem(const DRAWITEMSTRUCT* drawItem) const {
 
     const auto mainCheckbox = mainCheckboxes_.find(drawItem->CtlID);
     if (mainCheckbox != mainCheckboxes_.end()) {
-        RECT bounds = drawItem->rcItem;
-        FillRect(
-            drawItem->hDC, &bounds,
-            reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-        RECT checkboxBounds = bounds;
-        const int checkboxSize = todoSize(parent_, 18);
-        checkboxBounds.right = checkboxBounds.left + checkboxSize;
-        checkboxBounds.top += (bounds.bottom - bounds.top - checkboxSize) / 2;
-        checkboxBounds.bottom = checkboxBounds.top + checkboxSize;
-        UINT checkboxState = DFCS_BUTTONCHECK;
-        if (mainCheckbox->second.completed) {
-            checkboxState |= DFCS_CHECKED;
-        }
-        DrawFrameControl(
-            drawItem->hDC, &checkboxBounds, DFC_BUTTON, checkboxState);
-
-        RECT textBounds = bounds;
-        textBounds.left = checkboxBounds.right + todoSize(parent_, 8);
-        OffsetRect(&textBounds, 0, todoSize(parent_, 2));
-        HFONT taskFont = CreateFontW(
-            -todoSize(parent_, 16), 0, 0, 0, FW_BOLD,
-            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HGDIOBJ previousFont = taskFont == nullptr
-            ? nullptr
-            : SelectObject(drawItem->hDC, taskFont);
-        DrawTextW(
-            drawItem->hDC,
-            mainCheckbox->second.title.c_str(),
-            static_cast<int>(mainCheckbox->second.title.size()),
-            &textBounds,
-            DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
-        if (taskFont != nullptr) {
-            SelectObject(drawItem->hDC, previousFont);
-            DeleteObject(taskFont);
-        }
+        drawTaskCheckbox(
+            drawItem->hDC, parent_, drawItem->rcItem,
+            mainCheckbox->second.title, mainCheckbox->second.completed,
+            FW_BOLD);
         return true;
     }
 
     const auto subtaskCheckbox = subtaskCheckboxes_.find(drawItem->CtlID);
     if (subtaskCheckbox != subtaskCheckboxes_.end()) {
-        RECT bounds = drawItem->rcItem;
-        FillRect(
-            drawItem->hDC, &bounds,
-            reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-        RECT checkboxBounds = bounds;
-        const int checkboxSize = todoSize(parent_, 18);
-        checkboxBounds.right = checkboxBounds.left + checkboxSize;
-        checkboxBounds.top += (bounds.bottom - bounds.top - checkboxSize) / 2;
-        checkboxBounds.bottom = checkboxBounds.top + checkboxSize;
-        UINT checkboxState = DFCS_BUTTONCHECK;
-        if (subtaskCheckbox->second.completed) {
-            checkboxState |= DFCS_CHECKED;
-        }
-        DrawFrameControl(
-            drawItem->hDC, &checkboxBounds, DFC_BUTTON, checkboxState);
-
-        RECT textBounds = bounds;
-        textBounds.left = checkboxBounds.right + todoSize(parent_, 8);
-        OffsetRect(&textBounds, 0, todoSize(parent_, 1));
-        HFONT taskFont = CreateFontW(
-            -todoSize(parent_, 16), 0, 0, 0, FW_NORMAL,
-            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HGDIOBJ previousFont = taskFont == nullptr
-            ? nullptr
-            : SelectObject(drawItem->hDC, taskFont);
-        DrawTextW(
-            drawItem->hDC,
-            subtaskCheckbox->second.title.c_str(),
-            static_cast<int>(subtaskCheckbox->second.title.size()),
-            &textBounds,
-            DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
-        if (taskFont != nullptr) {
-            SelectObject(drawItem->hDC, previousFont);
-            DeleteObject(taskFont);
-        }
+        drawTaskCheckbox(
+            drawItem->hDC, parent_, drawItem->rcItem,
+            subtaskCheckbox->second.title,
+            subtaskCheckbox->second.completed, FW_NORMAL);
         return true;
     }
 
@@ -811,7 +805,11 @@ void TodoView::rebuildTaskControls() {
         const int mainCheckboxWidth = std::max(
             1, addSubtaskButtonX - horizontalPadding - rowGap);
         const int mainRowHeight = std::max(
-            measureTextHeight(wideTitle, mainCheckboxWidth),
+            measureTextHeight(
+                wideTitle,
+                std::max(
+                    1, mainCheckboxWidth - todoSize(parent_, 26)),
+                true),
             addSubtaskButtonSize);
         const int mainCheckboxId = allocateControlId();
         if (mainCheckboxId != 0) {
@@ -932,7 +930,10 @@ void TodoView::rebuildTaskControls() {
                 ? actionRowWidth
                 : availableWidth;
             const int subtaskTextHeight =
-                measureTextHeight(wideSubtaskTitle, checkboxWidth);
+                measureTextHeight(
+                    wideSubtaskTitle,
+                    std::max(1, checkboxWidth - todoSize(parent_, 26)),
+                    false);
             const int checkboxId = allocateControlId();
             if (checkboxId != 0) {
                 HWND checkbox = CreateWindowExW(
@@ -1402,15 +1403,29 @@ int TodoView::allocateControlId() {
  * Oblicza wysokość wielowierszowego tekstu przy bieżącej szerokości wiersza.
  */
 int TodoView::measureTextHeight(
-    const std::wstring& text, int width) const {
+    const std::wstring& text, int width, bool mainTask) const {
     HDC deviceContext = GetDC(parent_);
     if (deviceContext == nullptr) {
         return todoSize(parent_, 42);
     }
+
+    HFONT taskFont = CreateFontW(
+        -todoSize(parent_, 16), 0, 0, 0,
+        mainTask ? FW_BOLD : FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ previousFont = taskFont == nullptr
+        ? nullptr
+        : SelectObject(deviceContext, taskFont);
     RECT bounds{0, 0, std::max(1, width), 0};
     DrawTextW(
         deviceContext, text.c_str(), static_cast<int>(text.size()),
         &bounds, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+    if (taskFont != nullptr) {
+        SelectObject(deviceContext, previousFont);
+        DeleteObject(taskFont);
+    }
     ReleaseDC(parent_, deviceContext);
     return std::max(
         todoSize(parent_, 38),
