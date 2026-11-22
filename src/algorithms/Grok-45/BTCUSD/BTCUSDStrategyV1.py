@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 STRATEGY_CONTEXT = """
-BTCUSD 1m Micro Strategy V1
-- Timeframe: 1 minute
-- Max hold: ~20 minutes
-- LONG: EMA8 > EMA21 + Close > EMA8 + RSI9 52-72 + Volume spike (>1.35x SMA20) + Breakout highest close of last 6 candles + Bullish candle with body > 0.35*ATR14
-- SHORT: mirror conditions (EMA8 < EMA21, RSI9 28-48, lowest close breakout, bearish body)
-- Filters: volume confirmation + momentum + short-term structure breakout
-- Designed for high-probability short-term entries on BTC/USD
+Strategia mikrotransakcji BTC/USD M1 V1
+- Interwał: 1 minuta
+- Horyzont oceny potencjału: około 20 minut
+- LONG: EMA8 > EMA21 + zamknięcie > EMA8 + RSI9 52-72 + wybicie najwyższego zamknięcia z 6 świec + wzrostowy korpus > 0,35*ATR14
+- SHORT: warunki odwrotne (EMA8 < EMA21, RSI9 28-48, wybicie najniższego zamknięcia, spadkowy korpus)
+- Filtry: momentum i krótkoterminowe wybicie struktury ceny
+- Wolumen jest ignorowany, ponieważ źródło Twelve Data zwraca null
 """
 
 import logging
@@ -35,14 +35,11 @@ from .config import (
     RSI_PERIOD,
     SHORT_RSI_MAXIMUM,
     SHORT_RSI_MINIMUM,
-    VOLUME_SMA_PERIOD,
-    VOLUME_SPIKE_MULTIPLIER,
 )
-from .indicators import atr_wilder, ema_series, rsi_wilder, volume_sma
+from .indicators import atr_wilder, ema_series, rsi_wilder
 
 WARSAW_TIMEZONE = ZoneInfo("Europe/Warsaw")
 UTC = timezone.utc
-logger = logging.getLogger(__name__)
 Candle = dict[str, Any]
 
 
@@ -186,12 +183,10 @@ class BTCUSDStrategyV1:
             )
 
         closes = [float(candle["close"]) for candle in candles]
-        volumes = [float(candle["volume"]) for candle in candles]
         indicators = {
             "ema_fast": ema_series(closes, EMA_FAST_PERIOD)[-1],
             "ema_slow": ema_series(closes, EMA_SLOW_PERIOD)[-1],
             "rsi": rsi_wilder(closes, RSI_PERIOD),
-            "volume_sma": volume_sma(volumes, VOLUME_SMA_PERIOD),
             "atr": atr_wilder(candles, ATR_PERIOD),
         }
         if any(value is None for value in indicators.values()):
@@ -242,24 +237,18 @@ class BTCUSDStrategyV1:
         Args:
             current: Najnowsza zweryfikowana świeca.
             previous_closes: Zamknięcia sześciu świec przed bieżącą.
-            indicators: Ostatnie wartości EMA, RSI, SMA wolumenu i ATR.
+            indicators: Ostatnie wartości EMA, RSI i ATR.
 
         Returns:
             Nazwane warunki LONG i SHORT, gotowe do połączenia operatorem AND.
         """
         close = float(current["close"])
         open_price = float(current["open"])
-        volume = float(current["volume"])
         body = abs(close - open_price)
         ema_fast = indicators["ema_fast"]
         ema_slow = indicators["ema_slow"]
         rsi = indicators["rsi"]
-        volume_average = indicators["volume_sma"]
         atr = indicators["atr"]
-        volume_spike = (
-            volume_average is not None
-            and volume > VOLUME_SPIKE_MULTIPLIER * volume_average
-        )
         body_large_enough = (
             atr is not None and body > MINIMUM_BODY_ATR_MULTIPLIER * atr
         )
@@ -276,7 +265,6 @@ class BTCUSDStrategyV1:
                     rsi is not None
                     and LONG_RSI_MINIMUM <= rsi <= LONG_RSI_MAXIMUM
                 ),
-                "volume_spike": volume_spike,
                 "breakout": close > max(previous_closes),
                 "candle_direction": close > open_price,
                 "body_large_enough": body_large_enough,
@@ -292,7 +280,6 @@ class BTCUSDStrategyV1:
                     rsi is not None
                     and SHORT_RSI_MINIMUM <= rsi <= SHORT_RSI_MAXIMUM
                 ),
-                "volume_spike": volume_spike,
                 "breakout": close < min(previous_closes),
                 "candle_direction": close < open_price,
                 "body_large_enough": body_large_enough,
@@ -326,8 +313,6 @@ class BTCUSDStrategyV1:
             for direction in ("long", "short")
         ):
             failed_filters.append("brak wybicia z ostatnich 6 świec")
-        if not conditions["long"]["volume_spike"]:
-            failed_filters.append("wolumen nie przekracza 1,35 x SMA20")
         if not any(
             conditions[direction]["candle_direction"]
             and conditions[direction]["body_large_enough"]
@@ -352,7 +337,7 @@ class BTCUSDStrategyV1:
             Zweryfikowane świece w kolejności UTC od najstarszej.
 
         Raises:
-            ValueError: Gdy świece, czasy, ceny lub wolumeny są niepoprawne.
+            ValueError: Gdy świece, czasy albo ceny są niepoprawne.
         """
         records = cls._to_records(candles)
         normalized: list[Candle] = []
@@ -375,19 +360,6 @@ class BTCUSDStrategyV1:
                     "Świeca musi zawierać poprawne wartości OHLC."
                 ) from error
 
-            try:
-                volume_value = candle["volume"]
-                if isinstance(volume_value, bool):
-                    raise ValueError("Wolumen nie może być wartością logiczną.")
-                volume = float(volume_value)
-            except (KeyError, TypeError, ValueError, OverflowError) as error:
-                logger.error(
-                    "Odrzucono świecę BTC/USD z brakującym lub niepoprawnym "
-                    "wolumenem: %r.",
-                    candle.get("volume"),
-                )
-                raise ValueError("Świeca zawiera nieprawidłowy wolumen.") from error
-
             if (
                 not all(isfinite(value) and value > 0 for value in prices)
                 or prices[1] < max(prices[0], prices[3])
@@ -395,21 +367,15 @@ class BTCUSDStrategyV1:
                 or prices[2] > prices[1]
             ):
                 raise ValueError("Świeca zawiera nieprawidłowe wartości OHLC.")
-            if not isfinite(volume) or volume < 0:
-                logger.error(
-                    "Odrzucono świecę BTC/USD z brakującym lub niepoprawnym "
-                    "wolumenem: %r.",
-                    volume_value,
-                )
-                raise ValueError("Świeca zawiera nieprawidłowy wolumen.")
 
+            # Wolumen z Twelve Data jest niedostępny, więc nie wpływa na sygnał.
+            candle.pop("volume", None)
             candle.update(
                 {
                     "open": prices[0],
                     "high": prices[1],
                     "low": prices[2],
                     "close": prices[3],
-                    "volume": volume,
                 }
             )
             normalized.append(candle)

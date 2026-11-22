@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -110,7 +109,7 @@ def test_rules_generate_expected_signal_and_exact_json(direction: str) -> None:
     )
     assert STRATEGY_NAME == "Grok-45/BTCUSDStrategyV1"
     assert DATABASE_SYMBOL == "BTC/USD"
-    assert "BTCUSD 1m Micro Strategy V1" in STRATEGY_CONTEXT
+    assert "Strategia mikrotransakcji BTC/USD M1 V1" in STRATEGY_CONTEXT
     json.dumps(payload, allow_nan=False)
 
 
@@ -135,15 +134,17 @@ def test_dataframe_input_returns_only_the_required_signal_fields() -> None:
     assert signal["signal"] == "LONG"
 
 
-def test_none_reason_explains_blocking_conditions() -> None:
-    """Brak wolumenu wybiciowego kończy się NONE z krótkim powodem."""
+@pytest.mark.parametrize("volume", [None, float("nan"), -1.0, True])
+def test_invalid_volume_is_ignored_for_btc_signals(volume) -> None:
+    """Nieobecny lub błędny wolumen nie blokuje sygnału BTC/USD."""
     candles = build_trending_candles("LONG")
-    candles[-1]["volume"] = 100.0
+    for candle in candles:
+        candle["volume"] = volume
 
     result = evaluate(candles)
 
-    assert result["signal"] == "NONE"
-    assert "wolumen" in result["signal_parameters"]["reason"]
+    assert result["signal"] == "LONG"
+    assert "wolumen" not in result["signal_parameters"]["reason"].lower()
     assert set(result["signal_parameters"]) == {
         "price",
         "signal",
@@ -207,19 +208,6 @@ def test_ambiguous_or_nonexistent_warsaw_time_is_rejected(
 
     with pytest.raises(ValueError, match="Lokalny czas"):
         BTCUSDStrategyV1().evaluate(candles, now=datetime.now(UTC))
-
-
-@pytest.mark.parametrize("volume", [None, float("nan"), -1.0, True])
-def test_invalid_volume_is_rejected_and_logged(volume, caplog) -> None:
-    """Niepoprawny wolumen zatrzymuje strategię i trafia do dziennika błędów."""
-    candles = build_trending_candles("LONG")
-    candles[-1]["volume"] = volume
-
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(ValueError, match="wolumen"):
-            evaluate(candles)
-
-    assert "niepoprawnym wolumenem" in caplog.text
 
 
 def test_short_history_and_open_candle_do_not_generate_entries() -> None:
