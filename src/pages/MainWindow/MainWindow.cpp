@@ -8,7 +8,9 @@
 #include "../WindowScale.h"
 
 #include <algorithm>
+#include <array>
 #include <exception>
+#include <limits>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -21,6 +23,7 @@ constexpr int reportsButtonId = 1001;
 constexpr int candleGapsButtonId = 1002;
 constexpr int signalsButtonId = 1003;
 constexpr int transactionsButtonId = 1004;
+constexpr int todoListButtonId = 1005;
 constexpr int reportsButtonWidth = 140;
 constexpr int reportsButtonHeight = 36;
 constexpr int reportsButtonGap = 12;
@@ -36,7 +39,39 @@ void showErrorMessage(HWND owner, const wchar_t* message) {
     MessageBoxW(owner, message, L"Błąd", MB_ICONERROR);
 }
 
+/**
+ * Konwertuje nazwę widoku UTF-8 do tekstu Unicode przycisku Windows.
+ */
+bool convertUtf8ToWide(
+    const std::string& text, std::wstring& convertedText) {
+    if (text.empty()) {
+        convertedText.clear();
+        return true;
+    }
+    if (text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    const int requiredCharacters = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+        static_cast<int>(text.size()), nullptr, 0);
+    if (requiredCharacters == 0) {
+        return false;
+    }
+    convertedText.resize(static_cast<std::size_t>(requiredCharacters));
+    return MultiByteToWideChar(
+               CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+               static_cast<int>(text.size()), convertedText.data(),
+               requiredCharacters) == requiredCharacters;
+}
+
 } // namespace
+
+/**
+ * Tworzy widok To-do i harmonogram zależne od wspólnego managera.
+ */
+MainWindow::MainWindow()
+    : todoView_(todoManager_),
+      todoScheduler_(todoManager_, viewRegistry_) {}
 
 MainWindow::~MainWindow() {
     if (navigationButtonFont_ != nullptr) {
@@ -153,11 +188,12 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE:
             return onCreate() ? 0 : -1;
         case WM_SIZE:
-            positionReportsButton();
+            positionNavigationButtons();
             reportsPage_.positionControls();
             candleGapsPage_.positionControls();
             signalsPage_.positionControls();
             transactionsPage_.positionControls();
+            todoView_.positionControls();
             return 0;
         case WM_COMMAND:
             if (reportsPage_.handleCommand(
@@ -176,25 +212,31 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
             }
-            if (LOWORD(wParam) == reportsButtonId &&
-                HIWORD(wParam) == BN_CLICKED) {
-                onReportsClicked();
+            if (todoView_.handleCommand(
+                    LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
             }
-            if (LOWORD(wParam) == candleGapsButtonId &&
-                HIWORD(wParam) == BN_CLICKED) {
-                onCandleGapsClicked();
+            if (HIWORD(wParam) == BN_CLICKED &&
+                viewRegistry_.findByCommandId(LOWORD(wParam)) != nullptr) {
+                onNavigationClicked(LOWORD(wParam));
                 return 0;
             }
-            if (LOWORD(wParam) == signalsButtonId &&
-                HIWORD(wParam) == BN_CLICKED) {
-                onSignalsClicked();
+            break;
+        case WM_VSCROLL:
+            if (todoView_.handleScroll(wParam)) {
                 return 0;
             }
-            if (LOWORD(wParam) == transactionsButtonId &&
-                HIWORD(wParam) == BN_CLICKED) {
-                onTransactionsClicked();
+            break;
+        case WM_MOUSEWHEEL:
+            if (todoView_.handleMouseWheel(
+                    GET_WHEEL_DELTA_WPARAM(wParam))) {
                 return 0;
+            }
+            break;
+        case WM_DRAWITEM:
+            if (todoView_.handleDrawItem(
+                    reinterpret_cast<const DRAWITEMSTRUCT*>(lParam))) {
+                return TRUE;
             }
             break;
         case candleUpdateMessage:
@@ -213,26 +255,12 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 }
 
 /**
- * Uruchamia monitor świecy oraz pobieranie sentencji dnia.
+ * Tworzy widoki i uruchamia monitor, sentencję oraz harmonogram To-do.
  */
 bool MainWindow::onCreate() {
-    if (!createReportsButton()) {
-        showErrorMessage(handle_, L"Nie udało się utworzyć przycisku raportów.");
-        return false;
-    }
-    if (!createCandleGapsButton()) {
+    if (!createNavigationButtons()) {
         showErrorMessage(
-            handle_, L"Nie udało się utworzyć przycisku brakujących świec.");
-        return false;
-    }
-    if (!createSignalsButton()) {
-        showErrorMessage(
-            handle_, L"Nie udało się utworzyć przycisku sygnałów.");
-        return false;
-    }
-    if (!createTransactionsButton()) {
-        showErrorMessage(
-            handle_, L"Nie udało się utworzyć przycisku transakcji.");
+            handle_, L"Nie udało się utworzyć przycisków nawigacji.");
         return false;
     }
     if (!reportsPage_.create(instance_, handle_)) {
@@ -255,12 +283,18 @@ bool MainWindow::onCreate() {
             handle_, L"Nie udało się utworzyć widoku transakcji.");
         return false;
     }
+    if (!todoView_.create(instance_, handle_)) {
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć widoku To-do List.");
+        return false;
+    }
 
-    positionReportsButton();
+    positionNavigationButtons();
     reportsPage_.positionControls();
     candleGapsPage_.positionControls();
     signalsPage_.positionControls();
     transactionsPage_.positionControls();
+    todoView_.positionControls();
 
     if (!candleMonitor_.start(handle_)) {
         showErrorMessage(
@@ -277,6 +311,15 @@ bool MainWindow::onCreate() {
         candleMonitor_.stop();
         showErrorMessage(
             handle_, L"Nie udało się uruchomić pobierania sentencji.");
+        return false;
+    }
+
+    std::string schedulerError;
+    if (!todoScheduler_.start(schedulerError)) {
+        ErrorLogger::error(schedulerError);
+        candleMonitor_.stop();
+        showErrorMessage(
+            handle_, L"Nie udało się uruchomić harmonogramu zadań To-do.");
         return false;
     }
     return true;
@@ -312,100 +355,59 @@ void MainWindow::startDailySentenceRequest() {
     });
 }
 
+// mix
 /**
- * Tworzy przycisk na dole okna; jego akcja zostanie podłączona później.
+ * Rejestruje wszystkie samodzielne widoki i tworzy ich przyciski nawigacji.
  */
-bool MainWindow::createReportsButton() {
-    reportsButton_ = CreateWindowExW(
-        0,
-        L"BUTTON",
-        L"Raporty",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, reportsButtonWidth, reportsButtonHeight,
-        handle_,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(reportsButtonId)),
-        instance_,
-        nullptr);
-    if (reportsButton_ == nullptr) {
-        return false;
+bool MainWindow::createNavigationButtons() {
+    const std::array<ViewDescriptor, 5> availableViews{{
+        {reportsButtonId, "Raporty"},
+        {candleGapsButtonId, "Luki świec"},
+        {signalsButtonId, "Sygnały"},
+        {transactionsButtonId, "Transakcje"},
+        {todoListButtonId, "To-do List"},
+    }};
+    std::string error;
+    for (const ViewDescriptor& view : availableViews) {
+        if (!viewRegistry_.registerView(
+                view.commandId, view.name, error)) {
+            ErrorLogger::error(error);
+            return false;
+        }
     }
 
-    positionReportsButton();
+    navigationButtons_.reserve(viewRegistry_.views().size());
+    for (const ViewDescriptor& view : viewRegistry_.views()) {
+        std::wstring title;
+        if (!convertUtf8ToWide(view.name, title)) {
+            ErrorLogger::error(
+                "Nie udało się przekonwertować nazwy widoku: " + view.name);
+            return false;
+        }
+        HWND button = CreateWindowExW(
+            0, L"BUTTON", title.c_str(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            0, 0, reportsButtonWidth, reportsButtonHeight,
+            handle_,
+            reinterpret_cast<HMENU>(
+                static_cast<INT_PTR>(view.commandId)),
+            instance_, nullptr);
+        if (button == nullptr) {
+            return false;
+        }
+        navigationButtons_.push_back(button);
+    }
+    positionNavigationButtons();
     return true;
 }
 
 /**
- * Tworzy przycisk „Luki świec” obok przycisku raportów.
+ * Ustawia przyciski z rejestru pośrodku dolnej krawędzi okna.
  */
-bool MainWindow::createCandleGapsButton() {
-    candleGapsButton_ = CreateWindowExW(
-        0,
-        L"BUTTON",
-        L"Luki świec",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, reportsButtonWidth, reportsButtonHeight,
-        handle_,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(candleGapsButtonId)),
-        instance_,
-        nullptr);
-    if (candleGapsButton_ == nullptr) {
-        return false;
-    }
-
-    positionReportsButton();
-    return true;
-}
-
-/**
- * Tworzy przycisk „Sygnały” obok pozostałych widoków tabel.
- */
-bool MainWindow::createSignalsButton() {
-    signalsButton_ = CreateWindowExW(
-        0,
-        L"BUTTON",
-        L"Sygnały",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, reportsButtonWidth, reportsButtonHeight,
-        handle_,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(signalsButtonId)),
-        instance_,
-        nullptr);
-    if (signalsButton_ == nullptr) {
-        return false;
-    }
-
-    positionReportsButton();
-    return true;
-}
-
-/**
- * Tworzy przycisk „Transakcje” obok pozostałych widoków tabel.
- */
-bool MainWindow::createTransactionsButton() {
-    transactionsButton_ = CreateWindowExW(
-        0,
-        L"BUTTON",
-        L"Transakcje",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, reportsButtonWidth, reportsButtonHeight,
-        handle_,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(transactionsButtonId)),
-        instance_,
-        nullptr);
-    if (transactionsButton_ == nullptr) {
-        return false;
-    }
-
-    positionReportsButton();
-    return true;
-}
-
-/**
- * Ustawia przyciski widoków obok siebie pośrodku dolnej krawędzi okna.
- */
-void MainWindow::positionReportsButton() {
-    if (reportsButton_ == nullptr && candleGapsButton_ == nullptr &&
-        signalsButton_ == nullptr && transactionsButton_ == nullptr) {
+void MainWindow::positionNavigationButtons() {
+    const int buttonCount =
+        static_cast<int>(navigationButtons_.size());
+    if (buttonCount == 0) {
         return;
     }
 
@@ -418,126 +420,122 @@ void MainWindow::positionReportsButton() {
     const int bottomMargin =
         WindowScale::size(handle_, reportsButtonBottomMargin);
     const int buttonBaseWidth = WindowScale::size(handle_, reportsButtonWidth);
-    constexpr int navigationButtonCount = 4;
     const int availableButtonWidth = std::max(
-        1, (clientWidth - buttonGap * (navigationButtonCount - 1)) /
-               navigationButtonCount);
+        1, (clientWidth - buttonGap * (buttonCount - 1)) / buttonCount);
     const int buttonWidth = std::min(buttonBaseWidth, availableButtonWidth);
     const int buttonsWidth =
-        buttonWidth * navigationButtonCount +
-        buttonGap * (navigationButtonCount - 1);
+        buttonWidth * buttonCount + buttonGap * (buttonCount - 1);
     const int visibleButtonHeight = std::min(buttonHeight, clientHeight);
     const int firstButtonX = std::max(0, (clientWidth - buttonsWidth) / 2);
     const int buttonY = std::max(
         0, clientHeight - visibleButtonHeight - bottomMargin);
     WindowScale::updateFont(
         handle_, navigationButtonFont_, navigationButtonFontHeight_, 14,
-        {reportsButton_, candleGapsButton_, signalsButton_,
-         transactionsButton_});
+        navigationButtons_);
 
-    if (reportsButton_ != nullptr) {
+    for (int index = 0; index < buttonCount; ++index) {
         MoveWindow(
-            reportsButton_, firstButtonX, buttonY, buttonWidth,
-            visibleButtonHeight, TRUE);
-    }
-    if (candleGapsButton_ != nullptr) {
-        MoveWindow(
-            candleGapsButton_,
-            firstButtonX + buttonWidth + buttonGap,
-            buttonY, buttonWidth, visibleButtonHeight, TRUE);
-    }
-    if (signalsButton_ != nullptr) {
-        MoveWindow(
-            signalsButton_,
-            firstButtonX + (buttonWidth + buttonGap) * 2,
-            buttonY, buttonWidth, visibleButtonHeight, TRUE);
-    }
-    if (transactionsButton_ != nullptr) {
-        MoveWindow(
-            transactionsButton_,
-            firstButtonX + (buttonWidth + buttonGap) * 3,
+            navigationButtons_[static_cast<std::size_t>(index)],
+            firstButtonX + (buttonWidth + buttonGap) * index,
             buttonY, buttonWidth, visibleButtonHeight, TRUE);
     }
 }
 
 /**
- * Przełącza stronę raportów i stronę główną.
+ * Przełącza wybrany widok; ponowne kliknięcie wraca do strony głównej.
  */
-void MainWindow::onReportsClicked() {
-    if (reportsPage_.isVisible()) {
-        reportsPage_.close();
-        SetWindowTextW(reportsButton_, L"Raporty");
+void MainWindow::onNavigationClicked(int commandId) {
+    const int activeViewId = currentViewId();
+    if (activeViewId == commandId) {
+        closeAllViews();
+        updateNavigationButtons(0);
     } else {
-        candleGapsPage_.close();
-        signalsPage_.close();
-        transactionsPage_.close();
-        SetWindowTextW(candleGapsButton_, L"Luki świec");
-        SetWindowTextW(signalsButton_, L"Sygnały");
-        SetWindowTextW(transactionsButton_, L"Transakcje");
+        closeAllViews();
+        if (!openView(commandId)) {
+            showErrorMessage(
+                handle_, L"Nie udało się otworzyć wybranego widoku.");
+            return;
+        }
+        updateNavigationButtons(commandId);
+    }
+    InvalidateRect(handle_, nullptr, TRUE);
+}
+
+/**
+ * Zamyka widoki, aby jednocześnie widoczna była najwyżej jedna strona.
+ */
+void MainWindow::closeAllViews() {
+    reportsPage_.close();
+    candleGapsPage_.close();
+    signalsPage_.close();
+    transactionsPage_.close();
+    todoView_.close();
+}
+
+/**
+ * Otwiera stronę odpowiadającą identyfikatorowi wspólnego rejestru.
+ */
+bool MainWindow::openView(int commandId) {
+    if (commandId == reportsButtonId) {
         reportsPage_.open();
-        SetWindowTextW(reportsButton_, L"Strona główna");
-    }
-    InvalidateRect(handle_, nullptr, TRUE);
-}
-
-/**
- * Przełącza główną część okna na tabelę brakujących świec.
- */
-void MainWindow::onCandleGapsClicked() {
-    if (candleGapsPage_.isVisible()) {
-        candleGapsPage_.close();
-        SetWindowTextW(candleGapsButton_, L"Luki świec");
-    } else {
-        reportsPage_.close();
-        signalsPage_.close();
-        transactionsPage_.close();
-        SetWindowTextW(reportsButton_, L"Raporty");
-        SetWindowTextW(signalsButton_, L"Sygnały");
-        SetWindowTextW(transactionsButton_, L"Transakcje");
+    } else if (commandId == candleGapsButtonId) {
         candleGapsPage_.open();
-        SetWindowTextW(candleGapsButton_, L"Strona główna");
-    }
-    InvalidateRect(handle_, nullptr, TRUE);
-}
-
-/**
- * Przełącza główną część okna na tabelę signals.
- */
-void MainWindow::onSignalsClicked() {
-    if (signalsPage_.isVisible()) {
-        signalsPage_.close();
-        SetWindowTextW(signalsButton_, L"Sygnały");
-    } else {
-        reportsPage_.close();
-        candleGapsPage_.close();
-        transactionsPage_.close();
-        SetWindowTextW(reportsButton_, L"Raporty");
-        SetWindowTextW(candleGapsButton_, L"Luki świec");
-        SetWindowTextW(transactionsButton_, L"Transakcje");
+    } else if (commandId == signalsButtonId) {
         signalsPage_.open();
-        SetWindowTextW(signalsButton_, L"Strona główna");
+    } else if (commandId == transactionsButtonId) {
+        transactionsPage_.open();
+    } else if (commandId == todoListButtonId) {
+        todoView_.open();
+    } else {
+        return false;
     }
-    InvalidateRect(handle_, nullptr, TRUE);
+    return true;
 }
 
 /**
- * Przełącza główną część okna na widok transakcji.
+ * Zwraca identyfikator aktualnie widocznego widoku lub zero dla pulpitu.
  */
-void MainWindow::onTransactionsClicked() {
-    if (transactionsPage_.isVisible()) {
-        transactionsPage_.close();
-        SetWindowTextW(transactionsButton_, L"Transakcje");
-    } else {
-        reportsPage_.close();
-        candleGapsPage_.close();
-        signalsPage_.close();
-        SetWindowTextW(reportsButton_, L"Raporty");
-        SetWindowTextW(candleGapsButton_, L"Luki świec");
-        SetWindowTextW(signalsButton_, L"Sygnały");
-        transactionsPage_.open();
-        SetWindowTextW(transactionsButton_, L"Strona główna");
+int MainWindow::currentViewId() const {
+    if (reportsPage_.isVisible()) {
+        return reportsButtonId;
     }
-    InvalidateRect(handle_, nullptr, TRUE);
+    if (candleGapsPage_.isVisible()) {
+        return candleGapsButtonId;
+    }
+    if (signalsPage_.isVisible()) {
+        return signalsButtonId;
+    }
+    if (transactionsPage_.isVisible()) {
+        return transactionsButtonId;
+    }
+    if (todoView_.isVisible()) {
+        return todoListButtonId;
+    }
+    return 0;
+}
+
+/**
+ * Ustawia nazwę aktywnego przycisku na „Strona główna”.
+ */
+void MainWindow::updateNavigationButtons(int activeCommandId) {
+    const std::vector<ViewDescriptor>& views = viewRegistry_.views();
+    const std::size_t count = std::min(
+        views.size(), navigationButtons_.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        if (views[index].commandId == activeCommandId) {
+            SetWindowTextW(
+                navigationButtons_[index], L"Strona główna");
+            continue;
+        }
+        std::wstring title;
+        if (!convertUtf8ToWide(views[index].name, title)) {
+            ErrorLogger::error(
+                "Nie udało się wyświetlić nazwy widoku: " +
+                views[index].name);
+            continue;
+        }
+        SetWindowTextW(navigationButtons_[index], title.c_str());
+    }
 }
 
 /**
@@ -560,6 +558,8 @@ void MainWindow::onPaint() {
         signalsPage_.draw(deviceContext, clientArea);
     } else if (transactionsPage_.isVisible()) {
         transactionsPage_.draw(deviceContext, clientArea);
+    } else if (todoView_.isVisible()) {
+        todoView_.draw(deviceContext, clientArea);
     } else {
         std::string dailySentence;
         {
@@ -576,6 +576,7 @@ void MainWindow::onPaint() {
  * Zatrzymuje zadania w tle i kończy pętlę komunikatów Windows.
  */
 void MainWindow::onDestroy() {
+    todoScheduler_.stop();
     candleMonitor_.stop();
     if (dailySentenceThread_.joinable()) {
         dailySentenceThread_.join();

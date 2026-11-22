@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "DailySentencePicker.h"
 #include "CandleGapsPage.h"
@@ -13,9 +14,18 @@
 #include "SignalsPage.h"
 #include "TransactionsPage.h"
 #include "StockPriceMonitor.h"
+#include "TodoManager.hpp"
+#include "TodoScheduler.hpp"
+#include "TodoView.hpp"
+#include "ViewRegistry.hpp"
 
 class MainWindow {
 public:
+    /**
+     * Łączy widok To-do i harmonogram ze wspólnym managerem oraz rejestrem.
+     */
+    MainWindow();
+
     /**
      * Zwalnia czcionkę używaną przez przyciski głównego okna.
      */
@@ -27,76 +37,63 @@ public:
     bool create(HINSTANCE instance, int showCommand);
 
     /**
-     * Processes Windows messages until the application is closed.
+     * Obsługuje komunikaty Windows aż do zamknięcia aplikacji.
      */
     int run();
 
 private:
     /**
-     * Routes Windows messages to the MainWindow instance stored on the window.
+     * Przekazuje komunikaty do obiektu MainWindow przypisanego do okna.
      */
     static LRESULT CALLBACK windowProcedure(
         HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 
     /**
-     * Handles a message after the window procedure has located this instance.
+     * Obsługuje komunikat po odnalezieniu obiektu przez procedurę okna.
      */
     LRESULT handleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     /**
-     * Uruchamia monitor świecy oraz pobieranie sentencji w tle.
+     * Tworzy widoki i uruchamia istniejące oraz nowe zadania w tle.
      * @return true, jeśli wszystkie usługi wystartowały; w przeciwnym razie false.
      */
     bool onCreate();
 
     /**
-     * Tworzy przycisk „Raporty” i ustawia go na dole głównego okna.
-     * @return true, jeśli przycisk został utworzony; w przeciwnym razie false.
+     * Rejestruje widoki oraz tworzy ich przyciski z jednej wspólnej listy.
+     * @return true, jeśli wszystkie przyciski powstały poprawnie.
      */
-    bool createReportsButton();
-
-    /**
-     * Tworzy przycisk „Luki świec” obok przycisku raportów.
-     * @return true, jeśli przycisk został utworzony; w przeciwnym razie false.
-     */
-    bool createCandleGapsButton();
-
-    /**
-     * Tworzy przycisk „Sygnały” obok pozostałych widoków tabel.
-     * @return true, jeśli przycisk został utworzony; w przeciwnym razie false.
-     */
-    bool createSignalsButton();
-
-    /**
-     * Tworzy przycisk „Transakcje” obok pozostałych widoków tabel.
-     * @return true, jeśli przycisk utworzono poprawnie.
-     */
-    bool createTransactionsButton();
+    bool createNavigationButtons();
 
     /**
      * Dopasowuje położenie przycisków widoków do aktualnego rozmiaru okna.
      */
-    void positionReportsButton();
+    void positionNavigationButtons();
 
     /**
-     * Przełącza główną część okna na stronę raportów.
+     * Przełącza aplikację na wybrany widok lub wraca do strony głównej.
      */
-    void onReportsClicked();
+    void onNavigationClicked(int commandId);
 
     /**
-     * Przełącza główną część okna na tabelę brakujących świec.
+     * Zamyka wszystkie strony przed otwarciem kolejnej.
      */
-    void onCandleGapsClicked();
+    void closeAllViews();
 
     /**
-     * Przełącza główną część okna na tabelę signals.
+     * Otwiera stronę przypisaną do identyfikatora rejestru.
      */
-    void onSignalsClicked();
+    bool openView(int commandId);
 
     /**
-     * Przełącza główną część okna na widok transakcji.
+     * Zwraca identyfikator aktualnie otwartego widoku lub zero.
      */
-    void onTransactionsClicked();
+    int currentViewId() const;
+
+    /**
+     * Ustawia etykiety nawigacji zgodnie z aktualnie otwartym widokiem.
+     */
+    void updateNavigationButtons(int activeCommandId);
 
     /**
      * Pobiera sentencję w osobnym wątku, aby nie blokować okna aplikacji.
@@ -117,10 +114,7 @@ private:
     HINSTANCE instance_ = nullptr;
     HWND handle_ = nullptr;
     int showCommand_ = SW_SHOW;
-    HWND reportsButton_ = nullptr;
-    HWND candleGapsButton_ = nullptr;
-    HWND signalsButton_ = nullptr;
-    HWND transactionsButton_ = nullptr;
+    std::vector<HWND> navigationButtons_;
     HFONT navigationButtonFont_ = nullptr;
     int navigationButtonFontHeight_ = 0;
     std::mutex dailySentenceMutex_;
@@ -128,6 +122,10 @@ private:
     std::thread dailySentenceThread_;
     DailySentencePicker dailySentencePicker_;
     StockPriceMonitor candleMonitor_;
+    TodoManager todoManager_;
+    ViewRegistry viewRegistry_;
+    TodoView todoView_;
+    TodoScheduler todoScheduler_;
     ReportsPage reportsPage_;
     CandleGapsPage candleGapsPage_;
     SignalsPage signalsPage_;

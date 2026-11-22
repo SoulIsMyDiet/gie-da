@@ -5,6 +5,7 @@ import copy
 import importlib.util
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -16,12 +17,14 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
+from urllib.parse import quote
 
 import mysql.connector
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from error_file_logging import configure_error_file_logging  # noqa: E402
+from todo_repository import TodoRepository  # noqa: E402
 
 algorithm_directory = Path(__file__).resolve().parent / "algorithm"
 if not algorithm_directory.is_dir():
@@ -147,6 +150,26 @@ grok45_usdmxn_package = importlib.util.module_from_spec(
 sys.modules[grok45_usdmxn_package_name] = grok45_usdmxn_package
 grok45_usdmxn_package_spec.loader.exec_module(grok45_usdmxn_package)
 
+btcusd_algorithm_directory = Path(__file__).resolve().parent / "btc_algorithm"
+if not btcusd_algorithm_directory.is_dir():
+    btcusd_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Grok-45"
+        / "BTCUSD"
+    )
+btcusd_package_name = "grok45_btcusd"
+btcusd_package_spec = importlib.util.spec_from_file_location(
+    btcusd_package_name,
+    btcusd_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(btcusd_algorithm_directory)],
+)
+if btcusd_package_spec is None or btcusd_package_spec.loader is None:
+    raise ImportError("Nie można załadować strategii Grok-45 BTC/USD.")
+btcusd_package = importlib.util.module_from_spec(btcusd_package_spec)
+sys.modules[btcusd_package_name] = btcusd_package
+btcusd_package_spec.loader.exec_module(btcusd_package)
+
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from EURUSDStrategyV2 import (  # noqa: E402
     Candle as Grok45Candle,
@@ -220,6 +243,17 @@ from grok45_usdmxn.config import (  # noqa: E402
 from grok45_usdmxn.storage import (  # noqa: E402
     USDMXNSignalStorage as Grok45USDMXNSignalStorage,
 )
+from grok45_btcusd.BTCUSDStrategyV1 import (  # noqa: E402
+    BTCUSDStrategyV1,
+)
+from grok45_btcusd.config import (  # noqa: E402
+    BEEP_ENABLED as BTCUSD_BEEP_ENABLED,
+    COOLDOWN_SECONDS as BTCUSD_COOLDOWN_SECONDS,
+    DATABASE_SYMBOL as BTCUSD_DATABASE_SYMBOL,
+    HISTORY_LIMIT as BTCUSD_HISTORY_LIMIT,
+    STRATEGY_NAME as BTCUSD_STRATEGY_NAME,
+)
+from grok45_btcusd.storage import BTCUSDSignalStorage  # noqa: E402
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
@@ -804,6 +838,7 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+                TodoRepository.initialize_schema(cursor)
                 create_daily_sentences_table(cursor)
 
                 cursor.execute(
@@ -2136,6 +2171,71 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_recent_algorithm_signal_timestamp(
+        self,
+        product: str,
+        algorithm_name: str,
+        source_timestamp: int,
+        lookback_seconds: int,
+    ) -> int | None:
+        """Pobiera czas ostatniego LONG/SHORT w podanym oknie cooldownu.
+
+        Args:
+            product: Symbol produktu zapisany w bazie.
+            algorithm_name: Nazwa strategii, której sygnały są sprawdzane.
+            source_timestamp: Epoka UTC otwarcia bieżącej świecy.
+            lookback_seconds: Długość okna w sekundach.
+
+        Returns:
+            Epokę otwarcia ostatniej świecy z sygnałem LONG/SHORT albo None.
+
+        Raises:
+            ValueError: Gdy czas lub długość okna są nieprawidłowe.
+            mysql.connector.Error: Gdy zapytanie do bazy się nie powiedzie.
+        """
+        if (
+            isinstance(source_timestamp, bool)
+            or not isinstance(source_timestamp, int)
+            or source_timestamp < 0
+        ):
+            raise ValueError("Czas otwarcia świecy musi być nieujemną epoką.")
+        if (
+            isinstance(lookback_seconds, bool)
+            or not isinstance(lookback_seconds, int)
+            or lookback_seconds < 1
+        ):
+            raise ValueError("Okno cooldownu musi być dodatnią liczbą sekund.")
+
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT MAX(source_timestamp)
+                    FROM signals
+                    WHERE product = %s
+                        AND algorithm_name = %s
+                        AND `signal` IN ('long', 'short')
+                        AND source_timestamp >= %s
+                        AND source_timestamp < %s
+                    """,
+                    (
+                        product,
+                        algorithm_name,
+                        source_timestamp - lookback_seconds,
+                        source_timestamp,
+                    ),
+                )
+                row = cursor.fetchone()
+                if row is None or row[0] is None:
+                    return None
+                return int(row[0])
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     @staticmethod
     def _insert_signal(cursor: mysql.connector.cursor.MySQLCursor, signal: Signal) -> None:
         """Zapisuje sygnał z czasem zamknięcia świecy i jego pakietem JSON."""
@@ -2267,6 +2367,8 @@ class MarketDataRepository:
         *,
         record_evaluation: bool = False,
         save_signal: bool = True,
+        save_none_signal: bool = False,
+        save_signal_potential: bool = True,
         enqueue_notification: bool = True,
     ) -> bool:
         """Zapisuje wynik strategii w jednej transakcji MySQL.
@@ -2278,6 +2380,8 @@ class MarketDataRepository:
             candles_count: Liczba świec wykorzystanych do analizy.
             record_evaluation: Czy trwale oznaczyć świecę jako ocenioną.
             save_signal: Czy zapisać rekord również w tabeli ``signals``.
+            save_none_signal: Czy zapisać ``NONE`` zamiast tylko ewaluacji.
+            save_signal_potential: Czy liczyć potencjał z skonfigurowanym spreadem.
             enqueue_notification: Czy po nowym zapisie przygotować dźwięk.
 
         Returns:
@@ -2322,7 +2426,7 @@ class MarketDataRepository:
         )
         potential_spread = (
             SignalPotentialCalculator.spread_for_product(product)
-            if save_signal and direction != "NONE"
+            if save_signal and direction != "NONE" and save_signal_potential
             else None
         )
 
@@ -2356,7 +2460,7 @@ class MarketDataRepository:
                     )
 
             inserted = False
-            if save_signal and direction != "NONE":
+            if save_signal and (direction != "NONE" or save_none_signal):
                 cursor.execute(
                     """
                     INSERT IGNORE INTO signals
@@ -2392,6 +2496,7 @@ class MarketDataRepository:
                     inserted
                     and evaluation_id is not None
                     and enqueue_notification
+                    and direction != "NONE"
                 ):
                     cursor.execute(
                         """
@@ -3137,6 +3242,8 @@ usdjpy_strategy = USDJPYStrategyV1(market_is_open=is_market_open)
 usdjpy_storage = USDJPYSignalStorage(repository)
 grok45_usdmxn_strategy = Grok45USDMXNStrategy(market_is_open=is_market_open)
 grok45_usdmxn_storage = Grok45USDMXNSignalStorage(repository)
+btcusd_strategy = BTCUSDStrategyV1()
+btcusd_storage = BTCUSDSignalStorage(repository)
 strategy_lock = Lock()
 
 
@@ -3160,6 +3267,9 @@ async def lifespan(application: FastAPI):
     configure_error_file_logging(log_directory)
 
     repository.initialize()
+    application.state.todo_repository = TodoRepository(
+        repository.database_settings
+    )
     
     # Backend - Pobieranie brakujących świec dla wszystkich monitorowanych symboli z retry
     monitored_symbols = get_monitored_symbols()
@@ -3210,10 +3320,342 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="gie-da market data API", lifespan=lifespan)
 
+
+class TodoTitleRequest(BaseModel):
+    """Waliduje nazwę zadania głównego lub podrzędnego."""
+
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        """Odrzuca nazwę pustą lub złożoną wyłącznie z białych znaków."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Nazwa zadania nie może być pusta.")
+        return normalized
+
+
+class TodoCompletionRequest(BaseModel):
+    """Przechowuje nowy stan ukończenia podzadania."""
+
+    completed: bool
+
+
+class TodoTextRequest(BaseModel):
+    """Przechowuje prompt albo opis bez limitu długości aplikacji."""
+
+    value: str
+
+
+class TodoWeeklyReviewRequest(BaseModel):
+    """Przekazuje nazwy widoków zarejestrowanych przez aplikację C++."""
+
+    view_names: list[str] = Field(min_length=1)
+
+
+def _seconds_until_next_todo_review(now: datetime) -> int:
+    """Wylicza czas do następnego poniedziałku o 06:00 w Warszawie."""
+    if now.weekday() == 0 and now.hour < 6:
+        next_review = now.replace(
+            hour=6, minute=0, second=0, microsecond=0
+        )
+    else:
+        days_until_monday = (7 - now.weekday()) % 7
+        if days_until_monday == 0:
+            days_until_monday = 7
+        next_monday = now.date() + timedelta(days=days_until_monday)
+        next_review = now.replace(
+            year=next_monday.year,
+            month=next_monday.month,
+            day=next_monday.day,
+            hour=6,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    elapsed_seconds = (
+        next_review.astimezone(timezone.utc)
+        - now.astimezone(timezone.utc)
+    ).total_seconds()
+    return max(1, math.ceil(elapsed_seconds))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Zwraca prostą odpowiedź kontrolną dla lokalnego API."""
     return {"status": "ok"}
+
+
+@app.get("/api/todos", response_class=Response)
+def list_todo_tasks(request: Request) -> Response:
+    """Udostępnia zadania w bezpiecznym dla dowolnego tekstu formacie TSV."""
+    try:
+        tasks = request.app.state.todo_repository.list_tasks()
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się pobrać zadań To-do z bazy danych.",
+        ) from error
+
+    lines: list[str] = []
+    for task in tasks:
+        lines.append(
+            "\t".join(
+                (
+                    "M",
+                    str(task["id"]),
+                    quote(task["title"], safe="-_.~"),
+                    task["created_at"],
+                    task["updated_at"],
+                )
+            )
+        )
+        for subtask in task["subtasks"]:
+            lines.append(
+                "\t".join(
+                    (
+                        "S",
+                        str(subtask["id"]),
+                        str(task["id"]),
+                        quote(subtask["title"], safe="-_.~"),
+                        "1" if subtask["completed"] else "0",
+                        "1" if subtask["prompt_exists"] else "0",
+                        "1" if subtask["description_exists"] else "0",
+                        subtask["created_at"],
+                        subtask["updated_at"],
+                    )
+                )
+            )
+    return Response(
+        content="\n".join(lines),
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+@app.post("/api/todos/main", status_code=201)
+def create_todo_main_task(
+    payload: TodoTitleRequest, request: Request
+) -> dict[str, int]:
+    """Zapisuje nowe zadanie główne."""
+    try:
+        task_id = request.app.state.todo_repository.create_main_task(
+            payload.title
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zapisać zadania głównego.",
+        ) from error
+    return {"id": task_id}
+
+
+@app.post("/api/todos/main/{main_task_id}/subtasks", status_code=201)
+def create_todo_subtask(
+    main_task_id: int, payload: TodoTitleRequest, request: Request
+) -> dict[str, int]:
+    """Dodaje podzadanie wskazanemu zadaniu głównemu."""
+    if main_task_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        subtask_id = request.app.state.todo_repository.create_subtask(
+            main_task_id, payload.title
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zapisać zadania podrzędnego.",
+        ) from error
+    if subtask_id is None:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania głównego."
+        )
+    return {"id": subtask_id}
+
+
+@app.patch("/api/todos/subtasks/{subtask_id}/completion")
+def set_todo_subtask_completion(
+    subtask_id: int, payload: TodoCompletionRequest, request: Request
+) -> dict[str, bool]:
+    """Zapisuje stan podzadania; stan rodzica pozostaje wyliczany."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        updated = request.app.state.todo_repository.set_subtask_completed(
+            subtask_id, payload.completed
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zmienić stanu zadania podrzędnego.",
+        ) from error
+    if not updated:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania podrzędnego."
+        )
+    return {"completed": payload.completed}
+
+
+def _read_todo_subtask_text(
+    request: Request, subtask_id: int, field: str
+) -> Response:
+    """Zwraca treść promptu lub opisu dopiero na żądanie użytkownika."""
+    try:
+        value = request.app.state.todo_repository.get_subtask_text(
+            subtask_id, field
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się pobrać treści zadania podrzędnego.",
+        ) from error
+    if value is None:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania podrzędnego."
+        )
+    return Response(content=value, media_type="text/plain; charset=utf-8")
+
+
+def _update_todo_subtask_text(
+    request: Request, subtask_id: int, field: str, value: str
+) -> dict[str, bool]:
+    """Zapisuje prompt albo opis w rekordzie podzadania."""
+    try:
+        updated = request.app.state.todo_repository.update_subtask_text(
+            subtask_id, field, value
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zapisać treści zadania podrzędnego.",
+        ) from error
+    if not updated:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania podrzędnego."
+        )
+    return {"saved": True}
+
+
+@app.get("/api/todos/subtasks/{subtask_id}/prompt", response_class=Response)
+def get_todo_subtask_prompt(subtask_id: int, request: Request) -> Response:
+    """Pobiera prompt wybranego podzadania."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    return _read_todo_subtask_text(request, subtask_id, "prompt")
+
+
+@app.put("/api/todos/subtasks/{subtask_id}/prompt")
+def update_todo_subtask_prompt(
+    subtask_id: int, payload: TodoTextRequest, request: Request
+) -> dict[str, bool]:
+    """Tworzy lub aktualizuje prompt wybranego podzadania."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    return _update_todo_subtask_text(
+        request, subtask_id, "prompt", payload.value
+    )
+
+
+@app.get(
+    "/api/todos/subtasks/{subtask_id}/description", response_class=Response
+)
+def get_todo_subtask_description(
+    subtask_id: int, request: Request
+) -> Response:
+    """Pobiera opis techniczny wybranego podzadania."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    return _read_todo_subtask_text(request, subtask_id, "description")
+
+
+@app.put("/api/todos/subtasks/{subtask_id}/description")
+def update_todo_subtask_description(
+    subtask_id: int, payload: TodoTextRequest, request: Request
+) -> dict[str, bool]:
+    """Tworzy lub aktualizuje opis wybranego podzadania."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    return _update_todo_subtask_text(
+        request, subtask_id, "description", payload.value
+    )
+
+
+@app.delete("/api/todos/main/{main_task_id}", status_code=204)
+def delete_todo_main_task(main_task_id: int, request: Request) -> None:
+    """Trwale usuwa zadanie główne oraz jego podzadania przez CASCADE."""
+    if main_task_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        deleted = request.app.state.todo_repository.delete_main_task(
+            main_task_id
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się usunąć zadania głównego.",
+        ) from error
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania głównego."
+        )
+
+
+@app.delete("/api/todos/subtasks/{subtask_id}", status_code=204)
+def delete_todo_subtask(subtask_id: int, request: Request) -> None:
+    """Trwale usuwa podzadanie oraz zapisany w nim prompt i opis."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        deleted = request.app.state.todo_repository.delete_subtask(subtask_id)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się usunąć zadania podrzędnego.",
+        ) from error
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania podrzędnego."
+        )
+
+
+@app.post("/api/todos/weekly-review")
+def create_weekly_todo_review(
+    payload: TodoWeeklyReviewRequest, request: Request
+) -> dict[str, bool | int | str | None]:
+    """Tworzy zadanie dla bieżącego tygodnia w strefie Europe/Warsaw."""
+    local_now = datetime.now(WARSAW_TIME_ZONE)
+    if local_now.weekday() == 0 and local_now.hour < 6:
+        return {
+            "created": False,
+            "week_key": None,
+            "next_check_seconds": _seconds_until_next_todo_review(local_now),
+        }
+
+    iso_year, iso_week, _ = local_now.isocalendar()
+    week_key = f"{iso_year:04d}-W{iso_week:02d}"
+    try:
+        created = request.app.state.todo_repository.create_weekly_review(
+            week_key, payload.view_names
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się utworzyć cotygodniowego zadania.",
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się potwierdzić cotygodniowego zadania.",
+        ) from error
+    return {
+        "created": created,
+        "week_key": week_key,
+        "next_check_seconds": _seconds_until_next_todo_review(
+            datetime.now(WARSAW_TIME_ZONE)
+        ),
+    }
 
 
 @app.get("/api/ai-verification/jobs")
@@ -3389,7 +3831,7 @@ def _process_closed_strategy_candle(
     *,
     enqueue_notifications: bool,
 ) -> None:
-    """Ocenia zamkniętą świecę USD/MXN lub USD/JPY dla właściwych strategii.
+    """Ocenia zamkniętą świecę dla strategii USD/MXN, USD/JPY lub BTC/USD.
 
     Args:
         request: Żądanie API z repozytorium i strategiami w stanie aplikacji.
@@ -3399,16 +3841,95 @@ def _process_closed_strategy_candle(
 
     Raises:
         mysql.connector.Error: Gdy odczyt lub zapis w bazie się nie powiedzie.
-        RuntimeError: Gdy historia USD/JPY nie zawiera ocenianej świecy.
+        RuntimeError: Gdy historia strategii nie zawiera ocenianej świecy.
         ValueError: Gdy strategia odrzuci dane świecy lub wynik.
     """
     repository = request.app.state.repository
     candle_timestamp = candle.datetime.astimezone(timezone.utc)
     if (
-        candle.symbol not in {USDMXN_DATABASE_SYMBOL, USDJPY_DATABASE_SYMBOL}
+        candle.symbol
+        not in {
+            USDMXN_DATABASE_SYMBOL,
+            USDJPY_DATABASE_SYMBOL,
+            BTCUSD_DATABASE_SYMBOL,
+        }
         or candle_timestamp + timedelta(minutes=1) > now_utc
         or not repository._is_market_open(candle.symbol, candle_timestamp)
     ):
+        return
+
+    if candle.symbol == BTCUSD_DATABASE_SYMBOL:
+        state_prefix = "grok45_btcusd"
+        source_timestamp = int(candle_timestamp.timestamp())
+        last_processed = getattr(
+            request.app.state,
+            f"{state_prefix}_last_processed_timestamp",
+            None,
+        )
+        if last_processed is not None and candle_timestamp <= last_processed:
+            return
+        if repository.has_algorithm_evaluation(
+            BTCUSD_DATABASE_SYMBOL,
+            BTCUSD_STRATEGY_NAME,
+            source_timestamp,
+        ):
+            setattr(
+                request.app.state,
+                f"{state_prefix}_last_processed_timestamp",
+                candle_timestamp,
+            )
+            return
+
+        candles = repository.fetch_recent_candle_history(
+            BTCUSD_DATABASE_SYMBOL,
+            BTCUSD_HISTORY_LIMIT,
+            candle_timestamp,
+        )
+        if not candles or candles[-1]["timestamp_utc"] != candle_timestamp:
+            logger.error(
+                "Historia BTC/USD nie zawiera właśnie zapisanej świecy %s.",
+                candle_timestamp.isoformat(),
+            )
+            return
+
+        strategy = getattr(
+            request.app.state,
+            f"{state_prefix}_strategy",
+            btcusd_strategy,
+        )
+        storage = getattr(
+            request.app.state,
+            f"{state_prefix}_storage",
+            btcusd_storage,
+        )
+        result = strategy.evaluate(candles, now=now_utc)
+        if str(result.get("signal", "")).upper() in {"LONG", "SHORT"}:
+            last_signal_timestamp = (
+                repository.fetch_recent_algorithm_signal_timestamp(
+                    BTCUSD_DATABASE_SYMBOL,
+                    BTCUSD_STRATEGY_NAME,
+                    source_timestamp,
+                    BTCUSD_COOLDOWN_SECONDS,
+                )
+            )
+            if last_signal_timestamp is not None:
+                result = strategy.evaluate(
+                    candles,
+                    now=now_utc,
+                    last_signal_timestamp=last_signal_timestamp,
+                )
+        storage.save(
+            result,
+            len(candles),
+            enqueue_notification=(
+                enqueue_notifications and BTCUSD_BEEP_ENABLED
+            ),
+        )
+        setattr(
+            request.app.state,
+            f"{state_prefix}_last_processed_timestamp",
+            candle_timestamp,
+        )
         return
 
     if candle.symbol == USDMXN_DATABASE_SYMBOL:
@@ -4009,7 +4530,11 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                     candle
                     for candle in batch.candles
                     if candle.symbol
-                    in {USDMXN_DATABASE_SYMBOL, USDJPY_DATABASE_SYMBOL}
+                    in {
+                        USDMXN_DATABASE_SYMBOL,
+                        USDJPY_DATABASE_SYMBOL,
+                        BTCUSD_DATABASE_SYMBOL,
+                    }
                 ),
                 key=lambda candle: (
                     candle.symbol,
@@ -4395,5 +4920,8 @@ app.state.usdmxn_last_processed_timestamp = None
 app.state.grok45_usdmxn_strategy = grok45_usdmxn_strategy
 app.state.grok45_usdmxn_storage = grok45_usdmxn_storage
 app.state.grok45_usdmxn_last_processed_timestamp = None
+app.state.grok45_btcusd_strategy = btcusd_strategy
+app.state.grok45_btcusd_storage = btcusd_storage
+app.state.grok45_btcusd_last_processed_timestamp = None
 app.state.strategy_ready = False
 app.state.grok45_v2_candles = []

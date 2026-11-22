@@ -22,6 +22,12 @@ add_executable(gieda WIN32
     src/utility/DailySentencePicker.cpp
     src/utility/AudioSignal.cpp
     src/utility/ErrorLogger.cpp
+    src/utility/todo/TodoTask.cpp
+    src/utility/todo/ViewRegistry.cpp
+    src/utility/todo/TodoRepository.cpp
+    src/utility/todo/TodoManager.cpp
+    src/utility/todo/TodoScheduler.cpp
+    src/utility/todo/TodoView.cpp
     src/algorithms/Grok-45/EURUSD/SignalGenerator.cpp
 )
 set_property(TARGET gieda PROPERTY CXX_SCAN_FOR_MODULES OFF)
@@ -31,6 +37,7 @@ target_include_directories(gieda PRIVATE
     src/pages/reports
     src/stockmarket/StockMarketClient
     src/utility
+    src/utility/todo
     src/algorithms/Grok-45/EURUSD
 )
 target_link_libraries(gieda PRIVATE
@@ -121,5 +128,26 @@ if(BUILD_TESTING)
     add_test(
         NAME daily_sentence_picker_tests
         COMMAND daily_sentence_picker_tests
+    )
+
+    add_executable(todo_model_tests
+        src/utility/todo/TodoTask.cpp
+        src/utility/todo/ViewRegistry.cpp
+        src/utility/todo/tests/TodoModelTests.cpp
+    )
+    set_property(
+        TARGET todo_model_tests
+        PROPERTY CXX_SCAN_FOR_MODULES OFF
+    )
+    target_include_directories(todo_model_tests PRIVATE
+        src/utility/todo
+    )
+    target_link_options(todo_model_tests PRIVATE
+        -static-libgcc
+        -static-libstdc++
+    )
+    add_test(
+        NAME todo_model_tests
+        COMMAND todo_model_tests
     )
 endif()
