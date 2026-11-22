@@ -794,6 +794,8 @@ void TodoView::rebuildTaskControls() {
     const int clientHeight = clientArea.bottom - clientArea.top;
     const int horizontalPadding = todoSize(parent_, 24);
     const int rowGap = todoSize(parent_, 10);
+    const int verticalRowGap = std::max(1, rowGap / 4);
+    const int smallVerticalGap = todoSize(parent_, 4) / 4;
     const int buttonHeight = todoSize(parent_, 30);
     const int moveButtonWidth = todoSize(parent_, 32);
     const int hideButtonWidth = todoSize(parent_, 64);
@@ -912,7 +914,7 @@ void TodoView::rebuildTaskControls() {
             mainDeleteButton, mainActionX, rowTop,
             deleteWidth, buttonHeight);
 
-        rowTop += mainRowHeight + todoSize(parent_, 4);
+        rowTop += mainRowHeight + smallVerticalGap;
 
         const std::size_t visibleSubtaskCount = static_cast<std::size_t>(
             std::count_if(
@@ -992,7 +994,7 @@ void TodoView::rebuildTaskControls() {
 
             int actionsTop = rowTop;
             if (stackActions) {
-                actionsTop += subtaskTextHeight + todoSize(parent_, 4);
+                actionsTop += subtaskTextHeight + smallVerticalGap;
             } else {
                 actionsTop += std::max(
                     0, (subtaskTextHeight - buttonHeight) / 2);
@@ -1080,12 +1082,12 @@ void TodoView::rebuildTaskControls() {
 
             rowTop += (stackActions
                     ? subtaskTextHeight + buttonHeight +
-                        todoSize(parent_, 4)
+                        smallVerticalGap
                     : std::max(subtaskTextHeight, buttonHeight)) +
-                rowGap;
+                verticalRowGap;
             ++visibleSubtaskIndex;
         }
-        rowTop += rowGap;
+        rowTop += verticalRowGap;
     }
 
     contentHeight_ = std::max(0, rowTop - contentTop);
