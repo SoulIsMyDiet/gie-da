@@ -53,6 +53,18 @@ bool TodoManager::addMainTask(
 }
 
 /**
+ * Zmienia nazwę zadania głównego po sprawdzeniu danych wejściowych.
+ */
+bool TodoManager::updateMainTaskTitle(
+    std::uint64_t mainTaskId,
+    const std::string& title,
+    std::string& error) const {
+    return validateTaskId(mainTaskId, "głównego", error) &&
+        validateTitle(title, error) &&
+        repository_.updateMainTaskTitle(mainTaskId, title, error);
+}
+
+/**
  * Dodaje podzadanie po sprawdzeniu identyfikatora rodzica i nazwy.
  */
 bool TodoManager::addSubtask(
@@ -62,6 +74,18 @@ bool TodoManager::addSubtask(
     return validateTaskId(mainTaskId, "głównego", error) &&
         validateTitle(title, error) &&
         repository_.createSubtask(mainTaskId, title, error);
+}
+
+/**
+ * Zmienia nazwę podzadania po sprawdzeniu danych wejściowych.
+ */
+bool TodoManager::updateSubtaskTitle(
+    std::uint64_t subtaskId,
+    const std::string& title,
+    std::string& error) const {
+    return validateTaskId(subtaskId, "podrzędnego", error) &&
+        validateTitle(title, error) &&
+        repository_.updateSubtaskTitle(subtaskId, title, error);
 }
 
 /**

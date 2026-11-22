@@ -3457,6 +3457,29 @@ def create_todo_main_task(
     return {"id": task_id}
 
 
+@app.put("/api/todos/main/{main_task_id}/title")
+def update_todo_main_task_title(
+    main_task_id: int, payload: TodoTitleRequest, request: Request
+) -> dict[str, bool]:
+    """Zmienia nazwę istniejącego zadania głównego."""
+    if main_task_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        updated = request.app.state.todo_repository.update_main_task_title(
+            main_task_id, payload.title
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zmienić nazwy zadania głównego.",
+        ) from error
+    if not updated:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania głównego."
+        )
+    return {"updated": True}
+
+
 @app.post("/api/todos/main/{main_task_id}/subtasks", status_code=201)
 def create_todo_subtask(
     main_task_id: int, payload: TodoTitleRequest, request: Request
@@ -3478,6 +3501,29 @@ def create_todo_subtask(
             status_code=404, detail="Nie znaleziono zadania głównego."
         )
     return {"id": subtask_id}
+
+
+@app.put("/api/todos/subtasks/{subtask_id}/title")
+def update_todo_subtask_title(
+    subtask_id: int, payload: TodoTitleRequest, request: Request
+) -> dict[str, bool]:
+    """Zmienia nazwę istniejącego podzadania."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        updated = request.app.state.todo_repository.update_subtask_title(
+            subtask_id, payload.title
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zmienić nazwy zadania podrzędnego.",
+        ) from error
+    if not updated:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania podrzędnego."
+        )
+    return {"updated": True}
 
 
 @app.patch("/api/todos/subtasks/{subtask_id}/completion")

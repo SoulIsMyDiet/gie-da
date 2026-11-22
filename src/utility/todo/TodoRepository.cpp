@@ -463,6 +463,20 @@ bool TodoRepository::createMainTask(
 }
 
 /**
+ * Aktualizuje nazwę zadania głównego przez lokalne API.
+ */
+bool TodoRepository::updateMainTaskTitle(
+    std::uint64_t mainTaskId,
+    const std::string& title,
+    std::string& error) const {
+    const std::string body = "{\"title\":\"" + escapeJson(title) + "\"}";
+    const std::wstring path =
+        L"/api/todos/main/" + std::to_wstring(mainTaskId) + L"/title";
+    std::string response;
+    return sendApiRequest(L"PUT", path, body, response, error);
+}
+
+/**
  * Zapisuje nowe podzadanie w API.
  */
 bool TodoRepository::createSubtask(
@@ -474,6 +488,20 @@ bool TodoRepository::createSubtask(
         L"/api/todos/main/" + std::to_wstring(mainTaskId) + L"/subtasks";
     std::string response;
     return sendApiRequest(L"POST", path, body, response, error);
+}
+
+/**
+ * Aktualizuje nazwę podzadania przez lokalne API.
+ */
+bool TodoRepository::updateSubtaskTitle(
+    std::uint64_t subtaskId,
+    const std::string& title,
+    std::string& error) const {
+    const std::string body = "{\"title\":\"" + escapeJson(title) + "\"}";
+    const std::wstring path =
+        L"/api/todos/subtasks/" + std::to_wstring(subtaskId) + L"/title";
+    std::string response;
+    return sendApiRequest(L"PUT", path, body, response, error);
 }
 
 /**

@@ -170,6 +170,48 @@ def test_todo_list_wire_format_escapes_text_and_hides_prompt_content() -> None:
     assert "sekretny" not in response.body.decode("utf-8")
 
 
+def test_update_main_task_title_is_transactional() -> None:
+    """Blokuje rekord, zmienia nazwę i zatwierdza transakcję."""
+    connection = Mock()
+    cursor = Mock()
+    cursor.fetchone.return_value = {"id": 4}
+    connection.cursor.return_value = cursor
+    repository = TodoRepository({})
+
+    with patch(
+        "todo_repository.mysql.connector.connect", return_value=connection
+    ):
+        updated = repository.update_main_task_title(4, "Nowa nazwa")
+
+    assert updated
+    assert "SELECT id FROM todo_main_tasks WHERE id = %s FOR UPDATE" in (
+        cursor.execute.call_args_list[0].args[0]
+    )
+    assert cursor.execute.call_args_list[1].args == (
+        "UPDATE todo_main_tasks SET title = %s WHERE id = %s",
+        ("Nowa nazwa", 4),
+    )
+    connection.commit.assert_called_once()
+
+
+def test_update_subtask_title_returns_false_when_task_is_missing() -> None:
+    """Nie wykonuje aktualizacji ani nie zgłasza sukcesu dla brakującego wpisu."""
+    connection = Mock()
+    cursor = Mock()
+    cursor.fetchone.return_value = None
+    connection.cursor.return_value = cursor
+    repository = TodoRepository({})
+
+    with patch(
+        "todo_repository.mysql.connector.connect", return_value=connection
+    ):
+        updated = repository.update_subtask_title(8, "Nowa nazwa")
+
+    assert not updated
+    assert cursor.execute.call_count == 1
+    connection.commit.assert_called_once()
+
+
 def test_hiding_a_main_task_keeps_the_record_in_the_database() -> None:
     """Zapisuje flagę ukrycia zamiast usuwać zadanie główne."""
     connection = Mock()
@@ -294,6 +336,48 @@ def test_hide_endpoint_returns_persistent_hidden_state() -> None:
 
     assert result == {"hidden": True}
     repository.hide_main_task.assert_called_once_with(4)
+
+
+def test_update_title_endpoints_store_validated_names() -> None:
+    """Przekazuje oczyszczone nazwy do aktualizacji obu rodzajów zadań."""
+    repository = Mock()
+    repository.update_main_task_title.return_value = True
+    repository.update_subtask_title.return_value = True
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(todo_repository=repository))
+    )
+    payload = market_data_api.TodoTitleRequest(title="  Nowa nazwa  ")
+
+    main_result = market_data_api.update_todo_main_task_title(
+        4, payload, request
+    )
+    subtask_result = market_data_api.update_todo_subtask_title(
+        8, payload, request
+    )
+
+    assert main_result == {"updated": True}
+    assert subtask_result == {"updated": True}
+    repository.update_main_task_title.assert_called_once_with(4, "Nowa nazwa")
+    repository.update_subtask_title.assert_called_once_with(8, "Nowa nazwa")
+
+
+def test_update_title_endpoints_return_not_found_for_missing_tasks() -> None:
+    """Zwraca 404, gdy zadanie z podanym identyfikatorem nie istnieje."""
+    repository = Mock()
+    repository.update_main_task_title.return_value = False
+    repository.update_subtask_title.return_value = False
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(todo_repository=repository))
+    )
+    payload = market_data_api.TodoTitleRequest(title="Nowa nazwa")
+
+    with pytest.raises(market_data_api.HTTPException) as main_error:
+        market_data_api.update_todo_main_task_title(4, payload, request)
+    with pytest.raises(market_data_api.HTTPException) as subtask_error:
+        market_data_api.update_todo_subtask_title(8, payload, request)
+
+    assert main_error.value.status_code == 404
+    assert subtask_error.value.status_code == 404
 
 
 def test_move_endpoint_returns_false_at_a_list_boundary() -> None:

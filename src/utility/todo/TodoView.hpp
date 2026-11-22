@@ -97,6 +97,8 @@ private:
     enum class ActionKind {
         addSubtask,
         toggleSubtask,
+        editMainTaskTitle,
+        editSubtaskTitle,
         moveMainUp,
         moveMainDown,
         moveSubtaskUp,
@@ -173,6 +175,11 @@ private:
      * Tworzy edytowalne zadanie podrzędne dla wskazanego zadania głównego.
      */
     void addSubtask(std::uint64_t mainTaskId);
+
+    /**
+     * Edytuje nazwę zadania głównego albo podrzędnego.
+     */
+    void editTaskTitle(std::uint64_t taskId, bool isMainTask);
 
     /**
      * Wyświetla prompt lub opis, a po zatwierdzeniu zapisuje nową treść.

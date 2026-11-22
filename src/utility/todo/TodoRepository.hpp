@@ -26,10 +26,26 @@ public:
     bool createMainTask(const std::string& title, std::string& error) const;
 
     /**
+     * Zmienia nazwę zapisanego zadania głównego.
+     */
+    bool updateMainTaskTitle(
+        std::uint64_t mainTaskId,
+        const std::string& title,
+        std::string& error) const;
+
+    /**
      * Zapisuje podzadanie powiązane z zadaniem głównym.
      */
     bool createSubtask(
         std::uint64_t mainTaskId,
+        const std::string& title,
+        std::string& error) const;
+
+    /**
+     * Zmienia nazwę zapisanego podzadania.
+     */
+    bool updateSubtaskTitle(
+        std::uint64_t subtaskId,
         const std::string& title,
         std::string& error) const;
 

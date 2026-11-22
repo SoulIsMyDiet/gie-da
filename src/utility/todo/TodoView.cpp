@@ -800,6 +800,7 @@ void TodoView::rebuildTaskControls() {
     const int moveButtonWidth = todoSize(parent_, 32);
     const int hideButtonWidth = todoSize(parent_, 64);
     const int deleteWidth = todoSize(parent_, 34);
+    const int editTitleWidth = todoSize(parent_, 88);
     const int actionGap = todoSize(parent_, 6);
     const int contentTop = todoSize(parent_, 108);
     const int contentBottom = clientHeight - todoSize(
@@ -815,8 +816,8 @@ void TodoView::rebuildTaskControls() {
             continue;
         }
         const int mainActionsWidth =
-            moveButtonWidth * 2 + hideButtonWidth + deleteWidth +
-            actionGap * 3;
+            moveButtonWidth * 2 + editTitleWidth +
+            hideButtonWidth + deleteWidth + actionGap * 4;
         const int mainActionsX =
             taskAreaWidth - horizontalPadding - mainActionsWidth;
         const int addSubtaskButtonSize = todoSize(parent_, 40);
@@ -898,6 +899,15 @@ void TodoView::rebuildTaskControls() {
         }
         mainActionX += moveButtonWidth + actionGap;
 
+        HWND editMainTitleButton = createActionButton(
+            L"Edytuj", mainActionX, rowTop - scrollPosition_,
+            editTitleWidth, buttonHeight,
+            ActionKind::editMainTaskTitle, task.id);
+        addPositionedControl(
+            editMainTitleButton, mainActionX, rowTop,
+            editTitleWidth, buttonHeight);
+        mainActionX += editTitleWidth + actionGap;
+
         HWND hideMainButton = createActionButton(
             L"Ukryj", mainActionX, rowTop - scrollPosition_,
             hideButtonWidth, buttonHeight, ActionKind::hideMainTask, task.id);
@@ -938,8 +948,8 @@ void TodoView::rebuildTaskControls() {
             const int actionRowWidth = std::max(
                 1, taskAreaWidth - subtaskX - horizontalPadding);
             const int fixedActionWidth =
-                moveButtonWidth * 2 + hideButtonWidth + deleteWidth +
-                actionGap * 5;
+                editTitleWidth + moveButtonWidth * 2 +
+                hideButtonWidth + deleteWidth + actionGap * 6;
             const int labelWidth = std::max(
                 2, actionRowWidth - fixedActionWidth);
             const int promptWidth = std::min(
@@ -1020,6 +1030,7 @@ void TodoView::rebuildTaskControls() {
             const int descriptionButtonWidth = stackActions
                 ? std::min(descriptionWidth, std::max(1, checkboxWidth -
                     promptButtonWidth - actionGap -
+                    editTitleWidth - actionGap -
                     moveButtonWidth * 2 - hideButtonWidth - deleteWidth -
                     actionGap * 4))
                 : descriptionWidth;
@@ -1032,8 +1043,19 @@ void TodoView::rebuildTaskControls() {
                 descriptionButton, descriptionX, actionsTop,
                 descriptionButtonWidth, buttonHeight);
 
-            const int moveUpX =
+            const int editSubtaskTitleX =
                 descriptionX + descriptionButtonWidth + actionGap;
+            HWND editSubtaskTitleButton = createActionButton(
+                L"Edytuj", editSubtaskTitleX,
+                actionsTop - scrollPosition_,
+                editTitleWidth, buttonHeight,
+                ActionKind::editSubtaskTitle, subtask.id);
+            addPositionedControl(
+                editSubtaskTitleButton, editSubtaskTitleX, actionsTop,
+                editTitleWidth, buttonHeight);
+
+            const int moveUpX =
+                editSubtaskTitleX + editTitleWidth + actionGap;
             HWND moveSubtaskUpButton = createActionButton(
                 L"↑", moveUpX, actionsTop - scrollPosition_,
                 moveButtonWidth, buttonHeight,
@@ -1157,6 +1179,12 @@ void TodoView::performAction(
         case ActionKind::addSubtask:
             addSubtask(action.taskId);
             return;
+        case ActionKind::editMainTaskTitle:
+            editTaskTitle(action.taskId, true);
+            return;
+        case ActionKind::editSubtaskTitle:
+            editTaskTitle(action.taskId, false);
+            return;
         case ActionKind::toggleSubtask: {
             const auto checkbox = subtaskCheckboxes_.find(controlId);
             if (checkbox == subtaskCheckboxes_.end()) {
@@ -1241,6 +1269,80 @@ void TodoView::addSubtask(std::uint64_t mainTaskId) {
     }
     std::string error;
     if (!manager_.addSubtask(mainTaskId, title, error)) {
+        showError(error);
+        return;
+    }
+    refresh();
+}
+
+/**
+ * Otwiera edytor istniejącej nazwy i zapisuje zmianę w bazie przez API.
+ */
+void TodoView::editTaskTitle(
+    std::uint64_t taskId, bool isMainTask) {
+    std::string currentTitle;
+    bool titleFound = false;
+    if (isMainTask) {
+        const auto task = std::find_if(
+            tasks_.begin(), tasks_.end(),
+            [taskId](const TodoTask& candidate) {
+                return candidate.id == taskId;
+            });
+        if (task != tasks_.end()) {
+            currentTitle = task->title;
+            titleFound = true;
+        }
+    } else {
+        for (const TodoTask& task : tasks_) {
+            const auto subtask = std::find_if(
+                task.subtasks.begin(), task.subtasks.end(),
+                [taskId](const TodoSubtask& candidate) {
+                    return candidate.id == taskId;
+                });
+            if (subtask != task.subtasks.end()) {
+                currentTitle = subtask->title;
+                titleFound = true;
+                break;
+            }
+        }
+    }
+    if (!titleFound) {
+        showError(
+            isMainTask
+                ? "Nie znaleziono zadania głównego do edycji."
+                : "Nie znaleziono zadania podrzędnego do edycji.");
+        return;
+    }
+
+    std::wstring wideCurrentTitle;
+    if (!convertUtf8ToWide(currentTitle, wideCurrentTitle)) {
+        showError("Zapisana nazwa zadania nie jest poprawnym tekstem UTF-8.");
+        return;
+    }
+    std::wstring wideEditedTitle;
+    std::string dialogError;
+    const wchar_t* dialogTitle = isMainTask
+        ? L"Edytuj nazwę zadania głównego"
+        : L"Edytuj nazwę zadania podrzędnego";
+    if (!showTextInputDialog(
+            instance_, parent_, dialogTitle, wideCurrentTitle, false,
+            wideEditedTitle, dialogError)) {
+        if (!dialogError.empty()) {
+            showError(dialogError);
+        }
+        return;
+    }
+
+    std::string editedTitle;
+    if (!convertWideToUtf8(wideEditedTitle, editedTitle)) {
+        showError("Nie udało się przekonwertować nowej nazwy zadania.");
+        return;
+    }
+    std::string error;
+    const bool updated = isMainTask
+        ? manager_.updateMainTaskTitle(taskId, editedTitle, error)
+        : manager_.updateSubtaskTitle(taskId, editedTitle, error);
+    if (!updated) {
         showError(error);
         return;
     }

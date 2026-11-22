@@ -244,6 +244,21 @@ class TodoRepository:
             )
             return task_id
 
+    def update_main_task_title(self, main_task_id: int, title: str) -> bool:
+        """Zmienia nazwę zadania głównego albo zwraca False, jeśli go brak."""
+        with self._cursor(transactional=True) as (_, cursor):
+            cursor.execute(
+                "SELECT id FROM todo_main_tasks WHERE id = %s FOR UPDATE",
+                (main_task_id,),
+            )
+            if cursor.fetchone() is None:
+                return False
+            cursor.execute(
+                "UPDATE todo_main_tasks SET title = %s WHERE id = %s",
+                (title, main_task_id),
+            )
+            return True
+
     def create_subtask(self, main_task_id: int, title: str) -> int | None:
         """Dodaje podzadanie albo zwraca None, jeśli rodzic nie istnieje."""
         with self._cursor(transactional=True) as (_, cursor):
@@ -266,6 +281,21 @@ class TodoRepository:
                 (subtask_id, subtask_id),
             )
             return subtask_id
+
+    def update_subtask_title(self, subtask_id: int, title: str) -> bool:
+        """Zmienia nazwę podzadania albo zwraca False, jeśli go brak."""
+        with self._cursor(transactional=True) as (_, cursor):
+            cursor.execute(
+                "SELECT id FROM todo_subtasks WHERE id = %s FOR UPDATE",
+                (subtask_id,),
+            )
+            if cursor.fetchone() is None:
+                return False
+            cursor.execute(
+                "UPDATE todo_subtasks SET title = %s WHERE id = %s",
+                (title, subtask_id),
+            )
+            return True
 
     def hide_main_task(self, main_task_id: int) -> bool:
         """Ukrywa zadanie główne bez usuwania go ani jego podzadań."""
