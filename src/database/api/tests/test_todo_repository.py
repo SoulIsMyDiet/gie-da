@@ -25,6 +25,7 @@ from todo_repository import TodoRepository  # noqa: E402
 def test_todo_schema_is_additive_and_uses_cascade_foreign_key() -> None:
     """Tworzy tylko brakujące tabele i ustawia trwałe relacje danych."""
     cursor = Mock()
+    cursor.fetchone.side_effect = [(1,), (1,), (1,), (1,), (1,), (1,)]
 
     TodoRepository.initialize_schema(cursor)
 
@@ -38,7 +39,27 @@ def test_todo_schema_is_additive_and_uses_cascade_foreign_key() -> None:
     assert "ON DELETE CASCADE" in schema_statements
     assert "prompt LONGTEXT NULL" in schema_statements
     assert "description LONGTEXT NULL" in schema_statements
+    assert "sort_order BIGINT UNSIGNED NOT NULL DEFAULT 0" in schema_statements
+    assert "hidden BOOLEAN NOT NULL DEFAULT FALSE" in schema_statements
     assert "DROP TABLE" not in schema_statements
+
+
+def test_todo_schema_adds_new_columns_to_existing_tables() -> None:
+    """Rozszerza wcześniejszą bazę o ukrywanie i kolejność bez kasowania danych."""
+    cursor = Mock()
+    cursor.fetchone.side_effect = [(0,), (0,), (0,), (0,), (0,), (0,)]
+
+    TodoRepository.initialize_schema(cursor)
+
+    statements = [call.args[0] for call in cursor.execute.call_args_list]
+    assert sum(statement.startswith("ALTER TABLE") for statement in statements) == 6
+    assert any("ADD COLUMN `hidden`" in statement for statement in statements)
+    assert any("ADD COLUMN `sort_order`" in statement for statement in statements)
+    assert any(
+        "SET sort_order = id WHERE sort_order = 0" in statement
+        for statement in statements
+    )
+    assert all("DROP TABLE" not in statement for statement in statements)
 
 
 def test_list_tasks_returns_subtask_content_visibility_flags_only() -> None:
@@ -61,6 +82,7 @@ def test_list_tasks_returns_subtask_content_visibility_flags_only() -> None:
                 "main_task_id": 4,
                 "title": "Raporty",
                 "completed": 1,
+                "hidden": 0,
                 "prompt_exists": 1,
                 "description_exists": 1,
                 "created_at": "2026-11-23 06:00:00",
@@ -80,6 +102,7 @@ def test_list_tasks_returns_subtask_content_visibility_flags_only() -> None:
             "id": 8,
             "title": "Raporty",
             "completed": True,
+            "hidden": False,
             "prompt_exists": True,
             "description_exists": True,
             "created_at": "2026-11-23 06:00:00",
@@ -88,6 +111,10 @@ def test_list_tasks_returns_subtask_content_visibility_flags_only() -> None:
     ]
     assert "prompt" not in tasks[0]["subtasks"][0]
     assert "description" not in tasks[0]["subtasks"][0]
+    assert "WHERE hidden = FALSE" in cursor.execute.call_args_list[0].args[0]
+    assert "ORDER BY main_task_id, sort_order, id" in (
+        cursor.execute.call_args_list[1].args[0]
+    )
     connection.close.assert_called_once()
 
 
@@ -105,6 +132,7 @@ def test_todo_list_wire_format_escapes_text_and_hides_prompt_content() -> None:
                     "id": 8,
                     "title": "Podzadanie\n",
                     "completed": False,
+                    "hidden": False,
                     "prompt_exists": True,
                     "description_exists": False,
                     "created_at": "2026-11-23 06:00:00",
@@ -133,12 +161,155 @@ def test_todo_list_wire_format_escapes_text_and_hides_prompt_content() -> None:
         "4",
         "Podzadanie%0A",
         "0",
+        "0",
         "1",
         "0",
         "2026-11-23 06:00:00",
         "2026-11-23 06:00:00",
     ]
     assert "sekretny" not in response.body.decode("utf-8")
+
+
+def test_hiding_a_main_task_keeps_the_record_in_the_database() -> None:
+    """Zapisuje flagę ukrycia zamiast usuwać zadanie główne."""
+    connection = Mock()
+    cursor = Mock()
+    cursor.fetchone.return_value = {"id": 4}
+    connection.cursor.return_value = cursor
+    repository = TodoRepository({})
+
+    with patch(
+        "todo_repository.mysql.connector.connect", return_value=connection
+    ):
+        hidden = repository.hide_main_task(4)
+
+    assert hidden
+    assert any(
+        "UPDATE todo_main_tasks SET hidden = TRUE" in call.args[0]
+        for call in cursor.execute.call_args_list
+    )
+    assert all(
+        "DELETE" not in call.args[0]
+        for call in cursor.execute.call_args_list
+    )
+    connection.commit.assert_called_once()
+
+
+def test_hiding_a_subtask_keeps_it_for_parent_completion() -> None:
+    """Ukrycie nie zmienia statusu ukończenia zachowanego podzadania."""
+    connection = Mock()
+    cursor = Mock()
+    cursor.fetchone.return_value = {"id": 8}
+    connection.cursor.return_value = cursor
+    repository = TodoRepository({})
+
+    with patch(
+        "todo_repository.mysql.connector.connect", return_value=connection
+    ):
+        hidden = repository.hide_subtask(8)
+
+    assert hidden
+    assert any(
+        "UPDATE todo_subtasks SET hidden = TRUE" in call.args[0]
+        for call in cursor.execute.call_args_list
+    )
+    connection.commit.assert_called_once()
+
+
+def test_move_main_task_swaps_order_with_visible_neighbor() -> None:
+    """Przesuwa zadanie główne względem drugiego widocznego zadania."""
+    connection = Mock()
+    cursor = Mock()
+    cursor.fetchall.return_value = [
+        {"id": 10, "sort_order": 10},
+        {"id": 20, "sort_order": 20},
+        {"id": 30, "sort_order": 30},
+    ]
+    connection.cursor.return_value = cursor
+    repository = TodoRepository({})
+
+    with patch(
+        "todo_repository.mysql.connector.connect", return_value=connection
+    ):
+        moved = repository.move_main_task(20, "up")
+
+    assert moved
+    assert cursor.execute.call_args_list[-2].args[1] == (10, 20)
+    assert cursor.execute.call_args_list[-1].args[1] == (20, 10)
+    connection.commit.assert_called_once()
+
+
+def test_move_subtask_is_limited_to_the_same_parent() -> None:
+    """Zapytanie kolejności podzadań uwzględnia identyfikator rodzica."""
+    connection = Mock()
+    cursor = Mock()
+    cursor.fetchone.return_value = {"main_task_id": 7}
+    cursor.fetchall.return_value = [
+        {"id": 8, "sort_order": 8},
+        {"id": 9, "sort_order": 9},
+    ]
+    connection.cursor.return_value = cursor
+    repository = TodoRepository({})
+
+    with patch(
+        "todo_repository.mysql.connector.connect", return_value=connection
+    ):
+        moved = repository.move_subtask(8, "down")
+
+    assert moved
+    assert cursor.execute.call_args_list[1].args[1] == (7,)
+    assert "main_task_id = %s AND hidden = FALSE" in (
+        cursor.execute.call_args_list[1].args[0]
+    )
+    assert cursor.execute.call_args_list[-2].args[1] == (9, 8)
+    assert cursor.execute.call_args_list[-1].args[1] == (8, 9)
+
+
+def test_move_at_list_boundary_does_not_change_order() -> None:
+    """Pozostawia zadanie na miejscu, gdy nie ma sąsiada w wybranym kierunku."""
+    connection = Mock()
+    cursor = Mock()
+    cursor.fetchall.return_value = [{"id": 10, "sort_order": 10}]
+    connection.cursor.return_value = cursor
+    repository = TodoRepository({})
+
+    with patch(
+        "todo_repository.mysql.connector.connect", return_value=connection
+    ):
+        moved = repository.move_main_task(10, "up")
+
+    assert moved is False
+    assert cursor.execute.call_count == 1
+
+
+def test_hide_endpoint_returns_persistent_hidden_state() -> None:
+    """Endpoint ukrywania potwierdza zapis flagi bez usunięcia rekordu."""
+    repository = Mock()
+    repository.hide_main_task.return_value = True
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(todo_repository=repository))
+    )
+
+    result = market_data_api.hide_todo_main_task(4, request)
+
+    assert result == {"hidden": True}
+    repository.hide_main_task.assert_called_once_with(4)
+
+
+def test_move_endpoint_returns_false_at_a_list_boundary() -> None:
+    """API poprawnie zwraca brak przesunięcia na początku listy."""
+    repository = Mock()
+    repository.move_main_task.return_value = False
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(todo_repository=repository))
+    )
+
+    result = market_data_api.move_todo_main_task(
+        4, market_data_api.TodoMoveRequest(direction="up"), request
+    )
+
+    assert result == {"moved": False}
+    repository.move_main_task.assert_called_once_with(4, "up")
 
 
 def test_weekly_review_inserts_parent_and_children_in_one_transaction() -> None:

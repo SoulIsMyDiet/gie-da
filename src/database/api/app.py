@@ -3342,6 +3342,12 @@ class TodoCompletionRequest(BaseModel):
     completed: bool
 
 
+class TodoMoveRequest(BaseModel):
+    """Wskazuje kierunek przesunięcia zadania na liście."""
+
+    direction: Literal["up", "down"]
+
+
 class TodoTextRequest(BaseModel):
     """Przechowuje prompt albo opis bez limitu długości aplikacji."""
 
@@ -3420,6 +3426,7 @@ def list_todo_tasks(request: Request) -> Response:
                         str(task["id"]),
                         quote(subtask["title"], safe="-_.~"),
                         "1" if subtask["completed"] else "0",
+                        "1" if subtask["hidden"] else "0",
                         "1" if subtask["prompt_exists"] else "0",
                         "1" if subtask["description_exists"] else "0",
                         subtask["created_at"],
@@ -3494,6 +3501,93 @@ def set_todo_subtask_completion(
             status_code=404, detail="Nie znaleziono zadania podrzędnego."
         )
     return {"completed": payload.completed}
+
+
+@app.post("/api/todos/main/{main_task_id}/hide")
+def hide_todo_main_task(
+    main_task_id: int, request: Request
+) -> dict[str, bool]:
+    """Ukrywa zadanie główne w widoku, zachowując je w bazie."""
+    if main_task_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        hidden = request.app.state.todo_repository.hide_main_task(main_task_id)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się ukryć zadania głównego.",
+        ) from error
+    if not hidden:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania głównego."
+        )
+    return {"hidden": True}
+
+
+@app.post("/api/todos/subtasks/{subtask_id}/hide")
+def hide_todo_subtask(subtask_id: int, request: Request) -> dict[str, bool]:
+    """Ukrywa podzadanie w widoku, zachowując je dla statusu rodzica."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        hidden = request.app.state.todo_repository.hide_subtask(subtask_id)
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się ukryć zadania podrzędnego.",
+        ) from error
+    if not hidden:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono zadania podrzędnego."
+        )
+    return {"hidden": True}
+
+
+@app.post("/api/todos/main/{main_task_id}/move")
+def move_todo_main_task(
+    main_task_id: int, payload: TodoMoveRequest, request: Request
+) -> dict[str, bool]:
+    """Przesuwa zadanie główne względem innych widocznych zadań głównych."""
+    if main_task_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        moved = request.app.state.todo_repository.move_main_task(
+            main_task_id, payload.direction
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zmienić kolejności zadań głównych.",
+        ) from error
+    if moved is None:
+        raise HTTPException(
+            status_code=404, detail="Nie znaleziono widocznego zadania głównego."
+        )
+    return {"moved": moved}
+
+
+@app.post("/api/todos/subtasks/{subtask_id}/move")
+def move_todo_subtask(
+    subtask_id: int, payload: TodoMoveRequest, request: Request
+) -> dict[str, bool]:
+    """Przesuwa podzadanie wyłącznie w obrębie jego zadania głównego."""
+    if subtask_id < 1:
+        raise HTTPException(status_code=422, detail="Nieprawidłowe ID zadania.")
+    try:
+        moved = request.app.state.todo_repository.move_subtask(
+            subtask_id, payload.direction
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zmienić kolejności zadań podrzędnych.",
+        ) from error
+    if moved is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Nie znaleziono widocznego zadania podrzędnego.",
+        )
+    return {"moved": moved}
 
 
 def _read_todo_subtask_text(

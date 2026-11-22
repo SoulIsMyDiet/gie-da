@@ -235,6 +235,9 @@ def test_initialize_backfills_xau_with_configured_spread():
     connection, cursor = Mock(), Mock()
     connection.cursor.return_value = cursor
     cursor.fetchall.return_value = []
+    cursor.fetchone.side_effect = lambda: (
+        (1,) if cursor.fetchone.call_count <= 6 else None
+    )
     with patch.object(app.mysql.connector, "connect", return_value=connection), \
             patch.object(repository, "_migrate_signal_enum"), \
             patch.object(repository, "_migrate_signal_source_timestamp"), \

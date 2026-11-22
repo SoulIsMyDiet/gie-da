@@ -15,8 +15,8 @@ int main() {
     }
 
     task.subtasks = {
-        {1, "Raporty", true, false, false, "", ""},
-        {2, "Sygnały", true, true, false, "", ""},
+        {1, "Raporty", true, false, false, false, "", ""},
+        {2, "Sygnały", true, true, true, false, "", ""},
     };
     if (!task.isComplete()) {
         return 2;

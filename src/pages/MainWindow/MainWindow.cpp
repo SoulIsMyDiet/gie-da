@@ -28,8 +28,8 @@ constexpr int reportsButtonWidth = 140;
 constexpr int reportsButtonHeight = 36;
 constexpr int reportsButtonGap = 12;
 constexpr int reportsButtonBottomMargin = 16;
-constexpr int initialWindowWidth = 1280;
-constexpr int initialWindowHeight = 720;
+constexpr int initialWindowWidth = 1600;
+constexpr int initialWindowHeight = 900;
 
 /**
  * Zapisuje błąd do pliku i pokazuje go użytkownikowi w standardowym oknie.
@@ -80,7 +80,7 @@ MainWindow::~MainWindow() {
 }
 
 /**
- * Rejestruje klasę, tworzy główne okno w podwójnym rozmiarze i je wyświetla.
+ * Rejestruje klasę i tworzy okno powiększone o 25% względem poprzedniego rozmiaru.
  */
 bool MainWindow::create(HINSTANCE instance, int showCommand) {
     instance_ = instance;

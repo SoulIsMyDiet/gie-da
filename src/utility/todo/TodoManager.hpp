@@ -37,6 +37,28 @@ public:
         std::uint64_t subtaskId, bool completed, std::string& error) const;
 
     /**
+     * Ukrywa zadanie główne w widoku, zachowując je w bazie danych.
+     */
+    bool hideMainTask(std::uint64_t mainTaskId, std::string& error) const;
+
+    /**
+     * Ukrywa podzadanie w widoku, zachowując je w bazie danych.
+     */
+    bool hideSubtask(std::uint64_t subtaskId, std::string& error) const;
+
+    /**
+     * Zmienia kolejność zadania głównego wśród widocznych zadań.
+     */
+    bool moveMainTask(
+        std::uint64_t mainTaskId, bool moveUp, std::string& error) const;
+
+    /**
+     * Zmienia kolejność podzadania tylko wśród dzieci tego samego rodzica.
+     */
+    bool moveSubtask(
+        std::uint64_t subtaskId, bool moveUp, std::string& error) const;
+
+    /**
      * Pobiera prompt przypisany do podzadania.
      */
     bool loadPrompt(

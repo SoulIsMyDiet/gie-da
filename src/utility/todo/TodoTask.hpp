@@ -11,6 +11,7 @@ struct TodoSubtask {
     std::uint64_t id = 0;
     std::string title;
     bool completed = false;
+    bool hidden = false;
     bool promptExists = false;
     bool descriptionExists = false;
     std::string createdAt;

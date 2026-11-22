@@ -40,6 +40,28 @@ public:
         std::uint64_t subtaskId, bool completed, std::string& error) const;
 
     /**
+     * Trwale zapamiętuje ukrycie zadania bez usuwania go z bazy.
+     */
+    bool hideMainTask(std::uint64_t mainTaskId, std::string& error) const;
+
+    /**
+     * Trwale zapamiętuje ukrycie podzadania bez usuwania go z bazy.
+     */
+    bool hideSubtask(std::uint64_t subtaskId, std::string& error) const;
+
+    /**
+     * Przesuwa zadanie główne w górę lub w dół listy.
+     */
+    bool moveMainTask(
+        std::uint64_t mainTaskId, bool moveUp, std::string& error) const;
+
+    /**
+     * Przesuwa podzadanie w obrębie jego zadania głównego.
+     */
+    bool moveSubtask(
+        std::uint64_t subtaskId, bool moveUp, std::string& error) const;
+
+    /**
      * Pobiera prompt podzadania na żądanie użytkownika.
      */
     bool fetchPrompt(

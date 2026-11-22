@@ -82,6 +82,12 @@ private:
     enum class ActionKind {
         addSubtask,
         toggleSubtask,
+        moveMainUp,
+        moveMainDown,
+        moveSubtaskUp,
+        moveSubtaskDown,
+        hideMainTask,
+        hideSubtask,
         editPrompt,
         editDescription,
         deleteMainTask,

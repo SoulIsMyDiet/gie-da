@@ -76,6 +76,50 @@ bool TodoManager::setSubtaskCompleted(
 }
 
 /**
+ * Zachowuje zadanie w bazie, ale usuwa je z widocznej listy.
+ */
+bool TodoManager::hideMainTask(
+    std::uint64_t mainTaskId, std::string& error) const {
+    if (!validateTaskId(mainTaskId, "głównego", error)) {
+        return false;
+    }
+    return repository_.hideMainTask(mainTaskId, error);
+}
+
+/**
+ * Ukrywa podzadanie bez zmiany jego statusu ukończenia.
+ */
+bool TodoManager::hideSubtask(
+    std::uint64_t subtaskId, std::string& error) const {
+    if (!validateTaskId(subtaskId, "podrzędnego", error)) {
+        return false;
+    }
+    return repository_.hideSubtask(subtaskId, error);
+}
+
+/**
+ * Przesuwa zadanie główne w żądanym kierunku.
+ */
+bool TodoManager::moveMainTask(
+    std::uint64_t mainTaskId, bool moveUp, std::string& error) const {
+    if (!validateTaskId(mainTaskId, "głównego", error)) {
+        return false;
+    }
+    return repository_.moveMainTask(mainTaskId, moveUp, error);
+}
+
+/**
+ * Przesuwa podzadanie w obrębie jego zadania nadrzędnego.
+ */
+bool TodoManager::moveSubtask(
+    std::uint64_t subtaskId, bool moveUp, std::string& error) const {
+    if (!validateTaskId(subtaskId, "podrzędnego", error)) {
+        return false;
+    }
+    return repository_.moveSubtask(subtaskId, moveUp, error);
+}
+
+/**
  * Pobiera prompt po sprawdzeniu identyfikatora podzadania.
  */
 bool TodoManager::loadPrompt(

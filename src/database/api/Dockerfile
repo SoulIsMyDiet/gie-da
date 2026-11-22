@@ -14,6 +14,7 @@ RUN apt-get update \
     && chown appuser:appuser /var/lib/grok-sp500 /var/log/gieda
 
 COPY database/api/app.py ./app.py
+COPY database/api/todo_repository.py ./todo_repository.py
 COPY database/api/ai_verification.py ./ai_verification.py
 COPY database/api/ai_verification_config.json ./ai_verification_config.json
 COPY database/api/error_file_logging.py ./error_file_logging.py

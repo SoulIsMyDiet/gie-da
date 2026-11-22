@@ -687,24 +687,30 @@ void TodoView::rebuildTaskControls() {
     const int horizontalPadding = WindowScale::size(parent_, 24);
     const int rowGap = WindowScale::size(parent_, 10);
     const int buttonHeight = WindowScale::size(parent_, 30);
+    const int moveButtonWidth = WindowScale::size(parent_, 32);
+    const int hideButtonWidth = WindowScale::size(parent_, 64);
     const int deleteWidth = WindowScale::size(parent_, 34);
+    const int actionGap = WindowScale::size(parent_, 6);
     const int contentTop = WindowScale::size(parent_, 108);
     const int contentBottom = clientHeight - WindowScale::size(
         parent_, navigationButtonHeight + navigationBottomMargin * 2);
     const int viewportHeight = std::max(1, contentBottom - contentTop);
     int rowTop = contentTop;
 
-    for (const TodoTask& task : tasks_) {
+    for (std::size_t taskIndex = 0; taskIndex < tasks_.size(); ++taskIndex) {
+        const TodoTask& task = tasks_[taskIndex];
         std::wstring wideTitle;
         if (!convertUtf8ToWide(task.title, wideTitle)) {
             status_ = "Nie można wyświetlić nazwy zadania z API.";
             continue;
         }
-        const int mainDeleteX = std::max(
-            horizontalPadding,
-            taskAreaWidth - horizontalPadding - deleteWidth);
+        const int mainActionsWidth =
+            moveButtonWidth * 2 + hideButtonWidth + deleteWidth +
+            actionGap * 3;
+        const int mainActionsX =
+            taskAreaWidth - horizontalPadding - mainActionsWidth;
         const int mainCheckboxWidth = std::max(
-            1, mainDeleteX - horizontalPadding - rowGap);
+            1, mainActionsX - horizontalPadding - rowGap);
         const int mainRowHeight =
             measureTextHeight(wideTitle, mainCheckboxWidth);
         const int mainCheckboxId = allocateControlId();
@@ -732,16 +738,44 @@ void TodoView::rebuildTaskControls() {
             }
         }
 
-        const int mainDeleteId = allocateControlId();
-        if (mainDeleteId != 0) {
-            HWND deleteButton = createActionButton(
-                L"X", mainDeleteX, rowTop - scrollPosition_,
-                deleteWidth, buttonHeight, ActionKind::deleteMainTask,
-                task.id, true);
-            addPositionedControl(
-                deleteButton, mainDeleteX, rowTop,
-                deleteWidth, buttonHeight);
+        int mainActionX = mainActionsX;
+        HWND moveUpButton = createActionButton(
+            L"↑", mainActionX, rowTop - scrollPosition_,
+            moveButtonWidth, buttonHeight, ActionKind::moveMainUp, task.id);
+        addPositionedControl(
+            moveUpButton, mainActionX, rowTop,
+            moveButtonWidth, buttonHeight);
+        if (moveUpButton != nullptr) {
+            EnableWindow(moveUpButton, taskIndex > 0);
         }
+        mainActionX += moveButtonWidth + actionGap;
+
+        HWND moveDownButton = createActionButton(
+            L"↓", mainActionX, rowTop - scrollPosition_,
+            moveButtonWidth, buttonHeight, ActionKind::moveMainDown, task.id);
+        addPositionedControl(
+            moveDownButton, mainActionX, rowTop,
+            moveButtonWidth, buttonHeight);
+        if (moveDownButton != nullptr) {
+            EnableWindow(moveDownButton, taskIndex + 1 < tasks_.size());
+        }
+        mainActionX += moveButtonWidth + actionGap;
+
+        HWND hideMainButton = createActionButton(
+            L"Ukryj", mainActionX, rowTop - scrollPosition_,
+            hideButtonWidth, buttonHeight, ActionKind::hideMainTask, task.id);
+        addPositionedControl(
+            hideMainButton, mainActionX, rowTop,
+            hideButtonWidth, buttonHeight);
+        mainActionX += hideButtonWidth + actionGap;
+
+        HWND mainDeleteButton = createActionButton(
+            L"X", mainActionX, rowTop - scrollPosition_,
+            deleteWidth, buttonHeight, ActionKind::deleteMainTask,
+            task.id, true);
+        addPositionedControl(
+            mainDeleteButton, mainActionX, rowTop,
+            deleteWidth, buttonHeight);
 
         rowTop += mainRowHeight + WindowScale::size(parent_, 4);
         const int addSubtaskX =
@@ -759,7 +793,15 @@ void TodoView::rebuildTaskControls() {
             addSubtaskWidth, buttonHeight);
         rowTop += buttonHeight + WindowScale::size(parent_, 4);
 
+        const std::size_t visibleSubtaskCount = static_cast<std::size_t>(
+            std::count_if(
+                task.subtasks.begin(), task.subtasks.end(),
+                [](const TodoSubtask& subtask) { return !subtask.hidden; }));
+        std::size_t visibleSubtaskIndex = 0;
         for (const TodoSubtask& subtask : task.subtasks) {
+            if (subtask.hidden) {
+                continue;
+            }
             std::wstring wideSubtaskTitle;
             if (!convertUtf8ToWide(subtask.title, wideSubtaskTitle)) {
                 status_ = "Nie można wyświetlić nazwy podzadania z API.";
@@ -768,20 +810,29 @@ void TodoView::rebuildTaskControls() {
 
             const int subtaskX =
                 horizontalPadding + WindowScale::size(parent_, 34);
-            const int promptWidth = WindowScale::size(parent_, 132);
-            const int descriptionWidth = WindowScale::size(parent_, 132);
-            const int actionGap = WindowScale::size(parent_, 6);
+            const int desiredPromptWidth = WindowScale::size(parent_, 132);
+            const int desiredDescriptionWidth = WindowScale::size(parent_, 132);
+            const int actionRowWidth = std::max(
+                1, taskAreaWidth - subtaskX - horizontalPadding);
+            const int fixedActionWidth =
+                moveButtonWidth * 2 + hideButtonWidth + deleteWidth +
+                actionGap * 5;
+            const int labelWidth = std::max(
+                2, actionRowWidth - fixedActionWidth);
+            const int promptWidth = std::min(
+                desiredPromptWidth, std::max(1, labelWidth / 2));
+            const int descriptionWidth = std::min(
+                desiredDescriptionWidth,
+                std::max(1, labelWidth - promptWidth));
             const int actionsWidth =
-                promptWidth + descriptionWidth + deleteWidth + 2 * actionGap;
+                promptWidth + descriptionWidth + fixedActionWidth;
             const int availableWidth =
                 taskAreaWidth - horizontalPadding - subtaskX -
                 horizontalPadding - actionsWidth - rowGap;
             const bool stackActions =
                 availableWidth < WindowScale::size(parent_, 140);
             const int checkboxWidth = stackActions
-                ? std::max(
-                    WindowScale::size(parent_, 120),
-                    taskAreaWidth - subtaskX - horizontalPadding)
+                ? actionRowWidth
                 : availableWidth;
             const int subtaskTextHeight =
                 measureTextHeight(wideSubtaskTitle, checkboxWidth);
@@ -841,10 +892,10 @@ void TodoView::rebuildTaskControls() {
                 ? promptX + promptButtonWidth + actionGap
                 : promptX + promptWidth + actionGap;
             const int descriptionButtonWidth = stackActions
-                ? std::min(
-                    descriptionWidth,
-                    std::max(1, taskAreaWidth - horizontalPadding -
-                        descriptionX - deleteWidth - actionGap))
+                ? std::min(descriptionWidth, std::max(1, checkboxWidth -
+                    promptButtonWidth - actionGap -
+                    moveButtonWidth * 2 - hideButtonWidth - deleteWidth -
+                    actionGap * 4))
                 : descriptionWidth;
             HWND descriptionButton = createActionButton(
                 L"Dodaj / edytuj opis",
@@ -855,9 +906,46 @@ void TodoView::rebuildTaskControls() {
                 descriptionButton, descriptionX, actionsTop,
                 descriptionButtonWidth, buttonHeight);
 
-            const int subtaskDeleteX = stackActions
-                ? taskAreaWidth - horizontalPadding - deleteWidth
-                : descriptionX + descriptionWidth + actionGap;
+            const int moveUpX =
+                descriptionX + descriptionButtonWidth + actionGap;
+            HWND moveSubtaskUpButton = createActionButton(
+                L"↑", moveUpX, actionsTop - scrollPosition_,
+                moveButtonWidth, buttonHeight,
+                ActionKind::moveSubtaskUp, subtask.id);
+            addPositionedControl(
+                moveSubtaskUpButton, moveUpX, actionsTop,
+                moveButtonWidth, buttonHeight);
+            if (moveSubtaskUpButton != nullptr) {
+                EnableWindow(
+                    moveSubtaskUpButton, visibleSubtaskIndex > 0);
+            }
+
+            const int moveDownX = moveUpX + moveButtonWidth + actionGap;
+            HWND moveSubtaskDownButton = createActionButton(
+                L"↓", moveDownX, actionsTop - scrollPosition_,
+                moveButtonWidth, buttonHeight,
+                ActionKind::moveSubtaskDown, subtask.id);
+            addPositionedControl(
+                moveSubtaskDownButton, moveDownX, actionsTop,
+                moveButtonWidth, buttonHeight);
+            if (moveSubtaskDownButton != nullptr) {
+                EnableWindow(
+                    moveSubtaskDownButton,
+                    visibleSubtaskIndex + 1 < visibleSubtaskCount);
+            }
+
+            const int hideSubtaskX =
+                moveDownX + moveButtonWidth + actionGap;
+            HWND hideSubtaskButton = createActionButton(
+                L"Ukryj", hideSubtaskX, actionsTop - scrollPosition_,
+                hideButtonWidth, buttonHeight,
+                ActionKind::hideSubtask, subtask.id);
+            addPositionedControl(
+                hideSubtaskButton, hideSubtaskX, actionsTop,
+                hideButtonWidth, buttonHeight);
+
+            const int subtaskDeleteX = hideSubtaskX + hideButtonWidth +
+                actionGap;
             HWND subtaskDeleteButton = createActionButton(
                 L"X", subtaskDeleteX, actionsTop - scrollPosition_,
                 deleteWidth, buttonHeight,
@@ -871,6 +959,7 @@ void TodoView::rebuildTaskControls() {
                         WindowScale::size(parent_, 4)
                     : std::max(subtaskTextHeight, buttonHeight)) +
                 rowGap;
+            ++visibleSubtaskIndex;
         }
         rowTop += rowGap;
     }
@@ -955,6 +1044,40 @@ void TodoView::performAction(
             refresh();
             return;
         }
+        case ActionKind::moveMainUp:
+        case ActionKind::moveMainDown: {
+            const bool moveUp = action.kind == ActionKind::moveMainUp;
+            if (!manager_.moveMainTask(action.taskId, moveUp, error)) {
+                showError(error);
+                return;
+            }
+            refresh();
+            return;
+        }
+        case ActionKind::moveSubtaskUp:
+        case ActionKind::moveSubtaskDown: {
+            const bool moveUp = action.kind == ActionKind::moveSubtaskUp;
+            if (!manager_.moveSubtask(action.taskId, moveUp, error)) {
+                showError(error);
+                return;
+            }
+            refresh();
+            return;
+        }
+        case ActionKind::hideMainTask:
+            if (!manager_.hideMainTask(action.taskId, error)) {
+                showError(error);
+                return;
+            }
+            refresh();
+            return;
+        case ActionKind::hideSubtask:
+            if (!manager_.hideSubtask(action.taskId, error)) {
+                showError(error);
+                return;
+            }
+            refresh();
+            return;
         case ActionKind::editPrompt:
             editSubtaskText(action.taskId, true);
             return;
