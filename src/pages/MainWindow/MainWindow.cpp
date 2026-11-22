@@ -233,6 +233,21 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             break;
+        case WM_SETCURSOR:
+            if (todoView_.handleSetCursor(
+                    reinterpret_cast<HWND>(wParam))) {
+                return TRUE;
+            }
+            break;
+        case WM_CTLCOLORSTATIC: {
+            HBRUSH backgroundBrush = todoView_.handleControlColor(
+                reinterpret_cast<HDC>(wParam),
+                reinterpret_cast<HWND>(lParam));
+            if (backgroundBrush != nullptr) {
+                return reinterpret_cast<LRESULT>(backgroundBrush);
+            }
+            break;
+        }
         case WM_DRAWITEM:
             if (todoView_.handleDrawItem(
                     reinterpret_cast<const DRAWITEMSTRUCT*>(lParam))) {

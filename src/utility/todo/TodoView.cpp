@@ -412,6 +412,9 @@ TodoView::~TodoView() {
     if (toolTip_ != nullptr) {
         DestroyWindow(toolTip_);
     }
+    if (addSubtaskFont_ != nullptr) {
+        DeleteObject(addSubtaskFont_);
+    }
 }
 
 /**
@@ -653,30 +656,6 @@ bool TodoView::handleDrawItem(const DRAWITEMSTRUCT* drawItem) const {
     if (action == controlActions_.end()) {
         return false;
     }
-    if (action->second.kind == ActionKind::addSubtask) {
-        FillRect(
-            drawItem->hDC, &drawItem->rcItem,
-            reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-        SetBkMode(drawItem->hDC, TRANSPARENT);
-        SetTextColor(drawItem->hDC, RGB(28, 150, 65));
-        HFONT plusFont = CreateFontW(
-            -todoSize(parent_, 28), 0, 0, 0, FW_BOLD,
-            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HGDIOBJ previousFont = plusFont == nullptr
-            ? nullptr
-            : SelectObject(drawItem->hDC, plusFont);
-        RECT plusBounds = drawItem->rcItem;
-        DrawTextW(
-            drawItem->hDC, L"+", 1, &plusBounds,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        if (plusFont != nullptr) {
-            SelectObject(drawItem->hDC, previousFont);
-            DeleteObject(plusFont);
-        }
-        return true;
-    }
     if (action->second.kind != ActionKind::deleteMainTask &&
         action->second.kind != ActionKind::deleteSubtask) {
         return false;
@@ -697,6 +676,45 @@ bool TodoView::handleDrawItem(const DRAWITEMSTRUCT* drawItem) const {
     DrawTextW(
         drawItem->hDC, L"X", 1, &textBounds,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    return true;
+}
+
+/**
+ * Nadaje zielony kolor tekstowi kontrolki „+” bez własnego rysowania przycisku.
+ */
+HBRUSH TodoView::handleControlColor(
+    HDC deviceContext, HWND control) const {
+    if (deviceContext == nullptr || control == nullptr) {
+        return nullptr;
+    }
+    const int controlId = GetDlgCtrlID(control);
+    const auto action = controlActions_.find(controlId);
+    if (action == controlActions_.end() ||
+        action->second.kind != ActionKind::addSubtask) {
+        return nullptr;
+    }
+    SetBkMode(deviceContext, TRANSPARENT);
+    SetTextColor(deviceContext, RGB(28, 150, 65));
+    return GetSysColorBrush(COLOR_WINDOW);
+}
+
+/**
+ * Rozpoznaje przycisk dodawania podzadania i pokazuje kursor dłoni.
+ */
+bool TodoView::handleSetCursor(HWND control) const {
+    if (!visible_ || control == nullptr) {
+        return false;
+    }
+    const auto action = controlActions_.find(GetDlgCtrlID(control));
+    if (action == controlActions_.end() ||
+        action->second.kind != ActionKind::addSubtask) {
+        return false;
+    }
+    HCURSOR handCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32649));
+    if (handCursor == nullptr) {
+        return false;
+    }
+    SetCursor(handCursor);
     return true;
 }
 
@@ -800,15 +818,23 @@ void TodoView::rebuildTaskControls() {
         const int mainActionsX =
             taskAreaWidth - horizontalPadding - mainActionsWidth;
         const int addSubtaskButtonSize = todoSize(parent_, 40);
-        const int addSubtaskButtonX =
+        const int maximumAddSubtaskButtonX =
             mainActionsX - rowGap - addSubtaskButtonSize;
+        const int mainTextOffset =
+            todoSize(parent_, 18) + todoSize(parent_, 8);
+        const int textToAddButtonGap = todoSize(parent_, 6);
+        const int desiredAddSubtaskButtonX =
+            horizontalPadding + mainTextOffset +
+            measureTextWidth(wideTitle, true) +
+            textToAddButtonGap + rowGap;
+        const int addSubtaskButtonX = std::min(
+            maximumAddSubtaskButtonX, desiredAddSubtaskButtonX);
         const int mainCheckboxWidth = std::max(
             1, addSubtaskButtonX - horizontalPadding - rowGap);
         const int mainRowHeight = std::max(
             measureTextHeight(
                 wideTitle,
-                std::max(
-                    1, mainCheckboxWidth - todoSize(parent_, 26)),
+                std::max(1, mainCheckboxWidth - mainTextOffset),
                 true),
             addSubtaskButtonSize);
         const int mainCheckboxId = allocateControlId();
@@ -842,7 +868,7 @@ void TodoView::rebuildTaskControls() {
             L"+", addSubtaskButtonX,
             addSubtaskButtonY - scrollPosition_,
             addSubtaskButtonSize, addSubtaskButtonSize,
-            ActionKind::addSubtask, task.id, true);
+            ActionKind::addSubtask, task.id);
         addPositionedControl(
             addSubtaskButton, addSubtaskButtonX, addSubtaskButtonY,
             addSubtaskButtonSize, addSubtaskButtonSize);
@@ -1311,10 +1337,25 @@ HWND TodoView::createActionButton(
         status_ = "Lista zawiera zbyt wiele kontrolek do obsługi Windows.";
         return nullptr;
     }
-    const DWORD style = WS_CHILD | (visible_ ? WS_VISIBLE : 0) | WS_TABSTOP |
-        (ownerDraw ? BS_OWNERDRAW : BS_PUSHBUTTON);
+    const bool isAddSubtaskLabel = kind == ActionKind::addSubtask;
+    if (isAddSubtaskLabel && addSubtaskFont_ == nullptr) {
+        addSubtaskFont_ = CreateFontW(
+            -todoSize(parent_, 28), 0, 0, 0, FW_BOLD,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        if (addSubtaskFont_ == nullptr) {
+            status_ = "Nie udało się utworzyć czcionki zielonego przycisku.";
+            return nullptr;
+        }
+    }
+    const DWORD style = WS_CHILD | (visible_ ? WS_VISIBLE : 0) |
+        (isAddSubtaskLabel
+            ? SS_NOTIFY | SS_CENTER | SS_CENTERIMAGE
+            : WS_TABSTOP | (ownerDraw ? BS_OWNERDRAW : BS_PUSHBUTTON));
     HWND control = CreateWindowExW(
-        0, L"BUTTON", title.c_str(), style,
+        0, isAddSubtaskLabel ? L"STATIC" : L"BUTTON",
+        title.c_str(), style,
         x, y, width, height, parent_,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(controlId)),
         instance_, nullptr);
@@ -1324,12 +1365,16 @@ HWND TodoView::createActionButton(
     }
     SendMessageW(
         control, WM_SETFONT,
-        reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        reinterpret_cast<WPARAM>(
+            isAddSubtaskLabel
+                ? addSubtaskFont_
+                : GetStockObject(DEFAULT_GUI_FONT)),
+        TRUE);
     controlActions_.emplace(
         controlId, ControlAction{kind, taskId});
     if (kind == ActionKind::addSubtask && toolTip_ != nullptr) {
         TOOLINFOW toolInfo{};
-        toolInfo.cbSize = sizeof(toolInfo);
+        toolInfo.cbSize = TTTOOLINFOW_V2_SIZE;
         toolInfo.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
         toolInfo.hwnd = parent_;
         toolInfo.uId = reinterpret_cast<UINT_PTR>(control);
@@ -1338,14 +1383,17 @@ HWND TodoView::createActionButton(
         if (!SendMessageW(
                 toolTip_, TTM_ADDTOOLW, 0,
                 reinterpret_cast<LPARAM>(&toolInfo))) {
-            controlActions_.erase(controlId);
-            DestroyWindow(control);
-            status_ = "Nie udało się dodać podpowiedzi przycisku dodawania.";
-            return nullptr;
+            ErrorLogger::error(
+                "Nie udało się dodać podpowiedzi przycisku dodawania.");
+        } else {
+            toolTipControls_.push_back(control);
         }
-        toolTipControls_.push_back(control);
     }
     taskControls_.push_back(control);
+    if ((ownerDraw || isAddSubtaskLabel) && visible_) {
+        InvalidateRect(control, nullptr, TRUE);
+        UpdateWindow(control);
+    }
     return control;
 }
 
@@ -1366,7 +1414,7 @@ void TodoView::addPositionedControl(
 void TodoView::destroyTaskControls() {
     for (HWND control : toolTipControls_) {
         TOOLINFOW toolInfo{};
-        toolInfo.cbSize = sizeof(toolInfo);
+        toolInfo.cbSize = TTTOOLINFOW_V2_SIZE;
         toolInfo.uFlags = TTF_IDISHWND;
         toolInfo.hwnd = parent_;
         toolInfo.uId = reinterpret_cast<UINT_PTR>(control);
@@ -1397,6 +1445,39 @@ int TodoView::allocateControlId() {
         return 0;
     }
     return nextControlId_++;
+}
+
+/**
+ * Mierzy szerokość nazwy w jednej linii, używając czcionki zadania.
+ */
+int TodoView::measureTextWidth(
+    const std::wstring& text, bool mainTask) const {
+    HDC deviceContext = GetDC(parent_);
+    if (deviceContext == nullptr) {
+        ErrorLogger::error(
+            "Nie udało się pobrać kontekstu do pomiaru nazwy zadania.");
+        return todoSize(parent_, 240);
+    }
+
+    HFONT taskFont = CreateFontW(
+        -todoSize(parent_, 16), 0, 0, 0,
+        mainTask ? FW_BOLD : FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ previousFont = taskFont == nullptr
+        ? nullptr
+        : SelectObject(deviceContext, taskFont);
+    RECT bounds{};
+    DrawTextW(
+        deviceContext, text.c_str(), static_cast<int>(text.size()),
+        &bounds, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    if (taskFont != nullptr) {
+        SelectObject(deviceContext, previousFont);
+        DeleteObject(taskFont);
+    }
+    ReleaseDC(parent_, deviceContext);
+    return std::max(1, static_cast<int>(bounds.right - bounds.left));
 }
 
 /**

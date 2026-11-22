@@ -74,6 +74,21 @@ public:
     bool handleDrawItem(const DRAWITEMSTRUCT* drawItem) const;
 
     /**
+     * Ustawia kolory zielonego przycisku dodawania zadania podrzędnego.
+     * @param deviceContext Kontekst rysowania przekazany przez system Windows.
+     * @param control Kontrolka, której kolor jest właśnie ustawiany.
+     * @return Pędzel tła dla przycisku albo nullptr dla pozostałych kontrolek.
+     */
+    HBRUSH handleControlColor(HDC deviceContext, HWND control) const;
+
+    /**
+     * Ustawia kursor dłoni po najechaniu na przycisk dodawania podzadania.
+     * @param control Kontrolka, nad którą znajduje się kursor.
+     * @return true, jeśli widok ustawił kursor dłoni.
+     */
+    bool handleSetCursor(HWND control) const;
+
+    /**
      * Dopasowuje kontrolki i obszar przewijania do rozmiaru okna.
      */
     void positionControls();
@@ -205,6 +220,11 @@ private:
         const std::wstring& text, int width, bool mainTask) const;
 
     /**
+     * Mierzy szerokość nazwy zadania w czcionce używanej przez widok.
+     */
+    int measureTextWidth(const std::wstring& text, bool mainTask) const;
+
+    /**
      * Zapisuje błąd do logu i pokazuje jego treść użytkownikowi.
      */
     void showError(const std::string& error);
@@ -215,6 +235,7 @@ private:
     HWND addMainTaskButton_ = nullptr;
     HWND scrollBar_ = nullptr;
     HWND toolTip_ = nullptr;
+    HFONT addSubtaskFont_ = nullptr;
     bool visible_ = false;
     int scrollPosition_ = 0;
     int contentHeight_ = 0;
