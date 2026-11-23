@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -16,6 +18,107 @@ constexpr int previousPageButtonId = 1401;
 constexpr int nextPageButtonId = 1402;
 constexpr int pageButtonWidth = 112;
 constexpr int pageButtonHeight = 36;
+
+struct DecimalParts {
+    bool negative = false;
+    std::string_view integer;
+    std::string_view fraction;
+};
+
+/**
+ * Sprawdza i normalizuje tekst liczby dziesiętnej z odpowiedzi API.
+ */
+std::optional<DecimalParts> parseDecimal(std::string_view value) {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    DecimalParts parts;
+    if (value.front() == '-' || value.front() == '+') {
+        parts.negative = value.front() == '-';
+        value.remove_prefix(1);
+    }
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    const std::size_t decimalPoint = value.find('.');
+    parts.integer = value.substr(0, decimalPoint);
+    parts.fraction = decimalPoint == std::string_view::npos
+        ? std::string_view{}
+        : value.substr(decimalPoint + 1);
+    if (parts.integer.empty()) {
+        return std::nullopt;
+    }
+
+    const auto containsOnlyDigits = [](std::string_view digits) {
+        return std::all_of(
+            digits.begin(), digits.end(),
+            [](char character) {
+                return character >= '0' && character <= '9';
+            });
+    };
+    if (!containsOnlyDigits(parts.integer) ||
+        !containsOnlyDigits(parts.fraction) ||
+        (decimalPoint != std::string_view::npos &&
+         value.find('.', decimalPoint + 1) != std::string_view::npos)) {
+        return std::nullopt;
+    }
+
+    const std::size_t firstNonZero = parts.integer.find_first_not_of('0');
+    parts.integer = firstNonZero == std::string_view::npos
+        ? std::string_view("0")
+        : parts.integer.substr(firstNonZero);
+    const std::size_t lastNonZero =
+        parts.fraction.find_last_not_of('0');
+    parts.fraction = lastNonZero == std::string_view::npos
+        ? std::string_view{}
+        : parts.fraction.substr(0, lastNonZero + 1);
+    if (parts.integer == "0" && parts.fraction.empty()) {
+        parts.negative = false;
+    }
+    return parts;
+}
+
+/**
+ * Porównuje dwie liczby dziesiętne dokładnie, bez zaokrąglania float.
+ */
+std::optional<int> compareDecimalValues(
+    std::string_view first, std::string_view second) {
+    const std::optional<DecimalParts> firstParts = parseDecimal(first);
+    const std::optional<DecimalParts> secondParts = parseDecimal(second);
+    if (!firstParts || !secondParts) {
+        return std::nullopt;
+    }
+    if (firstParts->negative != secondParts->negative) {
+        return firstParts->negative ? -1 : 1;
+    }
+
+    int comparison = 0;
+    if (firstParts->integer.size() != secondParts->integer.size()) {
+        comparison = firstParts->integer.size() < secondParts->integer.size()
+            ? -1
+            : 1;
+    } else if (firstParts->integer != secondParts->integer) {
+        comparison = firstParts->integer < secondParts->integer ? -1 : 1;
+    } else {
+        const std::size_t fractionLength = std::max(
+            firstParts->fraction.size(), secondParts->fraction.size());
+        for (std::size_t index = 0; index < fractionLength; ++index) {
+            const char firstDigit = index < firstParts->fraction.size()
+                ? firstParts->fraction[index]
+                : '0';
+            const char secondDigit = index < secondParts->fraction.size()
+                ? secondParts->fraction[index]
+                : '0';
+            if (firstDigit != secondDigit) {
+                comparison = firstDigit < secondDigit ? -1 : 1;
+                break;
+            }
+        }
+    }
+    return firstParts->negative ? -comparison : comparison;
+}
 
 /**
  * Konwertuje tekst UTF-8 z API do tekstu Unicode używanego przez Windows.
@@ -221,7 +324,7 @@ void CandleComparisonPage::draw(
         1, (tableArea.bottom - tableArea.top) /
                static_cast<LONG>(candles_.size() + 1));
     constexpr std::array<int, 9> columnWidths{{
-        112, 111, 111, 111, 111, 111, 111, 111, 111
+        220, 100, 100, 100, 100, 95, 95, 95, 95
     }};
     constexpr std::array<const wchar_t*, 9> columnNames{{
         L"Symbol / godzina",
@@ -258,6 +361,20 @@ void CandleComparisonPage::draw(
 
         columnLeft = tableArea.left;
         for (std::size_t column = 0; column < values.size(); ++column) {
+            COLORREF textColor = RGB(0, 0, 0);
+            if (column >= 5) {
+                const std::size_t ibkrPriceIndex = column - 1;
+                const std::size_t candlesPriceIndex = column - 5;
+                const int comparison = *compareDecimalValues(
+                    candle.prices[ibkrPriceIndex],
+                    candle.prices[candlesPriceIndex]);
+                textColor = comparison < 0
+                    ? RGB(200, 0, 0)
+                    : comparison > 0
+                        ? RGB(0, 128, 0)
+                        : RGB(0, 0, 0);
+            }
+
             std::wstring wideValue;
             if (!convertUtf8ToWide(values[column], wideValue)) {
                 wideValue = L"Nieprawidłowy tekst";
@@ -267,7 +384,7 @@ void CandleComparisonPage::draw(
                 columnLeft + padding, rowTop,
                 columnLeft + columnWidth - padding, rowTop + rowHeight
             };
-            SetTextColor(deviceContext, RGB(0, 0, 0));
+            SetTextColor(deviceContext, textColor);
             drawCell(deviceContext, wideValue, cell, textFormat);
             columnLeft += columnWidth;
         }
@@ -288,7 +405,7 @@ void CandleComparisonPage::draw(
 }
 
 /**
- * Pobiera aktualną stronę danych z lokalnego API.
+ * Pobiera stronę i sprawdza poprawność cen przed ich porównaniem.
  */
 void CandleComparisonPage::loadCurrentPage() {
     std::vector<CandleComparisonEntry> receivedCandles;
@@ -301,6 +418,20 @@ void CandleComparisonPage::loadCurrentPage() {
         ErrorLogger::error(error);
         status_ = std::move(error);
         return;
+    }
+
+    for (const CandleComparisonEntry& candle : receivedCandles) {
+        for (const std::string& price : candle.prices) {
+            if (!compareDecimalValues(price, price)) {
+                error =
+                    "Lokalne API zestawienia zwróciło nieprawidłową cenę.";
+                candles_.clear();
+                hasNextPage_ = false;
+                status_ = error;
+                ErrorLogger::error(error);
+                return;
+            }
+        }
     }
 
     candles_ = std::move(receivedCandles);

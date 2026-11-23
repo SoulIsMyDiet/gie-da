@@ -52,7 +52,7 @@ public:
     void positionControls();
 
     /**
-     * Rysuje dziewięciokolumnową tabelę wspólnych świec.
+     * Rysuje tabelę dziewięciu kolumn i oznacza różnice kolorami.
      */
     void draw(HDC deviceContext, RECT& clientArea) const;
 
