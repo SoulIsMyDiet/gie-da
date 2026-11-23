@@ -237,11 +237,22 @@ void ReportsPage::draw(HDC deviceContext, RECT& clientArea) const {
     const LONG rowHeight = std::max<LONG>(
         1, (tableArea.bottom - tableArea.top) /
                static_cast<LONG>(candles_.size() + 1));
-    const int columnWidths[] = {14, 24, 11, 11, 11, 11, 18};
-    const wchar_t* columnNames[] = {
+    const bool showIbkrQuotes = source_ == CandleReportSource::Ibkr;
+    const int regularColumnWidths[] = {14, 24, 11, 11, 11, 11, 18};
+    const int ibkrColumnWidths[] = {14, 20, 10, 10, 10, 10, 10, 8, 8};
+    const wchar_t* regularColumnNames[] = {
         L"Symbol", L"Czas (Warszawa)", L"Open", L"High",
         L"Low", L"Close", L"Volume"
     };
+    const wchar_t* ibkrColumnNames[] = {
+        L"Symbol", L"Czas (Warszawa)", L"Open", L"High", L"Low",
+        L"Close", L"Volume", L"Bid", L"Ask"
+    };
+    const int* columnWidths =
+        showIbkrQuotes ? ibkrColumnWidths : regularColumnWidths;
+    const wchar_t** columnNames =
+        showIbkrQuotes ? ibkrColumnNames : regularColumnNames;
+    const std::size_t columnCount = showIbkrQuotes ? 9 : 7;
     const UINT textFormat =
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
 
@@ -250,7 +261,7 @@ void ReportsPage::draw(HDC deviceContext, RECT& clientArea) const {
     LONG rowTop = tableArea.top;
     LONG columnLeft = tableArea.left;
     const LONG totalWidth = tableArea.right - tableArea.left;
-    for (std::size_t column = 0; column < 7; ++column) {
+    for (std::size_t column = 0; column < columnCount; ++column) {
         const LONG columnWidth = totalWidth * columnWidths[column] / 100;
         const LONG padding = WindowScale::size(parent_, 4);
         RECT cell{columnLeft + padding, rowTop, columnLeft + columnWidth - padding,
@@ -268,10 +279,12 @@ void ReportsPage::draw(HDC deviceContext, RECT& clientArea) const {
             candle.high,
             candle.low,
             candle.close,
-            candle.volume.empty() ? "--" : candle.volume
+            candle.volume.empty() ? "--" : candle.volume,
+            candle.bid.empty() ? "--" : candle.bid,
+            candle.ask.empty() ? "--" : candle.ask
         };
         columnLeft = tableArea.left;
-        for (std::size_t column = 0; column < 7; ++column) {
+        for (std::size_t column = 0; column < columnCount; ++column) {
             std::wstring wideValue;
             if (!convertUtf8ToWide(values[column], wideValue)) {
                 wideValue = L"Nieprawidłowy tekst";

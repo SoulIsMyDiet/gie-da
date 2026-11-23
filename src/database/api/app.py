@@ -3061,25 +3061,34 @@ class MarketDataRepository:
 
     def fetch_candle_page(
         self, page: int
-    ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
+    ) -> tuple[list[tuple[str, ...]], bool]:
         """Pobiera 20 świec od najnowszych i sygnalizuje, czy istnieje kolejna strona."""
         return self._fetch_candle_page_from_table(page, "candles")
 
     def fetch_ibkr_candle_page(
         self, page: int
-    ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
-        """Pobiera 20 najnowszych świec z tabeli IBKR."""
-        return self._fetch_candle_page_from_table(page, "candles_IBKR")
+    ) -> tuple[list[tuple[str, ...]], bool]:
+        """Pobiera 20 najnowszych świec IBKR wraz z kwotowaniami bid/ask."""
+        return self._fetch_candle_page_from_table(
+            page, "candles_IBKR", include_quotes=True
+        )
 
     def _fetch_candle_page_from_table(
-        self, page: int, table_name: str
-    ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
+        self, page: int, table_name: str, include_quotes: bool = False
+    ) -> tuple[list[tuple[str, ...]], bool]:
         """Pobiera stronę świec z tabeli wybranej przez wewnętrzny kod."""
         if table_name not in {"candles", "candles_IBKR"}:
             raise ValueError("Nieobsługiwane źródło raportu świec.")
+        if include_quotes and table_name != "candles_IBKR":
+            raise ValueError("Kwotowania bid/ask dostępne są tylko w tabeli IBKR.")
 
         page_size = 20
         offset = page * page_size
+        quote_columns = (
+            ", CAST(bid AS CHAR), CAST(ask AS CHAR)"
+            if include_quotes
+            else ""
+        )
         connection = mysql.connector.connect(**self.database_settings)
         try:
             cursor = connection.cursor()
@@ -3093,36 +3102,30 @@ class MarketDataRepository:
                         CAST(high AS CHAR),
                         CAST(low AS CHAR),
                         CAST(close AS CHAR),
-                        CAST(volume AS CHAR)
+                        CAST(volume AS CHAR){quote_columns}
                     FROM {table_name}
                     ORDER BY datetime DESC, symbol ASC, utc_offset_minutes DESC
                     LIMIT %s OFFSET %s
-                    """.format(table_name=table_name),
+                    """.format(
+                        table_name=table_name,
+                        quote_columns=quote_columns,
+                    ),
                     (page_size + 1, offset),
                 )
                 rows = cursor.fetchall()
                 has_next_page = len(rows) > page_size
                 page_rows = rows[:page_size]
-                return [
-                    (
-                        symbol,
-                        _format_api_timestamp(candle_datetime),
-                        open_price,
-                        high_price,
-                        low_price,
-                        close_price,
-                        volume if volume is not None else "",
+                report_rows = []
+                for row in page_rows:
+                    symbol, candle_datetime, *values = row
+                    report_rows.append(
+                        (
+                            symbol,
+                            _format_api_timestamp(candle_datetime),
+                            *("" if value is None else value for value in values),
+                        )
                     )
-                    for (
-                        symbol,
-                        candle_datetime,
-                        open_price,
-                        high_price,
-                        low_price,
-                        close_price,
-                        volume,
-                    ) in page_rows
-                ], has_next_page
+                return report_rows, has_next_page
             finally:
                 cursor.close()
         finally:

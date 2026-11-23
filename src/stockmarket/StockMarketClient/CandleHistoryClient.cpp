@@ -925,12 +925,16 @@ bool parseAnalysisPrice(std::string_view text, double& value) {
 }
 
 /**
- * Dzieli wiersz raportu na siedem wymaganych pól.
+ * Dzieli wiersz raportu na pola i opcjonalne kwotowania bid/ask.
  */
-bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
-    std::string_view fields[7];
+bool splitCandleRow(
+    std::string_view row,
+    CandleReportEntry& candle,
+    bool includeQuotes) {
+    std::string_view fields[9];
+    const std::size_t fieldCount = includeQuotes ? 9 : 7;
     std::size_t fieldStart = 0;
-    for (std::size_t index = 0; index < 6; ++index) {
+    for (std::size_t index = 0; index + 1 < fieldCount; ++index) {
         const std::size_t separator = row.find('\t', fieldStart);
         if (separator == std::string_view::npos) {
             return false;
@@ -941,10 +945,13 @@ bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
     if (row.find('\t', fieldStart) != std::string_view::npos) {
         return false;
     }
-    fields[6] = row.substr(fieldStart);
+    fields[fieldCount - 1] = row.substr(fieldStart);
 
-    for (std::size_t index = 0; index < 7; ++index) {
-        if ((index != 6 && fields[index].empty()) || fields[index].size() > 512) {
+    for (std::size_t index = 0; index < fieldCount; ++index) {
+        const bool optionalValue =
+            index == 6 || (includeQuotes && index >= 7);
+        if ((!optionalValue && fields[index].empty()) ||
+            fields[index].size() > 512) {
             return false;
         }
     }
@@ -956,6 +963,8 @@ bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
     candle.low.assign(fields[4]);
     candle.close.assign(fields[5]);
     candle.volume.assign(fields[6]);
+    candle.bid = includeQuotes ? fields[7] : std::string_view{};
+    candle.ask = includeQuotes ? fields[8] : std::string_view{};
     return true;
 }
 
@@ -1054,14 +1063,15 @@ bool fetchPagedTsvRows(
 }
 
 /**
- * Sprawdza wiersze siedmiokolumnowego raportu świec.
+ * Sprawdza wiersze raportu świec z opcjonalnymi kolumnami bid/ask.
  */
 bool fetchCandlePageFromApi(
     const std::wstring& requestPath,
     std::size_t maximumRows,
     std::vector<CandleReportEntry>& candles,
     bool& hasNextPage,
-    std::string& error) {
+    std::string& error,
+    bool includeQuotes = false) {
     std::vector<std::string> rows;
     bool receivedHasNextPage = false;
     if (!fetchPagedTsvRows(
@@ -1073,7 +1083,7 @@ bool fetchCandlePageFromApi(
     receivedCandles.reserve(rows.size());
     for (const std::string& row : rows) {
         CandleReportEntry candle;
-        if (!splitCandleRow(row, candle)) {
+        if (!splitCandleRow(row, candle, includeQuotes)) {
             error = "Lokalne API raportów zwróciło nieprawidłowe dane świec.";
             return false;
         }
@@ -2031,7 +2041,7 @@ bool CandleHistoryClient::fetchIbkrCandlePage(
     const std::wstring requestPath =
         L"/api/candles/ibkr/report?page=" + std::to_wstring(page);
     return fetchCandlePageFromApi(
-        requestPath, pageSize, candles, hasNextPage, error);
+        requestPath, pageSize, candles, hasNextPage, error, true);
 }
 
 /**

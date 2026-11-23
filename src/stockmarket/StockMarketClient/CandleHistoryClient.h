@@ -25,7 +25,7 @@ struct IBKRCandleData {
 };
 
 /**
- * Przechowuje świecę wyświetlaną w raporcie.
+ * Przechowuje świecę wyświetlaną w raporcie; kwotowania są dostępne dla IBKR.
  */
 struct CandleReportEntry {
     std::string symbol;
@@ -35,6 +35,8 @@ struct CandleReportEntry {
     std::string low;
     std::string close;
     std::string volume;
+    std::string bid;
+    std::string ask;
 };
 
 /**

@@ -227,6 +227,8 @@ class IBKRCandleReportTests(unittest.TestCase):
                 "1.09900",
                 "1.10050",
                 None,
+                None,
+                None,
             )
         ]
 
@@ -237,6 +239,8 @@ class IBKRCandleReportTests(unittest.TestCase):
 
         query = cursor.execute.call_args.args[0]
         self.assertIn("FROM candles_IBKR", query)
+        self.assertIn("CAST(bid AS CHAR)", query)
+        self.assertIn("CAST(ask AS CHAR)", query)
         self.assertEqual(
             rows,
             [
@@ -247,6 +251,8 @@ class IBKRCandleReportTests(unittest.TestCase):
                     "1.10100",
                     "1.09900",
                     "1.10050",
+                    "",
+                    "",
                     "",
                 )
             ],
@@ -267,6 +273,8 @@ class IBKRCandleReportTests(unittest.TestCase):
                     "1.09900",
                     "1.10050",
                     "",
+                    "1.10040",
+                    "1.10060",
                 )
             ],
             True,
@@ -277,7 +285,7 @@ class IBKRCandleReportTests(unittest.TestCase):
         self.assertEqual(
             response.body,
             b"1\nEUR/USD\t2026-01-15 13:34:00\t1.10000\t1.10100"
-            b"\t1.09900\t1.10050\t",
+            b"\t1.09900\t1.10050\t\t1.10040\t1.10060",
         )
         request.app.state.repository.fetch_ibkr_candle_page.assert_called_once_with(
             0
