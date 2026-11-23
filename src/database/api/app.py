@@ -3063,6 +3063,21 @@ class MarketDataRepository:
         self, page: int
     ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
         """Pobiera 20 świec od najnowszych i sygnalizuje, czy istnieje kolejna strona."""
+        return self._fetch_candle_page_from_table(page, "candles")
+
+    def fetch_ibkr_candle_page(
+        self, page: int
+    ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
+        """Pobiera 20 najnowszych świec z tabeli IBKR."""
+        return self._fetch_candle_page_from_table(page, "candles_IBKR")
+
+    def _fetch_candle_page_from_table(
+        self, page: int, table_name: str
+    ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
+        """Pobiera stronę świec z tabeli wybranej przez wewnętrzny kod."""
+        if table_name not in {"candles", "candles_IBKR"}:
+            raise ValueError("Nieobsługiwane źródło raportu świec.")
+
         page_size = 20
         offset = page * page_size
         connection = mysql.connector.connect(**self.database_settings)
@@ -3079,10 +3094,10 @@ class MarketDataRepository:
                         CAST(low AS CHAR),
                         CAST(close AS CHAR),
                         CAST(volume AS CHAR)
-                    FROM candles
+                    FROM {table_name}
                     ORDER BY datetime DESC, symbol ASC, utc_offset_minutes DESC
                     LIMIT %s OFFSET %s
-                    """,
+                    """.format(table_name=table_name),
                     (page_size + 1, offset),
                 )
                 rows = cursor.fetchall()
@@ -5083,6 +5098,30 @@ def candle_report(
         raise HTTPException(
             status_code=503,
             detail="Nie udało się odczytać świec z bazy MySQL.",
+        ) from error
+
+    report_lines = ["1" if has_next_page else "0"]
+    report_lines.extend("\t".join(row) for row in rows)
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/candles/ibkr/report", response_class=Response)
+def ibkr_candle_report(
+    request: Request,
+    page: int = Query(ge=0, le=1000000),
+) -> Response:
+    """Zwraca stronę 20 najnowszych świec z tabeli IBKR."""
+    try:
+        rows, has_next_page = request.app.state.repository.fetch_ibkr_candle_page(
+            page
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać świec IBKR z bazy MySQL.",
         ) from error
 
     report_lines = ["1" if has_next_page else "0"]

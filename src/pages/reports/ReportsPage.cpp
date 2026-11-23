@@ -12,6 +12,8 @@ namespace {
 
 constexpr int previousPageButtonId = 1101;
 constexpr int nextPageButtonId = 1102;
+constexpr int previousIbkrPageButtonId = 1111;
+constexpr int nextIbkrPageButtonId = 1112;
 constexpr int pageButtonWidth = 112;
 constexpr int pageButtonHeight = 36;
 
@@ -51,6 +53,12 @@ void drawCell(
 } // namespace
 
 /**
+ * Wybiera źródło, z którego widok pobiera strony świec.
+ */
+ReportsPage::ReportsPage(CandleReportSource source)
+    : source_(source) {}
+
+/**
  * Zwalnia czcionkę przypisaną kontrolkom strony raportów.
  */
 ReportsPage::~ReportsPage() {
@@ -64,13 +72,21 @@ ReportsPage::~ReportsPage() {
  */
 bool ReportsPage::create(HINSTANCE instance, HWND parent) {
     parent_ = parent;
+    const int previousButtonId =
+        source_ == CandleReportSource::Ibkr
+        ? previousIbkrPageButtonId
+        : previousPageButtonId;
+    const int nextButtonId =
+        source_ == CandleReportSource::Ibkr
+        ? nextIbkrPageButtonId
+        : nextPageButtonId;
     previousPageButton_ = CreateWindowExW(
         0, L"BUTTON", L"Poprzednia",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, WindowScale::size(parent_, pageButtonWidth),
         WindowScale::size(parent_, pageButtonHeight),
         parent_, reinterpret_cast<HMENU>(
-            static_cast<INT_PTR>(previousPageButtonId)),
+            static_cast<INT_PTR>(previousButtonId)),
         instance, nullptr);
     if (previousPageButton_ == nullptr) {
         return false;
@@ -82,7 +98,7 @@ bool ReportsPage::create(HINSTANCE instance, HWND parent) {
         0, 0, WindowScale::size(parent_, pageButtonWidth),
         WindowScale::size(parent_, pageButtonHeight),
         parent_, reinterpret_cast<HMENU>(
-            static_cast<INT_PTR>(nextPageButtonId)),
+            static_cast<INT_PTR>(nextButtonId)),
         instance, nullptr);
     if (nextPageButton_ == nullptr) {
         DestroyWindow(previousPageButton_);
@@ -127,13 +143,20 @@ bool ReportsPage::handleCommand(int controlId, int notificationCode) {
         return false;
     }
 
-    if (controlId == previousPageButtonId && currentPage_ > 0) {
+    const int previousButtonId =
+        source_ == CandleReportSource::Ibkr
+        ? previousIbkrPageButtonId
+        : previousPageButtonId;
+    const int nextButtonId =
+        source_ == CandleReportSource::Ibkr
+        ? nextIbkrPageButtonId
+        : nextPageButtonId;
+    if (controlId == previousButtonId && currentPage_ > 0) {
         --currentPage_;
-    } else if (controlId == nextPageButtonId && hasNextPage_) {
+    } else if (controlId == nextButtonId && hasNextPage_) {
         ++currentPage_;
     } else {
-        return controlId == previousPageButtonId ||
-               controlId == nextPageButtonId;
+        return controlId == previousButtonId || controlId == nextButtonId;
     }
 
     loadCurrentPage();
@@ -283,8 +306,13 @@ void ReportsPage::loadCurrentPage() {
     std::vector<CandleReportEntry> receivedCandles;
     bool receivedHasNextPage = false;
     std::string error;
-    if (!CandleHistoryClient::fetchCandlePage(
-            currentPage_, receivedCandles, receivedHasNextPage, error)) {
+    const bool receivedPage =
+        source_ == CandleReportSource::Ibkr
+        ? CandleHistoryClient::fetchIbkrCandlePage(
+              currentPage_, receivedCandles, receivedHasNextPage, error)
+        : CandleHistoryClient::fetchCandlePage(
+              currentPage_, receivedCandles, receivedHasNextPage, error);
+    if (!receivedPage) {
         candles_.clear();
         hasNextPage_ = false;
         ErrorLogger::error(error);

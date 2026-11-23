@@ -23,6 +23,7 @@ constexpr int candleGapsButtonId = 1002;
 constexpr int signalsButtonId = 1003;
 constexpr int transactionsButtonId = 1004;
 constexpr int todoListButtonId = 1005;
+constexpr int ibkrCandlesButtonId = 1006;
 constexpr int initialWindowWidth = 1600;
 constexpr int initialWindowHeight = 900;
 #ifdef ENABLE_IBKR_TWS_API
@@ -194,6 +195,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return onCreate() ? 0 : -1;
         case WM_SIZE:
             reportsPage_.positionControls();
+            ibkrCandlesPage_.positionControls();
             candleGapsPage_.positionControls();
             signalsPage_.positionControls();
             transactionsPage_.positionControls();
@@ -252,7 +254,8 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             if ((HIWORD(wParam) == 0 || HIWORD(wParam) == BN_CLICKED) &&
-                viewRegistry_.findByCommandId(LOWORD(wParam)) != nullptr) {
+                (viewRegistry_.findByCommandId(LOWORD(wParam)) != nullptr ||
+                 LOWORD(wParam) == ibkrCandlesButtonId)) {
                 onNavigationClicked(LOWORD(wParam));
                 return 0;
             }
@@ -333,6 +336,11 @@ bool MainWindow::onCreate() {
             handle_, L"Nie udało się utworzyć przycisków raportu.");
         return false;
     }
+    if (!ibkrCandlesPage_.create(instance_, handle_)) {
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć widoku świec IBKR.");
+        return false;
+    }
     if (!candleGapsPage_.create(instance_, handle_)) {
         showErrorMessage(
             handle_, L"Nie udało się utworzyć widoku brakujących świec.");
@@ -355,6 +363,7 @@ bool MainWindow::onCreate() {
     }
 
     reportsPage_.positionControls();
+    ibkrCandlesPage_.positionControls();
     candleGapsPage_.positionControls();
     signalsPage_.positionControls();
     transactionsPage_.positionControls();
@@ -497,12 +506,13 @@ bool MainWindow::createMainMenu() {
         DestroyMenu(applicationMenu);
         return false;
     }
-    const std::array<std::pair<int, const wchar_t*>, 5> menuItems{{
+    const std::array<std::pair<int, const wchar_t*>, 6> menuItems{{
         {reportsButtonId, L"Raporty"},
         {candleGapsButtonId, L"Luki świec"},
         {signalsButtonId, L"Sygnały"},
         {transactionsButtonId, L"Transakcje"},
         {todoListButtonId, L"Todo lista"},
+        {ibkrCandlesButtonId, L"Świece"},
     }};
     for (const auto& [commandId, label] : menuItems) {
         if (!AppendMenuW(viewsMenu, MF_STRING, commandId, label)) {
@@ -555,6 +565,7 @@ void MainWindow::onNavigationClicked(int commandId) {
  */
 void MainWindow::closeAllViews() {
     reportsPage_.close();
+    ibkrCandlesPage_.close();
     candleGapsPage_.close();
     signalsPage_.close();
     transactionsPage_.close();
@@ -567,6 +578,8 @@ void MainWindow::closeAllViews() {
 bool MainWindow::openView(int commandId) {
     if (commandId == reportsButtonId) {
         reportsPage_.open();
+    } else if (commandId == ibkrCandlesButtonId) {
+        ibkrCandlesPage_.open();
     } else if (commandId == candleGapsButtonId) {
         candleGapsPage_.open();
     } else if (commandId == signalsButtonId) {
@@ -587,6 +600,9 @@ bool MainWindow::openView(int commandId) {
 int MainWindow::currentViewId() const {
     if (reportsPage_.isVisible()) {
         return reportsButtonId;
+    }
+    if (ibkrCandlesPage_.isVisible()) {
+        return ibkrCandlesButtonId;
     }
     if (candleGapsPage_.isVisible()) {
         return candleGapsButtonId;
@@ -613,6 +629,8 @@ void MainWindow::onPaint() {
     GetClientRect(handle_, &clientArea);
     if (reportsPage_.isVisible()) {
         reportsPage_.draw(deviceContext, clientArea);
+    } else if (ibkrCandlesPage_.isVisible()) {
+        ibkrCandlesPage_.draw(deviceContext, clientArea);
     } else if (candleGapsPage_.isVisible()) {
         candleGapsPage_.draw(deviceContext, clientArea);
     } else if (signalsPage_.isVisible()) {

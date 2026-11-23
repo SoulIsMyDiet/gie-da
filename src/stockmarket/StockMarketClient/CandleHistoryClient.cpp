@@ -1918,6 +1918,27 @@ bool CandleHistoryClient::fetchCandlePage(
 }
 
 /**
+ * Pobiera stronę raportu świec z osobnej tabeli IBKR.
+ */
+bool CandleHistoryClient::fetchIbkrCandlePage(
+    std::size_t page,
+    std::vector<CandleReportEntry>& candles,
+    bool& hasNextPage,
+    std::string& error) {
+    if (page > 1000000 ||
+        page > static_cast<std::size_t>(
+                   std::numeric_limits<unsigned long long>::max() / pageSize)) {
+        error = "Numer strony raportu świec IBKR jest poza dozwolonym zakresem.";
+        return false;
+    }
+
+    const std::wstring requestPath =
+        L"/api/candles/ibkr/report?page=" + std::to_wstring(page);
+    return fetchCandlePageFromApi(
+        requestPath, pageSize, candles, hasNextPage, error);
+}
+
+/**
  * Pobiera maksymalnie 10 świec z datami wybranymi w widoku transakcji.
  */
 bool CandleHistoryClient::fetchFilteredCandlePage(

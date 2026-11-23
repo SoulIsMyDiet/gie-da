@@ -136,6 +136,7 @@ private:
     TodoView todoView_;
     TodoScheduler todoScheduler_;
     ReportsPage reportsPage_;
+    ReportsPage ibkrCandlesPage_{CandleReportSource::Ibkr};
     CandleGapsPage candleGapsPage_;
     SignalsPage signalsPage_;
     TransactionsPage transactionsPage_;

@@ -8,8 +8,23 @@
 
 #include "CandleHistoryClient.h"
 
+/**
+ * Określa źródło danych wyświetlanych w tabeli świec.
+ */
+enum class CandleReportSource {
+    TwelveData,
+    Ibkr,
+};
+
 class ReportsPage {
 public:
+    /**
+     * Ustawia tabelę zwykłych świec albo świec pobranych z IBKR.
+     * @param source Źródło danych używane przy otwieraniu kolejnych stron.
+     */
+    explicit ReportsPage(
+        CandleReportSource source = CandleReportSource::TwelveData);
+
     ~ReportsPage();
 
     /**
@@ -69,6 +84,7 @@ private:
     HWND nextPageButton_ = nullptr;
     bool visible_ = false;
     bool hasNextPage_ = false;
+    CandleReportSource source_;
     std::size_t currentPage_ = 0;
     std::vector<CandleReportEntry> candles_;
     std::string status_;

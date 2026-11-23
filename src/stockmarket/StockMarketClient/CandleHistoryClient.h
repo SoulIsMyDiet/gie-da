@@ -313,6 +313,20 @@ public:
         std::string& error);
 
     /**
+     * Pobiera stronę 20 najnowszych świec z tabeli IBKR.
+     * @param page Numer strony liczony od zera.
+     * @param candles Otrzymuje dane świec IBKR.
+     * @param hasNextPage Otrzymuje informację, czy istnieje kolejna strona.
+     * @param error Otrzymuje opis błędu, jeśli pobranie się nie powiedzie.
+     * @return true, jeśli API zwróciło poprawną stronę.
+     */
+    static bool fetchIbkrCandlePage(
+        std::size_t page,
+        std::vector<CandleReportEntry>& candles,
+        bool& hasNextPage,
+        std::string& error);
+
+    /**
      * Pobiera stronę do 10 świec z podanego zakresu dat.
      * @param startDate Początkowa data w formacie YYYY-MM-DD.
      * @param endDate Końcowa data w formacie YYYY-MM-DD, włącznie.

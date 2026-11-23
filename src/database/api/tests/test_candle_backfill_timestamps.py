@@ -209,5 +209,80 @@ class IBKRCandlePersistenceTests(unittest.TestCase):
         )
 
 
+class IBKRCandleReportTests(unittest.TestCase):
+    """Weryfikuje stronicowany odczyt świec IBKR."""
+
+    def test_report_reads_the_ibkr_table(self) -> None:
+        """Raport pobiera i formatuje wiersze z candles_IBKR."""
+        repository = app.MarketDataRepository()
+        connection = Mock()
+        cursor = Mock()
+        connection.cursor.return_value = cursor
+        cursor.fetchall.return_value = [
+            (
+                "EUR/USD",
+                datetime(2026, 1, 15, 13, 34),
+                "1.10000",
+                "1.10100",
+                "1.09900",
+                "1.10050",
+                None,
+            )
+        ]
+
+        with patch.object(
+            app.mysql.connector, "connect", return_value=connection
+        ):
+            rows, has_next_page = repository.fetch_ibkr_candle_page(0)
+
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("FROM candles_IBKR", query)
+        self.assertEqual(
+            rows,
+            [
+                (
+                    "EUR/USD",
+                    "2026-01-15 13:34:00",
+                    "1.10000",
+                    "1.10100",
+                    "1.09900",
+                    "1.10050",
+                    "",
+                )
+            ],
+        )
+        self.assertFalse(has_next_page)
+        connection.close.assert_called_once()
+
+    def test_report_endpoint_returns_tsv_and_pagination_flag(self) -> None:
+        """Endpoint raportu przekazuje stronę IBKR i zwraca TSV."""
+        request = Mock()
+        request.app.state.repository.fetch_ibkr_candle_page.return_value = (
+            [
+                (
+                    "EUR/USD",
+                    "2026-01-15 13:34:00",
+                    "1.10000",
+                    "1.10100",
+                    "1.09900",
+                    "1.10050",
+                    "",
+                )
+            ],
+            True,
+        )
+
+        response = app.ibkr_candle_report(request, page=0)
+
+        self.assertEqual(
+            response.body,
+            b"1\nEUR/USD\t2026-01-15 13:34:00\t1.10000\t1.10100"
+            b"\t1.09900\t1.10050\t",
+        )
+        request.app.state.repository.fetch_ibkr_candle_page.assert_called_once_with(
+            0
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
