@@ -30,6 +30,14 @@ constexpr int reportsButtonGap = 12;
 constexpr int reportsButtonBottomMargin = 16;
 constexpr int initialWindowWidth = 1600;
 constexpr int initialWindowHeight = 900;
+#ifdef ENABLE_IBKR_TWS_API
+constexpr UINT ibkrStatusMessage = WM_APP + 2;
+constexpr int connectPaperCommandId = 1501;
+constexpr int connectLiveCommandId = 1502;
+constexpr int disconnectIbkrCommandId = 1503;
+constexpr int ibkrPaperPort = 4002;
+constexpr int ibkrLivePort = 4001;
+#endif
 
 /**
  * Zapisuje błąd do pliku i pokazuje go użytkownikowi w standardowym oknie.
@@ -77,6 +85,13 @@ MainWindow::~MainWindow() {
     if (navigationButtonFont_ != nullptr) {
         DeleteObject(navigationButtonFont_);
     }
+#ifdef ENABLE_IBKR_TWS_API
+    ibkrClient_.setStatusChangedCallback({});
+    ibkrClient_.disconnect();
+    if (ibkrMenu_ != nullptr) {
+        DestroyMenu(ibkrMenu_);
+    }
+#endif
 }
 
 /**
@@ -196,6 +211,23 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             todoView_.positionControls();
             return 0;
         case WM_COMMAND:
+#ifdef ENABLE_IBKR_TWS_API
+            if (HIWORD(wParam) == 0) {
+                if (LOWORD(wParam) == connectPaperCommandId) {
+                    connectToIbkr(ibkrPaperPort);
+                    return 0;
+                }
+                if (LOWORD(wParam) == connectLiveCommandId) {
+                    connectToIbkr(ibkrLivePort);
+                    return 0;
+                }
+                if (LOWORD(wParam) == disconnectIbkrCommandId) {
+                    ibkrClient_.disconnect();
+                    updateIbkrStatus();
+                    return 0;
+                }
+            }
+#endif
             if (reportsPage_.handleCommand(
                     LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
@@ -257,6 +289,11 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case candleUpdateMessage:
             InvalidateRect(handle_, nullptr, TRUE);
             return 0;
+#ifdef ENABLE_IBKR_TWS_API
+        case ibkrStatusMessage:
+            updateIbkrStatus();
+            return 0;
+#endif
         case WM_PAINT:
             onPaint();
             return 0;
@@ -273,6 +310,21 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
  * Tworzy widoki i uruchamia monitor, sentencję oraz harmonogram To-do.
  */
 bool MainWindow::onCreate() {
+#ifdef ENABLE_IBKR_TWS_API
+    ibkrClient_.setStatusChangedCallback([this]() {
+        if (handle_ != nullptr &&
+            !PostMessageW(handle_, ibkrStatusMessage, 0, 0)) {
+            ErrorLogger::warning(
+                "Nie udało się odświeżyć statusu połączenia IBKR. Kod Win32: " +
+                std::to_string(GetLastError()) + ".");
+        }
+    });
+    if (!createIbkrMenu()) {
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć menu połączenia IB Gateway.");
+        return false;
+    }
+#endif
     if (!createNavigationButtons()) {
         showErrorMessage(
             handle_, L"Nie udało się utworzyć przycisków nawigacji.");
@@ -611,8 +663,151 @@ void MainWindow::onPaint() {
 void MainWindow::onDestroy() {
     todoScheduler_.stop();
     candleMonitor_.stop();
+#ifdef ENABLE_IBKR_TWS_API
+    ibkrClient_.setStatusChangedCallback({});
+    ibkrClient_.disconnect();
+    if (ibkrMenu_ != nullptr) {
+        if (!SetMenu(handle_, nullptr)) {
+            ErrorLogger::warning(
+                "Nie udało się odłączyć menu IB Gateway od okna.");
+        }
+        DestroyMenu(ibkrMenu_);
+        ibkrMenu_ = nullptr;
+    }
+#endif
     if (dailySentenceThread_.joinable()) {
         dailySentenceThread_.join();
     }
     PostQuitMessage(0);
 }
+
+#ifdef ENABLE_IBKR_TWS_API
+// Front
+/**
+ * Tworzy menu z bezpiecznymi, standardowymi portami IB Gateway.
+ */
+bool MainWindow::createIbkrMenu() {
+    HMENU mainMenu = CreateMenu();
+    if (mainMenu == nullptr) {
+        return false;
+    }
+    HMENU connectionMenu = CreatePopupMenu();
+    if (connectionMenu == nullptr) {
+        DestroyMenu(mainMenu);
+        return false;
+    }
+
+    const bool commandsCreated =
+        AppendMenuW(
+            connectionMenu, MF_STRING,
+            connectPaperCommandId,
+            L"Połącz - Paper (konto testowe, port 4002)") &&
+        AppendMenuW(
+            connectionMenu, MF_STRING,
+            connectLiveCommandId,
+            L"Połącz - Live (konto rzeczywiste, port 4001)") &&
+        AppendMenuW(connectionMenu, MF_SEPARATOR, 0, nullptr) &&
+        AppendMenuW(
+            connectionMenu, MF_STRING,
+            disconnectIbkrCommandId, L"Rozłącz");
+    if (!commandsCreated) {
+        DestroyMenu(connectionMenu);
+        DestroyMenu(mainMenu);
+        return false;
+    }
+    if (!AppendMenuW(
+            mainMenu, MF_POPUP,
+            reinterpret_cast<UINT_PTR>(connectionMenu), L"IB Gateway")) {
+        DestroyMenu(connectionMenu);
+        DestroyMenu(mainMenu);
+        return false;
+    }
+    if (!SetMenu(handle_, mainMenu)) {
+        DestroyMenu(mainMenu);
+        return false;
+    }
+
+    ibkrMenu_ = mainMenu;
+    DrawMenuBar(handle_);
+    updateIbkrMenu();
+    updateIbkrStatus();
+    return true;
+}
+
+/**
+ * Rozpoczyna połączenie lokalne z portem Paper lub Live wybranym w menu.
+ */
+void MainWindow::connectToIbkr(int port) {
+    std::string error;
+    if (!ibkrClient_.connect("127.0.0.1", port, 1, error)) {
+        const IBGatewayConnectionStatus connectionStatus = ibkrClient_.status();
+        if (connectionStatus.state != IBGatewayConnectionState::Error ||
+            connectionStatus.message != error) {
+            std::wstring wideError;
+            if (!convertUtf8ToWide(error, wideError)) {
+                wideError =
+                    L"Nie udało się rozpocząć połączenia z IB Gateway.";
+            }
+            showErrorMessage(handle_, wideError.c_str());
+        }
+    }
+    updateIbkrStatus();
+}
+
+/**
+ * Pokazuje status API w tytule okna i prezentuje błędy po stronie użytkownika.
+ */
+void MainWindow::updateIbkrStatus() {
+    const IBGatewayConnectionStatus connectionStatus = ibkrClient_.status();
+    std::wstring wideMessage;
+    if (!convertUtf8ToWide(connectionStatus.message, wideMessage)) {
+        wideMessage = L"Nie udało się odczytać statusu IB Gateway.";
+    }
+    const std::wstring title =
+        std::wstring(L"Raport sygnałów - IB Gateway: ") + wideMessage;
+    SetWindowTextW(handle_, title.c_str());
+    updateIbkrMenu();
+
+    if (connectionStatus.state == IBGatewayConnectionState::Error &&
+        lastIbkrErrorShown_ != connectionStatus.message) {
+        lastIbkrErrorShown_ = connectionStatus.message;
+        MessageBoxW(
+            handle_, wideMessage.c_str(),
+            L"Błąd połączenia IB Gateway", MB_OK | MB_ICONERROR);
+    } else if (connectionStatus.state != IBGatewayConnectionState::Error) {
+        lastIbkrErrorShown_.clear();
+    }
+}
+
+/**
+ * Blokuje ponowne łączenie podczas aktywnej sesji i pozwala ją przerwać.
+ */
+void MainWindow::updateIbkrMenu() {
+    if (ibkrMenu_ == nullptr) {
+        return;
+    }
+    const IBGatewayConnectionState state = ibkrClient_.status().state;
+    const bool canConnect =
+        state == IBGatewayConnectionState::Disconnected ||
+        state == IBGatewayConnectionState::Error;
+    const bool canDisconnect =
+        state == IBGatewayConnectionState::Connecting ||
+        state == IBGatewayConnectionState::Connected ||
+        state == IBGatewayConnectionState::Error;
+    HMENU connectionMenu = GetSubMenu(ibkrMenu_, 0);
+    if (connectionMenu == nullptr) {
+        ErrorLogger::warning(
+            "Nie można odnaleźć menu połączenia IB Gateway.");
+        return;
+    }
+    EnableMenuItem(
+        connectionMenu, connectPaperCommandId,
+        MF_BYCOMMAND | (canConnect ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(
+        connectionMenu, connectLiveCommandId,
+        MF_BYCOMMAND | (canConnect ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(
+        connectionMenu, disconnectIbkrCommandId,
+        MF_BYCOMMAND | (canDisconnect ? MF_ENABLED : MF_GRAYED));
+}
+#endif

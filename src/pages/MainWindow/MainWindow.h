@@ -19,6 +19,10 @@
 #include "TodoView.hpp"
 #include "ViewRegistry.hpp"
 
+#ifdef ENABLE_IBKR_TWS_API
+#include "IBGatewayClient.h"
+#endif
+
 class MainWindow {
 public:
     /**
@@ -111,6 +115,30 @@ private:
      */
     void onDestroy();
 
+#ifdef ENABLE_IBKR_TWS_API
+    /**
+     * Tworzy menu z osobnymi pozycjami dla środowisk Paper i Live.
+     * @return true, jeśli menu utworzono poprawnie.
+     */
+    bool createIbkrMenu();
+
+    /**
+     * Rozpoczyna połączenie z wybranym portem standardowym Gateway.
+     * @param port Port środowiska Paper albo Live.
+     */
+    void connectToIbkr(int port);
+
+    /**
+     * Aktualizuje tytuł okna i dostępność poleceń menu na podstawie statusu.
+     */
+    void updateIbkrStatus();
+
+    /**
+     * Włącza lub wyłącza polecenia menu zgodnie z bieżącym stanem połączenia.
+     */
+    void updateIbkrMenu();
+#endif
+
     HINSTANCE instance_ = nullptr;
     HWND handle_ = nullptr;
     int showCommand_ = SW_SHOW;
@@ -130,4 +158,9 @@ private:
     CandleGapsPage candleGapsPage_;
     SignalsPage signalsPage_;
     TransactionsPage transactionsPage_;
+#ifdef ENABLE_IBKR_TWS_API
+    HMENU ibkrMenu_ = nullptr;
+    std::string lastIbkrErrorShown_;
+    IBGatewayClient ibkrClient_;
+#endif
 };

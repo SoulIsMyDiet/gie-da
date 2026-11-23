@@ -97,7 +97,12 @@ target_link_libraries(gieda PRIVATE
     winhttp
 )
 if(ENABLE_IBKR_TWS_API)
+    target_sources(gieda PRIVATE
+        src/stockmarket/IBKR/IBGatewayClient.cpp
+    )
+    target_compile_definitions(gieda PRIVATE ENABLE_IBKR_TWS_API)
     target_include_directories(gieda PRIVATE
+        src/stockmarket/IBKR
         "${IBKR_TWS_API_ROOT}/source/cppclient/client"
     )
     target_link_libraries(gieda PRIVATE twsapi)
