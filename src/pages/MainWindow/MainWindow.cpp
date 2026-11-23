@@ -5,9 +5,6 @@
 #include "ErrorLogger.h"
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
-#include "../WindowScale.h"
-
-#include <algorithm>
 #include <array>
 #include <exception>
 #include <iomanip>
@@ -26,10 +23,6 @@ constexpr int candleGapsButtonId = 1002;
 constexpr int signalsButtonId = 1003;
 constexpr int transactionsButtonId = 1004;
 constexpr int todoListButtonId = 1005;
-constexpr int reportsButtonWidth = 140;
-constexpr int reportsButtonHeight = 36;
-constexpr int reportsButtonGap = 12;
-constexpr int reportsButtonBottomMargin = 16;
 constexpr int initialWindowWidth = 1600;
 constexpr int initialWindowHeight = 900;
 #ifdef ENABLE_IBKR_TWS_API
@@ -85,15 +78,9 @@ MainWindow::MainWindow()
       todoScheduler_(todoManager_, viewRegistry_) {}
 
 MainWindow::~MainWindow() {
-    if (navigationButtonFont_ != nullptr) {
-        DeleteObject(navigationButtonFont_);
-    }
 #ifdef ENABLE_IBKR_TWS_API
     ibkrClient_.setStatusChangedCallback({});
     ibkrClient_.disconnect();
-    if (ibkrMenu_ != nullptr) {
-        DestroyMenu(ibkrMenu_);
-    }
 #endif
 }
 
@@ -206,7 +193,6 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE:
             return onCreate() ? 0 : -1;
         case WM_SIZE:
-            positionNavigationButtons();
             reportsPage_.positionControls();
             candleGapsPage_.positionControls();
             signalsPage_.positionControls();
@@ -265,7 +251,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
             }
-            if (HIWORD(wParam) == BN_CLICKED &&
+            if ((HIWORD(wParam) == 0 || HIWORD(wParam) == BN_CLICKED) &&
                 viewRegistry_.findByCommandId(LOWORD(wParam)) != nullptr) {
                 onNavigationClicked(LOWORD(wParam));
                 return 0;
@@ -336,15 +322,10 @@ bool MainWindow::onCreate() {
                 std::to_string(GetLastError()) + ".");
         }
     });
-    if (!createIbkrMenu()) {
-        showErrorMessage(
-            handle_, L"Nie udało się utworzyć menu połączenia IB Gateway.");
-        return false;
-    }
 #endif
-    if (!createNavigationButtons()) {
+    if (!createMainMenu()) {
         showErrorMessage(
-            handle_, L"Nie udało się utworzyć przycisków nawigacji.");
+            handle_, L"Nie udało się utworzyć menu aplikacji.");
         return false;
     }
     if (!reportsPage_.create(instance_, handle_)) {
@@ -373,7 +354,6 @@ bool MainWindow::onCreate() {
         return false;
     }
 
-    positionNavigationButtons();
     reportsPage_.positionControls();
     candleGapsPage_.positionControls();
     signalsPage_.positionControls();
@@ -439,11 +419,10 @@ void MainWindow::startDailySentenceRequest() {
     });
 }
 
-// mix
 /**
- * Rejestruje wszystkie samodzielne widoki i tworzy ich przyciski nawigacji.
+ * Rejestruje dotychczasowe widoki i tworzy menu z ich pozycjami.
  */
-bool MainWindow::createNavigationButtons() {
+bool MainWindow::createMainMenu() {
     const std::array<ViewDescriptor, 5> availableViews{{
         {reportsButtonId, "Raporty"},
         {candleGapsButtonId, "Luki świec"},
@@ -460,86 +439,97 @@ bool MainWindow::createNavigationButtons() {
         }
     }
 
-    navigationButtons_.reserve(viewRegistry_.views().size());
-    for (const ViewDescriptor& view : viewRegistry_.views()) {
-        std::wstring title;
-        if (!convertUtf8ToWide(view.name, title)) {
-            ErrorLogger::error(
-                "Nie udało się przekonwertować nazwy widoku: " + view.name);
-            return false;
-        }
-        HWND button = CreateWindowExW(
-            0, L"BUTTON", title.c_str(),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-            0, 0, reportsButtonWidth, reportsButtonHeight,
-            handle_,
-            reinterpret_cast<HMENU>(
-                static_cast<INT_PTR>(view.commandId)),
-            instance_, nullptr);
-        if (button == nullptr) {
-            return false;
-        }
-        navigationButtons_.push_back(button);
+    HMENU applicationMenu = CreateMenu();
+    if (applicationMenu == nullptr) {
+        return false;
     }
-    positionNavigationButtons();
+
+#ifdef ENABLE_IBKR_TWS_API
+    HMENU connectionMenu = CreatePopupMenu();
+    HMENU toolsMenu = CreatePopupMenu();
+    if (connectionMenu == nullptr || toolsMenu == nullptr) {
+        if (connectionMenu != nullptr) {
+            DestroyMenu(connectionMenu);
+        }
+        if (toolsMenu != nullptr) {
+            DestroyMenu(toolsMenu);
+        }
+        DestroyMenu(applicationMenu);
+        return false;
+    }
+
+    const bool ibkrCommandsCreated =
+        AppendMenuW(
+            connectionMenu, MF_STRING,
+            connectPaperCommandId,
+            L"Połącz - Paper (konto testowe, port 4002)") &&
+        AppendMenuW(
+            connectionMenu, MF_STRING,
+            connectLiveCommandId,
+            L"Połącz - Live (konto rzeczywiste, port 4001)") &&
+        AppendMenuW(connectionMenu, MF_SEPARATOR, 0, nullptr) &&
+        AppendMenuW(
+            connectionMenu, MF_STRING,
+            disconnectIbkrCommandId, L"Rozłącz") &&
+        AppendMenuW(
+            toolsMenu, MF_STRING,
+            synchronizeIbkrHistoryCommandId, L"Synchronizuj");
+    if (!ibkrCommandsCreated ||
+        !AppendMenuW(
+            applicationMenu, MF_POPUP,
+            reinterpret_cast<UINT_PTR>(connectionMenu), L"IB Gateway")) {
+        DestroyMenu(connectionMenu);
+        DestroyMenu(toolsMenu);
+        DestroyMenu(applicationMenu);
+        return false;
+    }
+    if (!AppendMenuW(
+            applicationMenu, MF_POPUP,
+            reinterpret_cast<UINT_PTR>(toolsMenu), L"Narzędzia")) {
+        DestroyMenu(toolsMenu);
+        DestroyMenu(applicationMenu);
+        return false;
+    }
+#endif
+
+    HMENU viewsMenu = CreatePopupMenu();
+    if (viewsMenu == nullptr) {
+        DestroyMenu(applicationMenu);
+        return false;
+    }
+    const std::array<std::pair<int, const wchar_t*>, 5> menuItems{{
+        {reportsButtonId, L"Raporty"},
+        {candleGapsButtonId, L"Luki świec"},
+        {signalsButtonId, L"Sygnały"},
+        {transactionsButtonId, L"Transakcje"},
+        {todoListButtonId, L"Todo lista"},
+    }};
+    for (const auto& [commandId, label] : menuItems) {
+        if (!AppendMenuW(viewsMenu, MF_STRING, commandId, label)) {
+            DestroyMenu(viewsMenu);
+            DestroyMenu(applicationMenu);
+            return false;
+        }
+    }
+    if (!AppendMenuW(
+            applicationMenu, MF_POPUP,
+            reinterpret_cast<UINT_PTR>(viewsMenu), L"Widoki")) {
+        DestroyMenu(viewsMenu);
+        DestroyMenu(applicationMenu);
+        return false;
+    }
+    if (!SetMenu(handle_, applicationMenu)) {
+        DestroyMenu(applicationMenu);
+        return false;
+    }
+
+    mainMenu_ = applicationMenu;
+    DrawMenuBar(handle_);
+#ifdef ENABLE_IBKR_TWS_API
+    updateIbkrMenu();
+    updateIbkrStatus();
+#endif
     return true;
-}
-
-/**
- * Ustawia przyciski nawigacji; w To-do zostawia tylko powrót na stronę główną.
- */
-void MainWindow::positionNavigationButtons() {
-    const int allButtonCount =
-        static_cast<int>(navigationButtons_.size());
-    if (allButtonCount == 0) {
-        return;
-    }
-
-    const std::vector<ViewDescriptor>& views = viewRegistry_.views();
-    const bool showOnlyTodoHomeButton =
-        currentViewId() == todoListButtonId;
-    const int buttonCount = showOnlyTodoHomeButton ? 1 : allButtonCount;
-
-    RECT clientArea{};
-    GetClientRect(handle_, &clientArea);
-    const int clientWidth = clientArea.right - clientArea.left;
-    const int clientHeight = clientArea.bottom - clientArea.top;
-    const int buttonGap = WindowScale::size(handle_, reportsButtonGap);
-    const int buttonHeight = WindowScale::size(handle_, reportsButtonHeight);
-    const int bottomMargin =
-        WindowScale::size(handle_, reportsButtonBottomMargin);
-    const int buttonBaseWidth = WindowScale::size(handle_, reportsButtonWidth);
-    const int availableButtonWidth = std::max(
-        1, (clientWidth - buttonGap * (buttonCount - 1)) / buttonCount);
-    const int buttonWidth = std::min(buttonBaseWidth, availableButtonWidth);
-    const int buttonsWidth =
-        buttonWidth * buttonCount + buttonGap * (buttonCount - 1);
-    const int visibleButtonHeight = std::min(buttonHeight, clientHeight);
-    const int firstButtonX = std::max(0, (clientWidth - buttonsWidth) / 2);
-    const int buttonY = std::max(
-        0, clientHeight - visibleButtonHeight - bottomMargin);
-    WindowScale::updateFont(
-        handle_, navigationButtonFont_, navigationButtonFontHeight_, 14,
-        navigationButtons_);
-
-    int visibleButtonIndex = 0;
-    for (int index = 0; index < allButtonCount; ++index) {
-        const bool shouldShowButton =
-            !showOnlyTodoHomeButton
-            || (static_cast<std::size_t>(index) < views.size()
-                && views[static_cast<std::size_t>(index)].commandId
-                    == todoListButtonId);
-        HWND button = navigationButtons_[static_cast<std::size_t>(index)];
-        ShowWindow(button, shouldShowButton ? SW_SHOW : SW_HIDE);
-        if (!shouldShowButton) {
-            continue;
-        }
-        MoveWindow(
-            button,
-            firstButtonX + (buttonWidth + buttonGap) * visibleButtonIndex,
-            buttonY, buttonWidth, visibleButtonHeight, TRUE);
-        ++visibleButtonIndex;
-    }
 }
 
 /**
@@ -549,7 +539,6 @@ void MainWindow::onNavigationClicked(int commandId) {
     const int activeViewId = currentViewId();
     if (activeViewId == commandId) {
         closeAllViews();
-        updateNavigationButtons(0);
     } else {
         closeAllViews();
         if (!openView(commandId)) {
@@ -557,9 +546,7 @@ void MainWindow::onNavigationClicked(int commandId) {
                 handle_, L"Nie udało się otworzyć wybranego widoku.");
             return;
         }
-        updateNavigationButtons(commandId);
     }
-    positionNavigationButtons();
     InvalidateRect(handle_, nullptr, TRUE);
 }
 
@@ -617,30 +604,6 @@ int MainWindow::currentViewId() const {
 }
 
 /**
- * Ustawia nazwę aktywnego przycisku na „Strona główna”.
- */
-void MainWindow::updateNavigationButtons(int activeCommandId) {
-    const std::vector<ViewDescriptor>& views = viewRegistry_.views();
-    const std::size_t count = std::min(
-        views.size(), navigationButtons_.size());
-    for (std::size_t index = 0; index < count; ++index) {
-        if (views[index].commandId == activeCommandId) {
-            SetWindowTextW(
-                navigationButtons_[index], L"Strona główna");
-            continue;
-        }
-        std::wstring title;
-        if (!convertUtf8ToWide(views[index].name, title)) {
-            ErrorLogger::error(
-                "Nie udało się wyświetlić nazwy widoku: " +
-                views[index].name);
-            continue;
-        }
-        SetWindowTextW(navigationButtons_[index], title.c_str());
-    }
-}
-
-/**
  * Rysuje zawartość okna z bieżącymi danymi aplikacji.
  */
 void MainWindow::onPaint() {
@@ -648,10 +611,6 @@ void MainWindow::onPaint() {
     HDC deviceContext = BeginPaint(handle_, &paint);
     RECT clientArea{};
     GetClientRect(handle_, &clientArea);
-    clientArea.bottom = std::max(
-        clientArea.top,
-        clientArea.bottom - WindowScale::size(
-            handle_, reportsButtonHeight + reportsButtonBottomMargin * 2));
     if (reportsPage_.isVisible()) {
         reportsPage_.draw(deviceContext, clientArea);
     } else if (candleGapsPage_.isVisible()) {
@@ -727,15 +686,15 @@ void MainWindow::onDestroy() {
 #ifdef ENABLE_IBKR_TWS_API
     ibkrClient_.setStatusChangedCallback({});
     ibkrClient_.disconnect();
-    if (ibkrMenu_ != nullptr) {
+#endif
+    if (mainMenu_ != nullptr) {
         if (!SetMenu(handle_, nullptr)) {
             ErrorLogger::warning(
-                "Nie udało się odłączyć menu IB Gateway od okna.");
+                "Nie udało się odłączyć menu aplikacji od okna.");
         }
-        DestroyMenu(ibkrMenu_);
-        ibkrMenu_ = nullptr;
+        DestroyMenu(mainMenu_);
+        mainMenu_ = nullptr;
     }
-#endif
     if (dailySentenceThread_.joinable()) {
         dailySentenceThread_.join();
     }
@@ -744,76 +703,6 @@ void MainWindow::onDestroy() {
 
 #ifdef ENABLE_IBKR_TWS_API
 // Front
-/**
- * Tworzy menu z bezpiecznymi, standardowymi portami IB Gateway.
- */
-bool MainWindow::createIbkrMenu() {
-    HMENU mainMenu = CreateMenu();
-    if (mainMenu == nullptr) {
-        return false;
-    }
-    HMENU connectionMenu = CreatePopupMenu();
-    HMENU toolsMenu = CreatePopupMenu();
-    if (connectionMenu == nullptr || toolsMenu == nullptr) {
-        if (connectionMenu != nullptr) {
-            DestroyMenu(connectionMenu);
-        }
-        if (toolsMenu != nullptr) {
-            DestroyMenu(toolsMenu);
-        }
-        DestroyMenu(mainMenu);
-        return false;
-    }
-
-    const bool commandsCreated =
-        AppendMenuW(
-            connectionMenu, MF_STRING,
-            connectPaperCommandId,
-            L"Połącz - Paper (konto testowe, port 4002)") &&
-        AppendMenuW(
-            connectionMenu, MF_STRING,
-            connectLiveCommandId,
-            L"Połącz - Live (konto rzeczywiste, port 4001)") &&
-        AppendMenuW(connectionMenu, MF_SEPARATOR, 0, nullptr) &&
-        AppendMenuW(
-            connectionMenu, MF_STRING,
-            disconnectIbkrCommandId, L"Rozłącz");
-    if (!commandsCreated ||
-        !AppendMenuW(
-            toolsMenu, MF_STRING,
-            synchronizeIbkrHistoryCommandId, L"Synchronizuj")) {
-        DestroyMenu(connectionMenu);
-        DestroyMenu(toolsMenu);
-        DestroyMenu(mainMenu);
-        return false;
-    }
-    if (!AppendMenuW(
-            mainMenu, MF_POPUP,
-            reinterpret_cast<UINT_PTR>(connectionMenu), L"IB Gateway")) {
-        DestroyMenu(connectionMenu);
-        DestroyMenu(toolsMenu);
-        DestroyMenu(mainMenu);
-        return false;
-    }
-    if (!AppendMenuW(
-            mainMenu, MF_POPUP,
-            reinterpret_cast<UINT_PTR>(toolsMenu), L"Narzędzia")) {
-        DestroyMenu(toolsMenu);
-        DestroyMenu(mainMenu);
-        return false;
-    }
-    if (!SetMenu(handle_, mainMenu)) {
-        DestroyMenu(mainMenu);
-        return false;
-    }
-
-    ibkrMenu_ = mainMenu;
-    DrawMenuBar(handle_);
-    updateIbkrMenu();
-    updateIbkrStatus();
-    return true;
-}
-
 /**
  * Rozpoczyna połączenie lokalne z portem Paper lub Live wybranym w menu.
  */
@@ -864,7 +753,7 @@ void MainWindow::updateIbkrStatus() {
  * Blokuje ponowne łączenie podczas aktywnej sesji i pozwala ją przerwać.
  */
 void MainWindow::updateIbkrMenu() {
-    if (ibkrMenu_ == nullptr) {
+    if (mainMenu_ == nullptr) {
         return;
     }
     const IBGatewayConnectionState state = ibkrClient_.status().state;
@@ -875,7 +764,7 @@ void MainWindow::updateIbkrMenu() {
         state == IBGatewayConnectionState::Connecting ||
         state == IBGatewayConnectionState::Connected ||
         state == IBGatewayConnectionState::Error;
-    HMENU connectionMenu = GetSubMenu(ibkrMenu_, 0);
+    HMENU connectionMenu = GetSubMenu(mainMenu_, 0);
     if (connectionMenu == nullptr) {
         ErrorLogger::warning(
             "Nie można odnaleźć menu połączenia IB Gateway.");
@@ -891,7 +780,7 @@ void MainWindow::updateIbkrMenu() {
         connectionMenu, disconnectIbkrCommandId,
         MF_BYCOMMAND | (canDisconnect ? MF_ENABLED : MF_GRAYED));
 
-    HMENU toolsMenu = GetSubMenu(ibkrMenu_, 1);
+    HMENU toolsMenu = GetSubMenu(mainMenu_, 1);
     if (toolsMenu == nullptr) {
         ErrorLogger::warning(
             "Nie można odnaleźć menu Narzędzia.");

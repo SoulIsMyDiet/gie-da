@@ -6,7 +6,6 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include "DailySentencePicker.h"
 #include "CandleGapsPage.h"
@@ -64,15 +63,10 @@ private:
     bool onCreate();
 
     /**
-     * Rejestruje widoki oraz tworzy ich przyciski z jednej wspólnej listy.
-     * @return true, jeśli wszystkie przyciski powstały poprawnie.
+     * Rejestruje dotychczasowe widoki i tworzy menu aplikacji.
+     * @return true, jeśli menu i jego pozycje zostały utworzone poprawnie.
      */
-    bool createNavigationButtons();
-
-    /**
-     * Dopasowuje położenie przycisków widoków do aktualnego rozmiaru okna.
-     */
-    void positionNavigationButtons();
+    bool createMainMenu();
 
     /**
      * Przełącza aplikację na wybrany widok lub wraca do strony głównej.
@@ -95,11 +89,6 @@ private:
     int currentViewId() const;
 
     /**
-     * Ustawia etykiety nawigacji zgodnie z aktualnie otwartym widokiem.
-     */
-    void updateNavigationButtons(int activeCommandId);
-
-    /**
      * Pobiera sentencję w osobnym wątku, aby nie blokować okna aplikacji.
      * @throws std::system_error, jeśli system nie może utworzyć nowego wątku.
      */
@@ -116,12 +105,6 @@ private:
     void onDestroy();
 
 #ifdef ENABLE_IBKR_TWS_API
-    /**
-     * Tworzy menu z osobnymi pozycjami dla środowisk Paper i Live.
-     * @return true, jeśli menu utworzono poprawnie.
-     */
-    bool createIbkrMenu();
-
     /**
      * Rozpoczyna połączenie z wybranym portem standardowym Gateway.
      * @param port Port środowiska Paper albo Live.
@@ -142,9 +125,7 @@ private:
     HINSTANCE instance_ = nullptr;
     HWND handle_ = nullptr;
     int showCommand_ = SW_SHOW;
-    std::vector<HWND> navigationButtons_;
-    HFONT navigationButtonFont_ = nullptr;
-    int navigationButtonFontHeight_ = 0;
+    HMENU mainMenu_ = nullptr;
     std::mutex dailySentenceMutex_;
     std::string dailySentence_ = "Pobieranie sentencji dnia...";
     std::thread dailySentenceThread_;
@@ -159,7 +140,6 @@ private:
     SignalsPage signalsPage_;
     TransactionsPage transactionsPage_;
 #ifdef ENABLE_IBKR_TWS_API
-    HMENU ibkrMenu_ = nullptr;
     std::string lastIbkrErrorShown_;
     IBGatewayClient ibkrClient_;
 #endif
