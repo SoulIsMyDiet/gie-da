@@ -5,6 +5,57 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(ENABLE_IBKR_TWS_API "Dołącz oficjalne C++ API IBKR do aplikacji" OFF)
+set(
+    IBKR_TWS_API_ROOT
+    "C:/TWS API 1050.02"
+    CACHE PATH
+    "Folder instalacyjny IBKR TWS API"
+)
+set(
+    IBKR_BID_LIBRARY
+    "${IBKR_TWS_API_ROOT}/source/cppclient/client/lib/libbid.lib"
+    CACHE FILEPATH
+    "Ścieżka do biblioteki Intel Decimal Floating-Point"
+)
+
+if(ENABLE_IBKR_TWS_API)
+    if(NOT EXISTS "${IBKR_TWS_API_ROOT}/source/cppclient/client/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Nie znaleziono C++ API IBKR w '${IBKR_TWS_API_ROOT}'. "
+            "Ustaw IBKR_TWS_API_ROOT na folder instalacyjny TWS API."
+        )
+    endif()
+    if(NOT EXISTS "${IBKR_BID_LIBRARY}")
+        message(FATAL_ERROR
+            "Nie znaleziono biblioteki Intel Decimal Floating-Point "
+            "w '${IBKR_BID_LIBRARY}'."
+        )
+    endif()
+
+    find_package(Protobuf 36.2.0 EXACT CONFIG REQUIRED)
+    add_subdirectory(
+        "${IBKR_TWS_API_ROOT}/source/cppclient/client"
+        "${CMAKE_BINARY_DIR}/ibkr-twsapi"
+    )
+    file(GLOB IBKR_PROTOBUF_SOURCES CONFIGURE_DEPENDS
+        "${IBKR_TWS_API_ROOT}/source/cppclient/client/protobuf/*.pb.cc"
+    )
+    target_sources(twsapi PRIVATE ${IBKR_PROTOBUF_SOURCES})
+    target_include_directories(twsapi PUBLIC
+        "${IBKR_TWS_API_ROOT}/source/cppclient/client/protobuf"
+    )
+    target_link_libraries(twsapi
+        PUBLIC protobuf::libprotobuf
+        PRIVATE "${IBKR_BID_LIBRARY}"
+    )
+    set_target_properties(twsapi PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+endif()
+
 add_executable(gieda WIN32
     src/main.cpp
     src/pages/MainWindow/MainWindow.cpp
@@ -45,6 +96,18 @@ target_link_libraries(gieda PRIVATE
     winmm
     winhttp
 )
+if(ENABLE_IBKR_TWS_API)
+    target_include_directories(gieda PRIVATE
+        "${IBKR_TWS_API_ROOT}/source/cppclient/client"
+    )
+    target_link_libraries(gieda PRIVATE twsapi)
+    add_custom_command(TARGET gieda POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:gieda>
+            "$<TARGET_FILE_DIR:gieda>"
+        COMMAND_EXPAND_LISTS
+    )
+endif()
 target_link_options(gieda PRIVATE -static-libgcc -static-libstdc++)
 
 get_filename_component(MINGW_COMPILER_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
@@ -53,6 +116,16 @@ add_custom_command(TARGET gieda POST_BUILD
         "${MINGW_COMPILER_DIR}/libwinpthread-1.dll"
         "$<TARGET_FILE_DIR:gieda>/libwinpthread-1.dll"
 )
+if(ENABLE_IBKR_TWS_API)
+    add_custom_command(TARGET gieda POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MINGW_COMPILER_DIR}/libgcc_s_seh-1.dll"
+            "$<TARGET_FILE_DIR:gieda>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MINGW_COMPILER_DIR}/libstdc++-6.dll"
+            "$<TARGET_FILE_DIR:gieda>"
+    )
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
