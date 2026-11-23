@@ -960,12 +960,12 @@ bool splitCandleRow(std::string_view row, CandleReportEntry& candle) {
 }
 
 /**
- * Wysyła żądanie strony świec i sprawdza jego nagłówek oraz wiersze TSV.
+ * Wysyła żądanie stronicowanego raportu i pobiera jego surowe wiersze TSV.
  */
-bool fetchCandlePageFromApi(
+bool fetchPagedTsvRows(
     const std::wstring& requestPath,
     std::size_t maximumRows,
-    std::vector<CandleReportEntry>& candles,
+    std::vector<std::string>& rows,
     bool& hasNextPage,
     std::string& error) {
     InternetHandle session{WinHttpOpen(
@@ -1025,7 +1025,7 @@ bool fetchCandlePageFromApi(
         return false;
     }
 
-    std::vector<CandleReportEntry> receivedCandles;
+    std::vector<std::string> receivedRows;
     std::size_t lineStart = headerEnd == std::string::npos
         ? response.size()
         : headerEnd + 1;
@@ -1034,15 +1034,13 @@ bool fetchCandlePageFromApi(
         const std::size_t effectiveEnd =
             lineEnd == std::string::npos ? response.size() : lineEnd;
         if (effectiveEnd > lineStart) {
-            const std::string_view row = std::string_view(response).substr(
-                lineStart, effectiveEnd - lineStart);
-            CandleReportEntry candle;
-            if (receivedCandles.size() == maximumRows ||
-                !splitCandleRow(row, candle)) {
-                error = "Lokalne API raportów zwróciło nieprawidłowe dane świec.";
+            if (receivedRows.size() == maximumRows ||
+                effectiveEnd - lineStart > 4096) {
+                error = "Lokalne API raportów zwróciło zbyt wiele lub za długie wiersze.";
                 return false;
             }
-            receivedCandles.push_back(std::move(candle));
+            receivedRows.emplace_back(
+                response.substr(lineStart, effectiveEnd - lineStart));
         }
         if (lineEnd == std::string::npos) {
             break;
@@ -1050,8 +1048,106 @@ bool fetchCandlePageFromApi(
         lineStart = lineEnd + 1;
     }
 
-    candles = std::move(receivedCandles);
+    rows = std::move(receivedRows);
     hasNextPage = hasNextPageText == "1";
+    return true;
+}
+
+/**
+ * Sprawdza wiersze siedmiokolumnowego raportu świec.
+ */
+bool fetchCandlePageFromApi(
+    const std::wstring& requestPath,
+    std::size_t maximumRows,
+    std::vector<CandleReportEntry>& candles,
+    bool& hasNextPage,
+    std::string& error) {
+    std::vector<std::string> rows;
+    bool receivedHasNextPage = false;
+    if (!fetchPagedTsvRows(
+            requestPath, maximumRows, rows, receivedHasNextPage, error)) {
+        return false;
+    }
+
+    std::vector<CandleReportEntry> receivedCandles;
+    receivedCandles.reserve(rows.size());
+    for (const std::string& row : rows) {
+        CandleReportEntry candle;
+        if (!splitCandleRow(row, candle)) {
+            error = "Lokalne API raportów zwróciło nieprawidłowe dane świec.";
+            return false;
+        }
+        receivedCandles.push_back(std::move(candle));
+    }
+
+    candles = std::move(receivedCandles);
+    hasNextPage = receivedHasNextPage;
+    return true;
+}
+
+/**
+ * Dzieli wiersz zestawienia na etykietę czasu i osiem cen.
+ */
+bool splitCandleComparisonRow(
+    std::string_view row, CandleComparisonEntry& candle) {
+    std::string_view fields[9];
+    std::size_t fieldStart = 0;
+    for (std::size_t index = 0; index < 8; ++index) {
+        const std::size_t separator = row.find('\t', fieldStart);
+        if (separator == std::string_view::npos) {
+            return false;
+        }
+        fields[index] = row.substr(fieldStart, separator - fieldStart);
+        fieldStart = separator + 1;
+    }
+    if (row.find('\t', fieldStart) != std::string_view::npos) {
+        return false;
+    }
+    fields[8] = row.substr(fieldStart);
+
+    for (const std::string_view field : fields) {
+        if (field.empty() || field.size() > 512) {
+            return false;
+        }
+    }
+
+    candle.symbolAndDatetime.assign(fields[0]);
+    for (std::size_t index = 0; index < candle.prices.size(); ++index) {
+        candle.prices[index].assign(fields[index + 1]);
+    }
+    return true;
+}
+
+/**
+ * Pobiera i sprawdza wiersze dziewięciokolumnowego zestawienia świec.
+ */
+bool fetchCandleComparisonPageFromApi(
+    const std::wstring& requestPath,
+    std::size_t maximumRows,
+    std::vector<CandleComparisonEntry>& candles,
+    bool& hasNextPage,
+    std::string& error) {
+    std::vector<std::string> rows;
+    bool receivedHasNextPage = false;
+    if (!fetchPagedTsvRows(
+            requestPath, maximumRows, rows, receivedHasNextPage, error)) {
+        return false;
+    }
+
+    std::vector<CandleComparisonEntry> receivedCandles;
+    receivedCandles.reserve(rows.size());
+    for (const std::string& row : rows) {
+        CandleComparisonEntry candle;
+        if (!splitCandleComparisonRow(row, candle)) {
+            error =
+                "Lokalne API raportów zwróciło nieprawidłowe zestawienie świec.";
+            return false;
+        }
+        receivedCandles.push_back(std::move(candle));
+    }
+
+    candles = std::move(receivedCandles);
+    hasNextPage = receivedHasNextPage;
     return true;
 }
 
@@ -1935,6 +2031,27 @@ bool CandleHistoryClient::fetchIbkrCandlePage(
     const std::wstring requestPath =
         L"/api/candles/ibkr/report?page=" + std::to_wstring(page);
     return fetchCandlePageFromApi(
+        requestPath, pageSize, candles, hasNextPage, error);
+}
+
+/**
+ * Pobiera stronę wspólnych świec z tabel candles i candles_IBKR.
+ */
+bool CandleHistoryClient::fetchCandleComparisonPage(
+    std::size_t page,
+    std::vector<CandleComparisonEntry>& candles,
+    bool& hasNextPage,
+    std::string& error) {
+    if (page > 1000000 ||
+        page > static_cast<std::size_t>(
+                   std::numeric_limits<unsigned long long>::max() / pageSize)) {
+        error = "Numer strony zestawienia świec jest poza dozwolonym zakresem.";
+        return false;
+    }
+
+    const std::wstring requestPath =
+        L"/api/candles/comparison/report?page=" + std::to_wstring(page);
+    return fetchCandleComparisonPageFromApi(
         requestPath, pageSize, candles, hasNextPage, error);
 }
 

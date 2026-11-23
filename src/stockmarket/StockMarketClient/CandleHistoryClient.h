@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -34,6 +35,15 @@ struct CandleReportEntry {
     std::string low;
     std::string close;
     std::string volume;
+};
+
+/**
+ * Przechowuje wspólny czas i osiem cen świecy z obu źródeł.
+ */
+struct CandleComparisonEntry {
+    std::string symbolAndDatetime;
+    // Kolejność: candles open/low/high/close, potem IBKR open/low/high/close.
+    std::array<std::string, 8> prices;
 };
 
 /**
@@ -323,6 +333,20 @@ public:
     static bool fetchIbkrCandlePage(
         std::size_t page,
         std::vector<CandleReportEntry>& candles,
+        bool& hasNextPage,
+        std::string& error);
+
+    /**
+     * Pobiera stronę świec występujących jednocześnie w obu tabelach.
+     * @param page Numer strony liczony od zera.
+     * @param candles Otrzymuje porównywalne świece z obu źródeł.
+     * @param hasNextPage Otrzymuje informację, czy istnieje kolejna strona.
+     * @param error Otrzymuje opis błędu, jeśli pobranie się nie powiedzie.
+     * @return true, jeśli API zwróciło poprawną stronę.
+     */
+    static bool fetchCandleComparisonPage(
+        std::size_t page,
+        std::vector<CandleComparisonEntry>& candles,
         bool& hasNextPage,
         std::string& error);
 

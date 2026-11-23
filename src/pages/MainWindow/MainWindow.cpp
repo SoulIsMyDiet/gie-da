@@ -24,6 +24,7 @@ constexpr int signalsButtonId = 1003;
 constexpr int transactionsButtonId = 1004;
 constexpr int todoListButtonId = 1005;
 constexpr int ibkrCandlesButtonId = 1006;
+constexpr int candleComparisonButtonId = 1007;
 constexpr int initialWindowWidth = 1600;
 constexpr int initialWindowHeight = 900;
 #ifdef ENABLE_IBKR_TWS_API
@@ -196,6 +197,7 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_SIZE:
             reportsPage_.positionControls();
             ibkrCandlesPage_.positionControls();
+            candleComparisonPage_.positionControls();
             candleGapsPage_.positionControls();
             signalsPage_.positionControls();
             transactionsPage_.positionControls();
@@ -237,6 +239,14 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
             }
+            if (ibkrCandlesPage_.handleCommand(
+                    LOWORD(wParam), HIWORD(wParam))) {
+                return 0;
+            }
+            if (candleComparisonPage_.handleCommand(
+                    LOWORD(wParam), HIWORD(wParam))) {
+                return 0;
+            }
             if (candleGapsPage_.handleCommand(
                     LOWORD(wParam), HIWORD(wParam))) {
                 return 0;
@@ -255,7 +265,8 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             }
             if ((HIWORD(wParam) == 0 || HIWORD(wParam) == BN_CLICKED) &&
                 (viewRegistry_.findByCommandId(LOWORD(wParam)) != nullptr ||
-                 LOWORD(wParam) == ibkrCandlesButtonId)) {
+                 LOWORD(wParam) == ibkrCandlesButtonId ||
+                 LOWORD(wParam) == candleComparisonButtonId)) {
                 onNavigationClicked(LOWORD(wParam));
                 return 0;
             }
@@ -341,6 +352,11 @@ bool MainWindow::onCreate() {
             handle_, L"Nie udało się utworzyć widoku świec IBKR.");
         return false;
     }
+    if (!candleComparisonPage_.create(instance_, handle_)) {
+        showErrorMessage(
+            handle_, L"Nie udało się utworzyć widoku zestawienia świec.");
+        return false;
+    }
     if (!candleGapsPage_.create(instance_, handle_)) {
         showErrorMessage(
             handle_, L"Nie udało się utworzyć widoku brakujących świec.");
@@ -364,6 +380,7 @@ bool MainWindow::onCreate() {
 
     reportsPage_.positionControls();
     ibkrCandlesPage_.positionControls();
+    candleComparisonPage_.positionControls();
     candleGapsPage_.positionControls();
     signalsPage_.positionControls();
     transactionsPage_.positionControls();
@@ -506,13 +523,14 @@ bool MainWindow::createMainMenu() {
         DestroyMenu(applicationMenu);
         return false;
     }
-    const std::array<std::pair<int, const wchar_t*>, 6> menuItems{{
+    const std::array<std::pair<int, const wchar_t*>, 7> menuItems{{
         {reportsButtonId, L"Raporty"},
         {candleGapsButtonId, L"Luki świec"},
         {signalsButtonId, L"Sygnały"},
         {transactionsButtonId, L"Transakcje"},
         {todoListButtonId, L"Todo lista"},
         {ibkrCandlesButtonId, L"Świece"},
+        {candleComparisonButtonId, L"Zestawienie świec"},
     }};
     for (const auto& [commandId, label] : menuItems) {
         if (!AppendMenuW(viewsMenu, MF_STRING, commandId, label)) {
@@ -566,6 +584,7 @@ void MainWindow::onNavigationClicked(int commandId) {
 void MainWindow::closeAllViews() {
     reportsPage_.close();
     ibkrCandlesPage_.close();
+    candleComparisonPage_.close();
     candleGapsPage_.close();
     signalsPage_.close();
     transactionsPage_.close();
@@ -580,6 +599,8 @@ bool MainWindow::openView(int commandId) {
         reportsPage_.open();
     } else if (commandId == ibkrCandlesButtonId) {
         ibkrCandlesPage_.open();
+    } else if (commandId == candleComparisonButtonId) {
+        candleComparisonPage_.open();
     } else if (commandId == candleGapsButtonId) {
         candleGapsPage_.open();
     } else if (commandId == signalsButtonId) {
@@ -603,6 +624,9 @@ int MainWindow::currentViewId() const {
     }
     if (ibkrCandlesPage_.isVisible()) {
         return ibkrCandlesButtonId;
+    }
+    if (candleComparisonPage_.isVisible()) {
+        return candleComparisonButtonId;
     }
     if (candleGapsPage_.isVisible()) {
         return candleGapsButtonId;
@@ -631,6 +655,8 @@ void MainWindow::onPaint() {
         reportsPage_.draw(deviceContext, clientArea);
     } else if (ibkrCandlesPage_.isVisible()) {
         ibkrCandlesPage_.draw(deviceContext, clientArea);
+    } else if (candleComparisonPage_.isVisible()) {
+        candleComparisonPage_.draw(deviceContext, clientArea);
     } else if (candleGapsPage_.isVisible()) {
         candleGapsPage_.draw(deviceContext, clientArea);
     } else if (signalsPage_.isVisible()) {

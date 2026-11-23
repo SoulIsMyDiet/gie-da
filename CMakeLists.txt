@@ -60,6 +60,7 @@ add_executable(gieda WIN32
     src/main.cpp
     src/pages/MainWindow/MainWindow.cpp
     src/pages/reports/ReportsPage.cpp
+    src/pages/reports/CandleComparisonPage.cpp
     src/pages/reports/CandleGapsPage.cpp
     src/pages/reports/SignalsPage.cpp
     src/pages/reports/TransactionsPage.cpp

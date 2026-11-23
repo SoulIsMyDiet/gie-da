@@ -283,6 +283,92 @@ class IBKRCandleReportTests(unittest.TestCase):
             0
         )
 
+    def test_comparison_report_joins_same_symbol_and_local_time_offset(self) -> None:
+        """Zestawienie łączy dokładnie odpowiadające sobie rekordy obu tabel."""
+        repository = app.MarketDataRepository()
+        connection = Mock()
+        cursor = Mock()
+        connection.cursor.return_value = cursor
+        cursor.fetchall.return_value = [
+            (
+                "EUR/USD",
+                datetime(2026, 1, 15, 13, 34),
+                "1.10000",
+                "1.09900",
+                "1.10100",
+                "1.10050",
+                "1.10010",
+                "1.09910",
+                "1.10110",
+                "1.10060",
+            )
+        ]
+
+        with patch.object(
+            app.mysql.connector, "connect", return_value=connection
+        ):
+            rows, has_next_page = repository.fetch_candle_comparison_page(0)
+
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("INNER JOIN candles_IBKR", query)
+        self.assertIn("candles_IBKR.datetime = candles.datetime", query)
+        self.assertIn(
+            "candles_IBKR.utc_offset_minutes =\n"
+            "                            candles.utc_offset_minutes",
+            query,
+        )
+        self.assertEqual(
+            rows,
+            [
+                (
+                    "EUR/USD",
+                    "2026-01-15 13:34:00",
+                    "1.10000",
+                    "1.09900",
+                    "1.10100",
+                    "1.10050",
+                    "1.10010",
+                    "1.09910",
+                    "1.10110",
+                    "1.10060",
+                )
+            ],
+        )
+        self.assertFalse(has_next_page)
+        connection.close.assert_called_once()
+
+    def test_comparison_endpoint_returns_nine_tsv_columns(self) -> None:
+        """Pierwsza kolumna łączy instrument z czasem, a pozostałe osiem to ceny."""
+        request = Mock()
+        request.app.state.repository.fetch_candle_comparison_page.return_value = (
+            [
+                (
+                    "EUR/USD",
+                    "2026-01-15 13:34:00",
+                    "1.10000",
+                    "1.09900",
+                    "1.10100",
+                    "1.10050",
+                    "1.10010",
+                    "1.09910",
+                    "1.10110",
+                    "1.10060",
+                )
+            ],
+            False,
+        )
+
+        response = app.candle_comparison_report(request, page=0)
+
+        self.assertEqual(
+            response.body,
+            b"0\nEUR/USD | 2026-01-15 13:34:00\t1.10000\t1.09900"
+            b"\t1.10100\t1.10050\t1.10010\t1.09910\t1.10110\t1.10060",
+        )
+        request.app.state.repository.fetch_candle_comparison_page.assert_called_once_with(
+            0
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

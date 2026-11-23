@@ -3128,6 +3128,76 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_candle_comparison_page(
+        self, page: int
+    ) -> tuple[list[tuple[str, ...]], bool]:
+        """Pobiera świece o tym samym symbolu, czasie i przesunięciu UTC."""
+        page_size = 20
+        offset = page * page_size
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT
+                        candles.symbol,
+                        candles.datetime,
+                        CAST(candles.open AS CHAR),
+                        CAST(candles.low AS CHAR),
+                        CAST(candles.high AS CHAR),
+                        CAST(candles.close AS CHAR),
+                        CAST(candles_IBKR.open AS CHAR),
+                        CAST(candles_IBKR.low AS CHAR),
+                        CAST(candles_IBKR.high AS CHAR),
+                        CAST(candles_IBKR.close AS CHAR)
+                    FROM candles
+                    INNER JOIN candles_IBKR
+                        ON candles_IBKR.symbol = candles.symbol
+                        AND candles_IBKR.datetime = candles.datetime
+                        AND candles_IBKR.utc_offset_minutes =
+                            candles.utc_offset_minutes
+                    ORDER BY
+                        candles.datetime DESC,
+                        candles.symbol ASC,
+                        candles.utc_offset_minutes DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (page_size + 1, offset),
+                )
+                rows = cursor.fetchall()
+                has_next_page = len(rows) > page_size
+                return [
+                    (
+                        symbol,
+                        _format_api_timestamp(candle_datetime),
+                        open_price,
+                        low_price,
+                        high_price,
+                        close_price,
+                        ibkr_open,
+                        ibkr_low,
+                        ibkr_high,
+                        ibkr_close,
+                    )
+                    for (
+                        symbol,
+                        candle_datetime,
+                        open_price,
+                        low_price,
+                        high_price,
+                        close_price,
+                        ibkr_open,
+                        ibkr_low,
+                        ibkr_high,
+                        ibkr_close,
+                    ) in rows[:page_size]
+                ], has_next_page
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     def fetch_filtered_candle_page(
         self, start_date: date, end_date: date, page: int
     ) -> tuple[list[tuple[str, str, str, str, str, str, str | None]], bool]:
@@ -5126,6 +5196,33 @@ def ibkr_candle_report(
 
     report_lines = ["1" if has_next_page else "0"]
     report_lines.extend("\t".join(row) for row in rows)
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/candles/comparison/report", response_class=Response)
+def candle_comparison_report(
+    request: Request,
+    page: int = Query(ge=0, le=1000000),
+) -> Response:
+    """Zwraca wspólne świece z obu tabel w kolejności od najnowszych."""
+    try:
+        rows, has_next_page = (
+            request.app.state.repository.fetch_candle_comparison_page(page)
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się odczytać zestawienia świec z bazy MySQL.",
+        ) from error
+
+    report_lines = ["1" if has_next_page else "0"]
+    report_lines.extend(
+        "\t".join((f"{symbol} | {candle_datetime}", *prices))
+        for symbol, candle_datetime, *prices in rows
+    )
     return Response(
         content="\n".join(report_lines),
         media_type="text/tab-separated-values; charset=utf-8",

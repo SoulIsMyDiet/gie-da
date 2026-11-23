@@ -9,6 +9,7 @@
 
 #include "DailySentencePicker.h"
 #include "CandleGapsPage.h"
+#include "CandleComparisonPage.h"
 #include "ReportsPage.h"
 #include "SignalsPage.h"
 #include "TransactionsPage.h"
@@ -137,6 +138,7 @@ private:
     TodoScheduler todoScheduler_;
     ReportsPage reportsPage_;
     ReportsPage ibkrCandlesPage_{CandleReportSource::Ibkr};
+    CandleComparisonPage candleComparisonPage_;
     CandleGapsPage candleGapsPage_;
     SignalsPage signalsPage_;
     TransactionsPage transactionsPage_;
