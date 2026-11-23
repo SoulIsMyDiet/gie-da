@@ -657,21 +657,35 @@ void MainWindow::onPaint() {
 #ifdef ENABLE_IBKR_TWS_API
         const IBGatewayOneMinuteCandle candle =
             ibkrClient_.candleSnapshot();
+        const IBGatewayQuoteSnapshot quote =
+            ibkrClient_.quoteSnapshot();
+        std::ostringstream marketText;
         if (candle.available) {
-            std::ostringstream candleText;
-            candleText << "EUR/USD - świeca 1-minutowa | "
+            marketText << "EUR/USD - świeca 1-minutowa | "
                        << candle.timestamp << "\n"
                        << "O: " << std::fixed << std::setprecision(5)
                        << candle.open << "  H: " << candle.high
                        << "  L: " << candle.low
                        << "  C: " << candle.close;
-            if (!candle.message.empty()) {
-                candleText << "\n" << candle.message;
-            }
-            oneMinuteCandle = candleText.str();
         } else {
-            oneMinuteCandle = candle.message;
+            marketText << candle.message;
         }
+        marketText << "\nBid: ";
+        if (quote.bidAvailable) {
+            marketText << std::fixed << std::setprecision(5) << quote.bid;
+        } else {
+            marketText << "oczekiwanie";
+        }
+        marketText << "  Ask: ";
+        if (quote.askAvailable) {
+            marketText << std::fixed << std::setprecision(5) << quote.ask;
+        } else {
+            marketText << "oczekiwanie";
+        }
+        if (!quote.bidAvailable || !quote.askAvailable || quote.delayed) {
+            marketText << "\n" << quote.message;
+        }
+        oneMinuteCandle = marketText.str();
 #else
         oneMinuteCandle =
             "Włącz ENABLE_IBKR_TWS_API, aby pobierać świece z IBKR.";

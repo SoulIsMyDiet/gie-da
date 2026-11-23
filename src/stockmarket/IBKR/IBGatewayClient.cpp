@@ -5,6 +5,7 @@
 #include "ErrorLogger.h"
 
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <memory>
 #include <sstream>
@@ -16,6 +17,7 @@ namespace {
 
 constexpr auto connectionHandshakeTimeout = std::chrono::seconds(15);
 constexpr int oneMinuteCandleRequestId = 9251;
+constexpr int eurUsdQuoteRequestId = 9252;
 
 /**
  * Przygotowuje czytelny opis błędu zwróconego przez oficjalne API IBKR.
@@ -78,7 +80,15 @@ bool IBGatewayClient::connect(
     updateStatus(
         IBGatewayConnectionState::Connecting,
         "Łączenie z IB Gateway...");
-    updateCandleMessage("Łączenie z IB Gateway przed pobraniem świecy...");
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        candle_ = {};
+        candle_.message =
+            "Łączenie z IB Gateway przed pobraniem świecy...";
+        quote_ = {};
+        quote_.message = "Oczekiwanie na kwotowania bid/ask z IBKR.";
+    }
+    notifyStatusChanged();
     try {
         connectionThread_ = std::thread(
             &IBGatewayClient::runConnection,
@@ -137,6 +147,14 @@ IBGatewayOneMinuteCandle IBGatewayClient::candleSnapshot() const {
 }
 
 /**
+ * Zwraca kopię kwotowań chronioną blokadą.
+ */
+IBGatewayQuoteSnapshot IBGatewayClient::quoteSnapshot() const {
+    const std::lock_guard<std::mutex> lock(statusMutex_);
+    return quote_;
+}
+
+/**
  * Podmienia funkcję powiadamiającą o zmianie statusu.
  */
 void IBGatewayClient::setStatusChangedCallback(
@@ -184,6 +202,8 @@ void IBGatewayClient::error(
         ErrorLogger::warning(message);
         if (id == oneMinuteCandleRequestId) {
             updateCandleMessage(message);
+        } else if (id == eurUsdQuoteRequestId) {
+            updateQuoteMessage(message);
         }
     }
 }
@@ -214,6 +234,44 @@ void IBGatewayClient::connectionClosed() {
         requestedByApplication
             ? "Rozłączono strumień świec EUR/USD."
             : "Utracono połączenie; ostatnia odebrana świeca pozostaje widoczna.");
+    updateQuoteMessage(
+        requestedByApplication
+            ? "Rozłączono kwotowania EUR/USD."
+            : "Utracono połączenie z kwotowaniami EUR/USD.");
+}
+
+/**
+ * Zachowuje nową cenę bid albo ask i odświeża widok.
+ */
+void IBGatewayClient::tickPrice(
+    int requestId,
+    TickType tickType,
+    double price,
+    const TickAttrib& attrib) {
+    static_cast<void>(attrib);
+    const bool isBid = tickType == BID || tickType == DELAYED_BID;
+    const bool isAsk = tickType == ASK || tickType == DELAYED_ASK;
+    if (requestId != eurUsdQuoteRequestId ||
+        !std::isfinite(price) || price <= 0.0 || (!isBid && !isAsk)) {
+        return;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        quote_.delayed =
+            tickType == DELAYED_BID || tickType == DELAYED_ASK;
+        if (isBid) {
+            quote_.bid = price;
+            quote_.bidAvailable = true;
+        } else {
+            quote_.ask = price;
+            quote_.askAvailable = true;
+        }
+        quote_.message = quote_.delayed
+            ? "Uwaga: kwotowania EUR/USD są opóźnione."
+            : "Bieżące kwotowania EUR/USD z IBKR.";
+    }
+    notifyStatusChanged();
 }
 
 /**
@@ -284,6 +342,7 @@ void IBGatewayClient::runConnection(
     std::unique_ptr<EClientSocket> client;
     bool disconnected = false;
     bool historicalRequestStarted = false;
+    bool marketDataRequestStarted = false;
     try {
         client = std::make_unique<EClientSocket>(this, &readerSignal_);
         client->asyncEConnect(true);
@@ -353,6 +412,25 @@ void IBGatewayClient::runConnection(
                         TagValueListSPtr());
                     historicalRequestStarted = true;
                 }
+                if (!marketDataRequestStarted &&
+                    currentStatus.state ==
+                        IBGatewayConnectionState::Connected) {
+                    Contract contract;
+                    contract.symbol = "EUR";
+                    contract.secType = "CASH";
+                    contract.exchange = "IDEALPRO";
+                    contract.currency = "USD";
+                    updateQuoteMessage(
+                        "Oczekiwanie na kwotowania bid/ask z IBKR...");
+                    client->reqMktData(
+                        eurUsdQuoteRequestId,
+                        contract,
+                        "",
+                        false,
+                        false,
+                        TagValueListSPtr());
+                    marketDataRequestStarted = true;
+                }
                 if (currentStatus.state ==
                         IBGatewayConnectionState::Connecting &&
                     std::chrono::steady_clock::now() >= handshakeDeadline) {
@@ -372,6 +450,9 @@ void IBGatewayClient::runConnection(
             if (historicalRequestStarted && client->isConnected()) {
                 client->cancelHistoricalData(oneMinuteCandleRequestId);
             }
+            if (marketDataRequestStarted && client->isConnected()) {
+                client->cancelMktData(eurUsdQuoteRequestId);
+            }
             client->eDisconnect();
             disconnected = true;
         }
@@ -389,6 +470,9 @@ void IBGatewayClient::runConnection(
     if (client != nullptr && !disconnected) {
         if (historicalRequestStarted && client->isConnected()) {
             client->cancelHistoricalData(oneMinuteCandleRequestId);
+        }
+        if (marketDataRequestStarted && client->isConnected()) {
+            client->cancelMktData(eurUsdQuoteRequestId);
         }
         client->eDisconnect();
     }
@@ -435,6 +519,17 @@ void IBGatewayClient::updateCandleMessage(std::string message) {
     {
         const std::lock_guard<std::mutex> lock(statusMutex_);
         candle_.message = std::move(message);
+    }
+    notifyStatusChanged();
+}
+
+/**
+ * Ustawia status bid/ask i odświeża widok poza blokadą.
+ */
+void IBGatewayClient::updateQuoteMessage(std::string message) {
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        quote_.message = std::move(message);
     }
     notifyStatusChanged();
 }

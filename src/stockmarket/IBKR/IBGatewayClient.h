@@ -40,6 +40,18 @@ struct IBGatewayOneMinuteCandle {
 };
 
 /**
+ * Przechowuje ostatnie dostępne ceny bid i ask dla EUR/USD.
+ */
+struct IBGatewayQuoteSnapshot {
+    bool bidAvailable = false;
+    bool askAvailable = false;
+    bool delayed = false;
+    double bid = 0.0;
+    double ask = 0.0;
+    std::string message = "Oczekiwanie na kwotowania bid/ask z IBKR.";
+};
+
+/**
  * Zarządza połączeniem socketowym z IB Gateway w osobnym wątku.
  */
 class IBGatewayClient final : public DefaultEWrapper {
@@ -83,6 +95,12 @@ public:
      * @return Dane ostatniej świecy 1-minutowej albo opis oczekiwania/błędu.
      */
     IBGatewayOneMinuteCandle candleSnapshot() const;
+
+    /**
+     * Zwraca kopię ostatnich kwotowań bid/ask.
+     * @return Dostępne ceny lub komunikat o ich braku.
+     */
+    IBGatewayQuoteSnapshot quoteSnapshot() const;
 
     /**
      * Ustawia funkcję wywoływaną po każdej zmianie statusu.
@@ -134,6 +152,15 @@ public:
         const std::string& startDateStr,
         const std::string& endDateStr) override;
 
+    /**
+     * Aktualizuje najlepszą cenę bid lub ask otrzymaną z rynku.
+     */
+    void tickPrice(
+        int requestId,
+        TickType tickType,
+        double price,
+        const TickAttrib& attrib) override;
+
 private:
     /**
      * Prowadzi protokół IBKR i przetwarza odpowiedzi serwera w wątku roboczym.
@@ -157,6 +184,11 @@ private:
     void updateCandleMessage(std::string message);
 
     /**
+     * Ustawia komunikat kwotowań i powiadamia widok o zmianie.
+     */
+    void updateQuoteMessage(std::string message);
+
+    /**
      * Powiadamia widok, gdy zmieniły się dane świecy lub jej komunikat.
      */
     void notifyStatusChanged();
@@ -173,6 +205,7 @@ private:
     mutable std::mutex statusMutex_;
     IBGatewayConnectionStatus status_;
     IBGatewayOneMinuteCandle candle_;
+    IBGatewayQuoteSnapshot quote_;
     StatusChangedCallback statusChangedCallback_;
     std::thread connectionThread_;
 };
