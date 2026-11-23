@@ -1416,7 +1416,10 @@ bool CandleHistoryClient::saveCandle(
  * Wysyła świecę IBKR do tabeli podglądowej, bez wywoływania obliczeń.
  */
 bool CandleHistoryClient::saveIbkrCandle(
-    const IBKRCandleData& candle, std::string& error) {
+    const IBKRCandleData& candle,
+    bool& candleSaved,
+    std::string& error) {
+    candleSaved = false;
     error.clear();
     std::string utcDatetime;
     if (!formatUnixTimestampUtc(candle.timestampUtc, utcDatetime)) {
@@ -1444,13 +1447,13 @@ bool CandleHistoryClient::saveIbkrCandle(
         responseBody.pop_back();
     }
     if (responseBody == "0") {
-        error = "API nie zapisało świecy, ponieważ rynek jest zamknięty.";
-        return false;
+        return true;
     }
     if (responseBody != "1") {
         error = "Lokalne API zwróciło nieprawidłowy status zapisu świecy IBKR.";
         return false;
     }
+    candleSaved = true;
     return true;
 }
 

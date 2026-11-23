@@ -132,6 +132,26 @@ class IBKRCandlePersistenceTests(unittest.TestCase):
             candle
         )
 
+    def test_ibkr_endpoint_accepts_other_monitored_products(self) -> None:
+        """Endpoint IBKR pozwala zapisywać pozostałe aktywne instrumenty."""
+        candle = app.IBKRCandleRecord(
+            symbol="AAPL",
+            datetime=datetime(2026, 1, 15, 15, 34, tzinfo=timezone.utc),
+            open=Decimal("250.00"),
+            high=Decimal("251.00"),
+            low=Decimal("249.00"),
+            close=Decimal("250.50"),
+        )
+        request = Mock()
+        request.app.state.repository.save_ibkr_candle.return_value = True
+
+        response = app.save_ibkr_candle(candle, request)
+
+        self.assertEqual(response.body, b"1\n")
+        request.app.state.repository.save_ibkr_candle.assert_called_once_with(
+            candle
+        )
+
     def test_ibkr_batch_deduplicates_before_bulk_upsert(self) -> None:
         """Paczka zapisuje unikalne znaczniki czasu jednym zapytaniem."""
         repository = app.MarketDataRepository()

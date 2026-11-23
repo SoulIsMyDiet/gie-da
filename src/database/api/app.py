@@ -4467,7 +4467,7 @@ def save_ibkr_candle(candle: IBKRCandleRecord, request: Request) -> Response:
     """Zapisuje świecę IBKR bez uruchamiania algorytmów ani obliczeń.
 
     Args:
-        candle: Zweryfikowana świeca EUR/USD przesłana przez klienta IBKR.
+        candle: Zweryfikowana świeca aktywnego instrumentu przesłana przez IBKR.
         request: Żądanie udostępniające repozytorium bazy danych aplikacji.
 
     Returns:

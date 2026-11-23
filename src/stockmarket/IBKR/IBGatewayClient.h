@@ -11,9 +11,9 @@
 #include <deque>
 #include <functional>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 enum class IBGatewayConnectionState {
@@ -211,11 +211,22 @@ private:
     void persistNextCompletedCandle();
 
     /**
+     * Przenosi zamknięte świece z bufora symboli do kolejki zapisu.
+     */
+    void flushClosedPendingCandles();
+
+    /**
      * Zatrzymuje synchronizację historii i pokazuje jej przyczynę.
      * @param message Komunikat błędu lub przerwania do pokazania użytkownikowi.
      * @throws std::bad_alloc, jeśli nie można zapisać komunikatu błędu.
      */
     void failHistorySync(std::string message);
+
+    /**
+     * Pomija instrument, którego żądanie historii odrzuciło IBKR.
+     * @param message Komunikat błędu zwrócony przez IBKR.
+     */
+    void skipCurrentHistoryInstrument(std::string message);
 
     /**
      * Ustawia komunikat kwotowań i powiadamia widok o zmianie.
@@ -240,8 +251,11 @@ private:
     IBGatewayConnectionStatus status_;
     IBGatewayOneMinuteCandle candle_;
     IBGatewayQuoteSnapshot quote_;
-    // Backend: buforuje świecę w trakcie tworzenia do nadejścia kolejnej minuty.
-    std::optional<IBKRCandleData> pendingCandle_;
+    // Backend: buforuje osobną, aktualnie tworzoną świecę każdego instrumentu.
+    std::unordered_map<std::string, IBKRCandleData> pendingCandlesBySymbol_;
+    // Backend: zapamiętuje czasy już zakolejkowanych świec dla każdego symbolu.
+    std::unordered_map<std::string, std::int64_t>
+        lastCompletedCandleTimestampBySymbol_;
     // Backend: przechowuje zamknięte świece do czasu potwierdzenia zapisu.
     std::deque<IBKRCandleData> completedCandlesPendingSave_;
     std::chrono::steady_clock::time_point nextCandleSaveRetry_{};
@@ -249,9 +263,10 @@ private:
     bool historySyncRequested_ = false;
     bool historySyncInProgress_ = false;
     int historySyncRequestId_ = 0;
-    int nextHistorySyncRequestId_ = 9300;
+    int nextHistorySyncRequestId_ = 10000;
     std::size_t historySyncInstrumentIndex_ = 0;
     std::size_t historySyncSavedCandleCount_ = 0;
+    std::size_t historySyncSkippedInstrumentCount_ = 0;
     std::string historySyncSymbol_;
     std::vector<IBKRCandleData> historySyncCandles_;
     StatusChangedCallback statusChangedCallback_;

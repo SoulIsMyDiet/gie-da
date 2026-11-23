@@ -177,13 +177,16 @@ public:
 
     /**
      * Zapisuje świecę IBKR do odrębnej tabeli podglądowej.
-     * @param candle Świeca EUR/USD z czasem UTC oraz dostępnymi kwotowaniami.
+     * @param candle Świeca instrumentu z czasem UTC i opcjonalnymi kwotowaniami.
+     * @param candleSaved Otrzymuje true, jeśli rynek był otwarty i zapisano świecę.
      * @param error Otrzymuje opis błędu walidacji lub żądania do lokalnego API.
-     * @return true, jeśli API potwierdziło zapis lub aktualizację świecy.
+     * @return true, jeśli API poprawnie obsłużyło żądanie.
      * @throws std::bad_alloc, jeśli nie można przygotować żądania.
      */
     static bool saveIbkrCandle(
-        const IBKRCandleData& candle, std::string& error);
+        const IBKRCandleData& candle,
+        bool& candleSaved,
+        std::string& error);
 
     /**
      * Zapisuje paczkę świec IBKR bez uruchamiania algorytmów.
