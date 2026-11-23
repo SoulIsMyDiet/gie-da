@@ -51,10 +51,15 @@ void MainWindowDisplay::draw(
     HDC deviceContext,
     HWND window,
     RECT& clientArea,
-    const std::string& dailySentence) {
+    const std::string& dailySentence,
+    const std::string& oneMinuteCandle) {
     std::wstring wideDailySentence;
     if (!convertUtf8ToWide(dailySentence, wideDailySentence)) {
         wideDailySentence = L"Nie można wyświetlić sentencji.";
+    }
+    std::wstring wideOneMinuteCandle;
+    if (!convertUtf8ToWide(oneMinuteCandle, wideOneMinuteCandle)) {
+        wideOneMinuteCandle = L"Nie można wyświetlić świecy IBKR.";
     }
     HFONT sentenceFont = CreateFontW(
         -WindowScale::size(window, 16), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
@@ -70,7 +75,14 @@ void MainWindowDisplay::draw(
         static_cast<int>(wideDailySentence.size()), &sentenceBounds,
         DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
     const LONG sentenceHeight = sentenceBounds.bottom - sentenceBounds.top;
-    const LONG totalHeight = sentenceHeight;
+    RECT candleBounds = clientArea;
+    DrawTextW(
+        deviceContext, wideOneMinuteCandle.c_str(),
+        static_cast<int>(wideOneMinuteCandle.size()), &candleBounds,
+        DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+    const LONG candleHeight = candleBounds.bottom - candleBounds.top;
+    const LONG sectionGap = WindowScale::size(window, 18);
+    const LONG totalHeight = sentenceHeight + sectionGap + candleHeight;
     LONG top = clientArea.top + ((clientArea.bottom - clientArea.top) - totalHeight) / 2;
     if (top < clientArea.top) {
         top = clientArea.top;
@@ -82,6 +94,12 @@ void MainWindowDisplay::draw(
     sentenceBounds.bottom = top + sentenceHeight;
     drawCenteredWideText(
         deviceContext, wideDailySentence, sentenceBounds,
+        DT_CENTER | DT_WORDBREAK);
+    candleBounds = clientArea;
+    candleBounds.top = top + sentenceHeight + sectionGap;
+    candleBounds.bottom = candleBounds.top + candleHeight;
+    drawCenteredWideText(
+        deviceContext, wideOneMinuteCandle, candleBounds,
         DT_CENTER | DT_WORDBREAK);
 
     if (sentenceFont != nullptr) {

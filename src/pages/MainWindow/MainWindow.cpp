@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <array>
 #include <exception>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -651,8 +653,32 @@ void MainWindow::onPaint() {
             const std::lock_guard<std::mutex> lock(dailySentenceMutex_);
             dailySentence = dailySentence_;
         }
+        std::string oneMinuteCandle;
+#ifdef ENABLE_IBKR_TWS_API
+        const IBGatewayOneMinuteCandle candle =
+            ibkrClient_.candleSnapshot();
+        if (candle.available) {
+            std::ostringstream candleText;
+            candleText << "EUR/USD - świeca 1-minutowa | "
+                       << candle.timestamp << "\n"
+                       << "O: " << std::fixed << std::setprecision(5)
+                       << candle.open << "  H: " << candle.high
+                       << "  L: " << candle.low
+                       << "  C: " << candle.close;
+            if (!candle.message.empty()) {
+                candleText << "\n" << candle.message;
+            }
+            oneMinuteCandle = candleText.str();
+        } else {
+            oneMinuteCandle = candle.message;
+        }
+#else
+        oneMinuteCandle =
+            "Włącz ENABLE_IBKR_TWS_API, aby pobierać świece z IBKR.";
+#endif
         MainWindowDisplay::draw(
-            deviceContext, handle_, clientArea, dailySentence);
+            deviceContext, handle_, clientArea, dailySentence,
+            oneMinuteCandle);
     }
     EndPaint(handle_, &paint);
 }
@@ -766,6 +792,7 @@ void MainWindow::updateIbkrStatus() {
     const std::wstring title =
         std::wstring(L"Raport sygnałów - IB Gateway: ") + wideMessage;
     SetWindowTextW(handle_, title.c_str());
+    InvalidateRect(handle_, nullptr, TRUE);
     updateIbkrMenu();
 
     if (connectionStatus.state == IBGatewayConnectionState::Error &&

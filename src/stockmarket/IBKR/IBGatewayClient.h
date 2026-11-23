@@ -26,6 +26,20 @@ struct IBGatewayConnectionStatus {
 };
 
 /**
+ * Przechowuje ostatnią świecę EUR/USD pobraną z interwałem jednej minuty.
+ */
+struct IBGatewayOneMinuteCandle {
+    bool available = false;
+    std::string timestamp;
+    double open = 0.0;
+    double high = 0.0;
+    double low = 0.0;
+    double close = 0.0;
+    std::string message =
+        "Połącz z IB Gateway, aby pobrać świecę EUR/USD 1-minutową.";
+};
+
+/**
  * Zarządza połączeniem socketowym z IB Gateway w osobnym wątku.
  */
 class IBGatewayClient final : public DefaultEWrapper {
@@ -65,6 +79,12 @@ public:
     IBGatewayConnectionStatus status() const;
 
     /**
+     * Zwraca kopię ostatniej świecy i jej statusu.
+     * @return Dane ostatniej świecy 1-minutowej albo opis oczekiwania/błędu.
+     */
+    IBGatewayOneMinuteCandle candleSnapshot() const;
+
+    /**
      * Ustawia funkcję wywoływaną po każdej zmianie statusu.
      * @param callback Funkcja powiadamiająca, może być pusta.
      */
@@ -96,6 +116,24 @@ public:
      */
     void connectionClosed() override;
 
+    /**
+     * Odbiera początkowe świece historyczne dla aktywnego żądania.
+     */
+    void historicalData(int requestId, const Bar& bar) override;
+
+    /**
+     * Odbiera aktualizację ostatniej, jeszcze tworzonej świecy.
+     */
+    void historicalDataUpdate(int requestId, const Bar& bar) override;
+
+    /**
+     * Zakończenie początkowej historii dla aktywnego żądania.
+     */
+    void historicalDataEnd(
+        int requestId,
+        const std::string& startDateStr,
+        const std::string& endDateStr) override;
+
 private:
     /**
      * Prowadzi protokół IBKR i przetwarza odpowiedzi serwera w wątku roboczym.
@@ -114,6 +152,16 @@ private:
         IBGatewayConnectionState state, std::string message);
 
     /**
+     * Ustawia komunikat świecy i powiadamia widok o zmianie.
+     */
+    void updateCandleMessage(std::string message);
+
+    /**
+     * Powiadamia widok, gdy zmieniły się dane świecy lub jej komunikat.
+     */
+    void notifyStatusChanged();
+
+    /**
      * Zwraca true dla komunikatów IBKR informujących o stanie farm serwerów.
      * @param errorCode Kod błędu lub ostrzeżenia IBKR.
      * @return true, jeśli komunikat jest informacyjny.
@@ -124,6 +172,7 @@ private:
     std::atomic<bool> stopRequested_{false};
     mutable std::mutex statusMutex_;
     IBGatewayConnectionStatus status_;
+    IBGatewayOneMinuteCandle candle_;
     StatusChangedCallback statusChangedCallback_;
     std::thread connectionThread_;
 };

@@ -15,10 +15,12 @@ public:
      * @param window Okno wyznaczające skalę tekstu.
      * @param clientArea Obszar dostępny dla strony głównej.
      * @param dailySentence Sentencja lub informacja o błędzie jej pobierania.
+     * @param oneMinuteCandle Status świecy albo jej ostatnie wartości OHLC.
      */
     static void draw(
         HDC deviceContext,
         HWND window,
         RECT& clientArea,
-        const std::string& dailySentence);
+        const std::string& dailySentence,
+        const std::string& oneMinuteCandle);
 };

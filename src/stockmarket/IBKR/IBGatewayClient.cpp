@@ -15,6 +15,7 @@
 namespace {
 
 constexpr auto connectionHandshakeTimeout = std::chrono::seconds(15);
+constexpr int oneMinuteCandleRequestId = 9251;
 
 /**
  * Przygotowuje czytelny opis błędu zwróconego przez oficjalne API IBKR.
@@ -77,6 +78,7 @@ bool IBGatewayClient::connect(
     updateStatus(
         IBGatewayConnectionState::Connecting,
         "Łączenie z IB Gateway...");
+    updateCandleMessage("Łączenie z IB Gateway przed pobraniem świecy...");
     try {
         connectionThread_ = std::thread(
             &IBGatewayClient::runConnection,
@@ -127,6 +129,14 @@ IBGatewayConnectionStatus IBGatewayClient::status() const {
 }
 
 /**
+ * Zwraca kopię świecy chronioną tą samą blokadą co status połączenia.
+ */
+IBGatewayOneMinuteCandle IBGatewayClient::candleSnapshot() const {
+    const std::lock_guard<std::mutex> lock(statusMutex_);
+    return candle_;
+}
+
+/**
  * Podmienia funkcję powiadamiającą o zmianie statusu.
  */
 void IBGatewayClient::setStatusChangedCallback(
@@ -172,6 +182,9 @@ void IBGatewayClient::error(
         updateStatus(IBGatewayConnectionState::Error, message);
     } else if (currentStatus.state == IBGatewayConnectionState::Connected) {
         ErrorLogger::warning(message);
+        if (id == oneMinuteCandleRequestId) {
+            updateCandleMessage(message);
+        }
     }
 }
 
@@ -197,6 +210,70 @@ void IBGatewayClient::connectionClosed() {
         requestedByApplication
             ? "Rozłączono."
             : "Połączenie z IB Gateway zostało przerwane.");
+    updateCandleMessage(
+        requestedByApplication
+            ? "Rozłączono strumień świec EUR/USD."
+            : "Utracono połączenie; ostatnia odebrana świeca pozostaje widoczna.");
+}
+
+/**
+ * Zachowuje ostatni bar z początkowej odpowiedzi historii bez odświeżania UI.
+ */
+void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
+    if (requestId != oneMinuteCandleRequestId) {
+        return;
+    }
+
+    const std::lock_guard<std::mutex> lock(statusMutex_);
+    candle_.available = true;
+    candle_.timestamp = bar.time;
+    candle_.open = bar.open;
+    candle_.high = bar.high;
+    candle_.low = bar.low;
+    candle_.close = bar.close;
+}
+
+/**
+ * Zapisuje i pokazuje nową wartość dla aktywnej świecy 1-minutowej.
+ */
+void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
+    if (requestId != oneMinuteCandleRequestId) {
+        return;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        candle_.available = true;
+        candle_.timestamp = bar.time;
+        candle_.open = bar.open;
+        candle_.high = bar.high;
+        candle_.low = bar.low;
+        candle_.close = bar.close;
+        candle_.message = "Aktualizacja świecy EUR/USD 1-minutowej z IBKR.";
+    }
+    notifyStatusChanged();
+}
+
+/**
+ * Kończy początkowy odczyt i informuje, jeśli IBKR nie zwróciło żadnej świecy.
+ */
+void IBGatewayClient::historicalDataEnd(
+    int requestId,
+    const std::string& startDateStr,
+    const std::string& endDateStr) {
+    static_cast<void>(startDateStr);
+    static_cast<void>(endDateStr);
+    if (requestId != oneMinuteCandleRequestId) {
+        return;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        candle_.message = candle_.available
+            ? "Ostatnia świeca EUR/USD 1-minutowa z IBKR."
+            : "IBKR nie zwróciło świecy EUR/USD dla ostatnich 30 minut.";
+    }
+    notifyStatusChanged();
 }
 
 /**
@@ -206,6 +283,7 @@ void IBGatewayClient::runConnection(
     std::string host, int port, int clientId) {
     std::unique_ptr<EClientSocket> client;
     bool disconnected = false;
+    bool historicalRequestStarted = false;
     try {
         client = std::make_unique<EClientSocket>(this, &readerSignal_);
         client->asyncEConnect(true);
@@ -252,6 +330,29 @@ void IBGatewayClient::runConnection(
                     client->startApi();
                     startApiSent = true;
                 }
+                if (!historicalRequestStarted &&
+                    currentStatus.state ==
+                        IBGatewayConnectionState::Connected) {
+                    Contract contract;
+                    contract.symbol = "EUR";
+                    contract.secType = "CASH";
+                    contract.exchange = "IDEALPRO";
+                    contract.currency = "USD";
+                    updateCandleMessage(
+                        "Pobieranie świec EUR/USD 1-minutowych z IBKR...");
+                    client->reqHistoricalData(
+                        oneMinuteCandleRequestId,
+                        contract,
+                        "",
+                        "1800 S",
+                        "1 min",
+                        "MIDPOINT",
+                        0,
+                        1,
+                        true,
+                        TagValueListSPtr());
+                    historicalRequestStarted = true;
+                }
                 if (currentStatus.state ==
                         IBGatewayConnectionState::Connecting &&
                     std::chrono::steady_clock::now() >= handshakeDeadline) {
@@ -268,6 +369,9 @@ void IBGatewayClient::runConnection(
                 }
             }
 
+            if (historicalRequestStarted && client->isConnected()) {
+                client->cancelHistoricalData(oneMinuteCandleRequestId);
+            }
             client->eDisconnect();
             disconnected = true;
         }
@@ -283,6 +387,9 @@ void IBGatewayClient::runConnection(
     }
 
     if (client != nullptr && !disconnected) {
+        if (historicalRequestStarted && client->isConnected()) {
+            client->cancelHistoricalData(oneMinuteCandleRequestId);
+        }
         client->eDisconnect();
     }
     const IBGatewayConnectionStatus finalStatus = status();
@@ -315,6 +422,31 @@ void IBGatewayClient::updateStatus(
     }
     if (state == IBGatewayConnectionState::Error) {
         ErrorLogger::error(logMessage);
+    }
+    if (callback) {
+        callback();
+    }
+}
+
+/**
+ * Ustawia komunikat świecy i odświeża widok bez blokowania go podczas API.
+ */
+void IBGatewayClient::updateCandleMessage(std::string message) {
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        candle_.message = std::move(message);
+    }
+    notifyStatusChanged();
+}
+
+/**
+ * Kopiuje funkcję widoku pod blokadą i wywołuje ją już poza blokadą.
+ */
+void IBGatewayClient::notifyStatusChanged() {
+    StatusChangedCallback callback;
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        callback = statusChangedCallback_;
     }
     if (callback) {
         callback();
