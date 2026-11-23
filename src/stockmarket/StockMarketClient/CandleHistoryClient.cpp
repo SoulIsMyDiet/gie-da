@@ -367,6 +367,7 @@ bool readResponse(
  * @param error Otrzymuje opis błędu transportu lub nieoczekiwanego kodu HTTP.
  * @param responseStatus Opcjonalnie otrzymuje kod HTTP odczytany z odpowiedzi.
  * @param allowServiceUnavailable Czy wolno odczytać treść odpowiedzi HTTP 503.
+ * @param includeErrorResponse Czy do błędu dołączyć szczegóły odpowiedzi API.
  * @return true, jeśli odpowiedź ma oczekiwany lub jawnie dozwolony status.
  */
 bool sendApiRequest(
@@ -376,7 +377,8 @@ bool sendApiRequest(
     std::string& responseBody,
     std::string& error,
     DWORD* responseStatus = nullptr,
-    bool allowServiceUnavailable = false) {
+    bool allowServiceUnavailable = false,
+    bool includeErrorResponse = false) {
     InternetHandle session{WinHttpOpen(
         L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
@@ -438,6 +440,19 @@ bool sendApiRequest(
     if (statusCode != expectedStatus && !serviceUnavailableAllowed) {
         error = "Lokalne API zwróciło HTTP " +
                 std::to_string(statusCode) + " podczas zapisu świec.";
+        if (includeErrorResponse) {
+            std::string responseReadError;
+            if (!readResponse(
+                    request.value, responseBody, responseReadError)) {
+                error += " " + responseReadError;
+            } else if (!responseBody.empty()) {
+                constexpr std::size_t maximumErrorDetailsLength = 512;
+                if (responseBody.size() > maximumErrorDetailsLength) {
+                    responseBody.resize(maximumErrorDetailsLength);
+                }
+                error += " Szczegóły: " + responseBody;
+            }
+        }
         return false;
     }
     return readResponse(request.value, responseBody, error);
@@ -1404,7 +1419,14 @@ bool CandleHistoryClient::saveIbkrCandle(
     }
     std::string responseBody;
     if (!sendApiRequest(
-            ibkrCandleApiPath, requestBody, 200, responseBody, error)) {
+            ibkrCandleApiPath,
+            requestBody,
+            200,
+            responseBody,
+            error,
+            nullptr,
+            false,
+            true)) {
         return false;
     }
     while (!responseBody.empty() &&

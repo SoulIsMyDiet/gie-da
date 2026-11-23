@@ -417,6 +417,11 @@ void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
         candleToSave.low = bar.low;
         candleToSave.close = bar.close;
         candleToSave.volume = DecimalFunctions::decimalToString(bar.volume);
+        if (!candleToSave.volume.empty() &&
+            candleToSave.volume.front() == '-') {
+            // IBKR używa ujemnego wolumenu jako znacznika braku danych.
+            candleToSave.volume.clear();
+        }
     }
     notifyStatusChanged();
 
