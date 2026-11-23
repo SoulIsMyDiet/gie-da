@@ -6,9 +6,13 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
+#include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,6 +23,7 @@ namespace {
 constexpr wchar_t apiHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT apiPort = 8000;
 constexpr wchar_t singleCandleApiPath[] = L"/api/candles";
+constexpr wchar_t ibkrCandleApiPath[] = L"/api/candles/ibkr";
 constexpr wchar_t batchApiPath[] = L"/api/candles/batch";
 constexpr wchar_t monitoredProductsApiPath[] = L"/api/products/monitored";
 constexpr wchar_t openProductsApiPath[] = L"/api/products/open";
@@ -124,6 +129,117 @@ bool formatUtcDatetime(const std::string& providerDatetime, std::string& result)
     result = providerDatetime;
     result[10] = 'T';
     result += 'Z';
+    return true;
+}
+
+/**
+ * Formatuje znacznik Unix jako pełną minutę w strefie UTC.
+ * @param timestampUtc Czas świecy w sekundach od początku epoki Unix.
+ * @param result Otrzymuje datę ISO 8601 w UTC.
+ * @return true, jeśli znacznik można przedstawić jako prawidłową datę.
+ */
+bool formatUnixTimestampUtc(
+    std::int64_t timestampUtc, std::string& result) {
+    if (timestampUtc <= 0) {
+        return false;
+    }
+
+    const auto timestamp = std::chrono::floor<std::chrono::minutes>(
+        std::chrono::sys_seconds{
+            std::chrono::seconds{timestampUtc}});
+    const auto day = std::chrono::floor<std::chrono::days>(timestamp);
+    const std::chrono::year_month_day date{day};
+    if (!date.ok()) {
+        return false;
+    }
+    const std::chrono::hh_mm_ss time{timestamp - day};
+    std::ostringstream formatted;
+    formatted.imbue(std::locale::classic());
+    formatted << std::setfill('0')
+              << std::setw(4) << static_cast<int>(date.year()) << '-'
+              << std::setw(2) << static_cast<unsigned int>(date.month()) << '-'
+              << std::setw(2) << static_cast<unsigned int>(date.day()) << 'T'
+              << std::setw(2) << time.hours().count() << ':'
+              << std::setw(2) << time.minutes().count() << ":00Z";
+    result = formatted.str();
+    return true;
+}
+
+/**
+ * Formatuje cenę do precyzji DECIMAL zapisanej w bazie.
+ * @param price Dodatnia, skończona cena z API IBKR.
+ * @param result Otrzymuje tekst z dziesięcioma miejscami po przecinku.
+ * @return true, jeśli cena nadaje się do zapisu.
+ */
+bool formatIbkrPrice(double price, std::string& result) {
+    if (!std::isfinite(price) || price <= 0.0) {
+        return false;
+    }
+    std::ostringstream formatted;
+    formatted.imbue(std::locale::classic());
+    formatted << std::fixed << std::setprecision(10) << price;
+    result = formatted.str();
+    return true;
+}
+
+/**
+ * Buduje JSON do osobnego endpointu podglądowych świec IBKR.
+ * @param candle Dane świecy i dostępnych kwotowań.
+ * @param utcDatetime Czas świecy w formacie ISO 8601 UTC.
+ * @param requestBody Otrzymuje gotową treść żądania JSON.
+ * @param error Otrzymuje opis danych, których nie można wysłać.
+ * @return true, jeśli treść JSON została poprawnie zbudowana.
+ */
+bool createIbkrRequestBody(
+    const IBKRCandleData& candle,
+    const std::string& utcDatetime,
+    std::string& requestBody,
+    std::string& error) {
+    std::string open;
+    std::string high;
+    std::string low;
+    std::string close;
+    std::string bid;
+    std::string ask;
+    if (!formatIbkrPrice(candle.open, open) ||
+        !formatIbkrPrice(candle.high, high) ||
+        !formatIbkrPrice(candle.low, low) ||
+        !formatIbkrPrice(candle.close, close) ||
+        (candle.bidAvailable && !formatIbkrPrice(candle.bid, bid)) ||
+        (candle.askAvailable && !formatIbkrPrice(candle.ask, ask))) {
+        error = "IBKR zwróciło nieprawidłową cenę świecy lub kwotowania.";
+        return false;
+    }
+    if (candle.high < candle.open || candle.high < candle.close ||
+        candle.low > candle.open || candle.low > candle.close ||
+        candle.low > candle.high) {
+        error = "IBKR zwróciło niespójny zakres cen OHLC.";
+        return false;
+    }
+    if (candle.bidAvailable && candle.askAvailable &&
+        candle.bid > candle.ask) {
+        error = "Kwotowanie bid z IBKR jest wyższe od kwotowania ask.";
+        return false;
+    }
+    if (!candle.bidAvailable) {
+        bid = "null";
+    } else {
+        bid = "\"" + bid + "\"";
+    }
+    if (!candle.askAvailable) {
+        ask = "null";
+    } else {
+        ask = "\"" + ask + "\"";
+    }
+    const std::string volume = candle.volume.empty()
+        ? "null"
+        : "\"" + escapeJsonString(candle.volume) + "\"";
+    requestBody =
+        "{\"symbol\":\"EUR/USD\",\"datetime\":\"" + utcDatetime +
+        "\",\"open\":\"" + open + "\",\"high\":\"" + high +
+        "\",\"low\":\"" + low + "\",\"close\":\"" + close +
+        "\",\"volume\":" + volume + ",\"bid\":" + bid +
+        ",\"ask\":" + ask + "}";
     return true;
 }
 
@@ -1268,6 +1384,41 @@ bool CandleHistoryClient::saveCandle(
     }
     newlyDetectedGapCount = parsedGapCount;
     savedSignalCount = parsedSignalCount;
+    return true;
+}
+
+/**
+ * Wysyła świecę IBKR do tabeli podglądowej, bez wywoływania obliczeń.
+ */
+bool CandleHistoryClient::saveIbkrCandle(
+    const IBKRCandleData& candle, std::string& error) {
+    error.clear();
+    std::string utcDatetime;
+    if (!formatUnixTimestampUtc(candle.timestampUtc, utcDatetime)) {
+        error = "IBKR zwróciło nieprawidłowy czas świecy.";
+        return false;
+    }
+    std::string requestBody;
+    if (!createIbkrRequestBody(candle, utcDatetime, requestBody, error)) {
+        return false;
+    }
+    std::string responseBody;
+    if (!sendApiRequest(
+            ibkrCandleApiPath, requestBody, 200, responseBody, error)) {
+        return false;
+    }
+    while (!responseBody.empty() &&
+           (responseBody.back() == '\n' || responseBody.back() == '\r')) {
+        responseBody.pop_back();
+    }
+    if (responseBody == "0") {
+        error = "API nie zapisało świecy, ponieważ rynek jest zamknięty.";
+        return false;
+    }
+    if (responseBody != "1") {
+        error = "Lokalne API zwróciło nieprawidłowy status zapisu świecy IBKR.";
+        return false;
+    }
     return true;
 }
 

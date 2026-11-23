@@ -4,6 +4,7 @@
 #include "EReaderOSSignal.h"
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -30,6 +31,7 @@ struct IBGatewayConnectionStatus {
  */
 struct IBGatewayOneMinuteCandle {
     bool available = false;
+    std::int64_t timestampUtc = 0;
     std::string timestamp;
     double open = 0.0;
     double high = 0.0;

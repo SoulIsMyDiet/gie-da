@@ -7,6 +7,22 @@
 #include "CandlesDataClient.h"
 
 /**
+ * Przechowuje świecę i kwotowania IBKR przeznaczone wyłącznie do podglądu.
+ */
+struct IBKRCandleData {
+    std::int64_t timestampUtc = 0;
+    double open = 0.0;
+    double high = 0.0;
+    double low = 0.0;
+    double close = 0.0;
+    std::string volume;
+    bool bidAvailable = false;
+    double bid = 0.0;
+    bool askAvailable = false;
+    double ask = 0.0;
+};
+
+/**
  * Przechowuje świecę wyświetlaną w raporcie.
  */
 struct CandleReportEntry {
@@ -157,6 +173,16 @@ public:
         std::size_t& savedSignalCount,
         std::string& error,
         bool* candleSavedDespiteError = nullptr);
+
+    /**
+     * Zapisuje świecę IBKR do odrębnej tabeli podglądowej.
+     * @param candle Świeca EUR/USD z czasem UTC oraz dostępnymi kwotowaniami.
+     * @param error Otrzymuje opis błędu walidacji lub żądania do lokalnego API.
+     * @return true, jeśli API potwierdziło zapis lub aktualizację świecy.
+     * @throws std::bad_alloc, jeśli nie można przygotować żądania.
+     */
+    static bool saveIbkrCandle(
+        const IBKRCandleData& candle, std::string& error);
 
     /**
      * Pobiera listę instrumentów aktywnych w konfiguracji lokalnego API.

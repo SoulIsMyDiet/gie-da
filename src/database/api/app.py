@@ -747,6 +747,31 @@ class CandleRecord(BaseModel):
         return self
 
 
+class IBKRCandleRecord(CandleRecord):
+    """Opis świecy IBKR z opcjonalnymi kwotowaniami bid i ask."""
+
+    bid: Decimal | None = Field(
+        default=None, gt=Decimal("0"), max_digits=20, decimal_places=10
+    )
+    ask: Decimal | None = Field(
+        default=None, gt=Decimal("0"), max_digits=20, decimal_places=10
+    )
+
+    @model_validator(mode="after")
+    def validate_bid_ask_range(self) -> "IBKRCandleRecord":
+        """Sprawdza kolejność kwotowań bid/ask.
+
+        Returns:
+            Ten sam rekord po poprawnej walidacji.
+
+        Raises:
+            ValueError: Gdy cena bid jest wyższa od ceny ask.
+        """
+        if self.bid is not None and self.ask is not None and self.bid > self.ask:
+            raise ValueError("Cena bid nie może być wyższa od ceny ask.")
+        return self
+
+
 class CandleBatch(BaseModel):
     """Opis paczki świec zapisywanych podczas uzupełniania historii."""
 
@@ -883,6 +908,25 @@ class MarketDataRepository:
                         utc_offset_minutes SMALLINT NOT NULL DEFAULT 32767,
                         PRIMARY KEY (symbol, datetime, utc_offset_minutes),
                         CONSTRAINT fk_candles_product
+                            FOREIGN KEY (symbol) REFERENCES products(symbol)
+                    ) ENGINE=InnoDB
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS candles_IBKR (
+                        symbol VARCHAR(32) NOT NULL,
+                        datetime DATETIME(6) NOT NULL,
+                        open DECIMAL(20, 10) NOT NULL,
+                        high DECIMAL(20, 10) NOT NULL,
+                        low DECIMAL(20, 10) NOT NULL,
+                        close DECIMAL(20, 10) NOT NULL,
+                        volume DECIMAL(30, 10) NULL,
+                        bid DECIMAL(20, 10) NULL,
+                        ask DECIMAL(20, 10) NULL,
+                        utc_offset_minutes SMALLINT NOT NULL DEFAULT 32767,
+                        PRIMARY KEY (symbol, datetime, utc_offset_minutes),
+                        CONSTRAINT fk_candles_ibkr_product
                             FOREIGN KEY (symbol) REFERENCES products(symbol)
                     ) ENGINE=InnoDB
                     """
@@ -1693,6 +1737,78 @@ class MarketDataRepository:
         return self.save_candles(
             [candle], signal, grok45_v2_signal, detect_gaps=True
         )
+
+    def save_ibkr_candle(self, candle: IBKRCandleRecord) -> bool:
+        """Zapisuje lub aktualizuje świecę IBKR wyłącznie w tabeli podglądowej.
+
+        Args:
+            candle: Zweryfikowana świeca z czasem i kwotowaniami bid/ask.
+
+        Returns:
+            True po zapisie; False, gdy rynek jest zamknięty.
+
+        Raises:
+            mysql.connector.Error: Gdy zapis do bazy danych się nie powiedzie.
+            ValueError: Gdy podczas zapisu wystąpi nieprawidłowa wartość.
+        """
+        if not self._is_market_open(
+            candle.symbol, candle.datetime.astimezone(timezone.utc)
+        ):
+            return False
+
+        candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
+        local_datetime = candle_datetime_local.replace(tzinfo=None)
+        offset_minutes = int(
+            candle_datetime_local.utcoffset().total_seconds() // 60
+        )
+        connection = mysql.connector.connect(**self.database_settings)
+        cursor = None
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO products (symbol) VALUES (%s)
+                ON DUPLICATE KEY UPDATE symbol = VALUES(symbol)
+                """,
+                (candle.symbol,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO candles_IBKR
+                    (symbol, datetime, open, high, low, close, volume,
+                     bid, ask, utc_offset_minutes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    open = VALUES(open),
+                    high = VALUES(high),
+                    low = VALUES(low),
+                    close = VALUES(close),
+                    volume = VALUES(volume),
+                    bid = VALUES(bid),
+                    ask = VALUES(ask)
+                """,
+                (
+                    candle.symbol,
+                    local_datetime,
+                    candle.open,
+                    candle.high,
+                    candle.low,
+                    candle.close,
+                    candle.volume,
+                    candle.bid,
+                    candle.ask,
+                    offset_minutes,
+                ),
+            )
+            connection.commit()
+            return True
+        except (mysql.connector.Error, ValueError):
+            connection.rollback()
+            raise
+        finally:
+            if cursor is not None:
+                cursor.close()
+            connection.close()
 
     def save_candles(
         self,
@@ -4245,6 +4361,32 @@ def _process_closed_strategy_candle(
         request.app.state,
         f"{state_prefix}_last_processed_timestamp",
         candle_timestamp,
+    )
+
+
+@app.post("/api/candles/ibkr", response_class=Response)
+def save_ibkr_candle(candle: IBKRCandleRecord, request: Request) -> Response:
+    """Zapisuje świecę IBKR bez uruchamiania algorytmów ani obliczeń.
+
+    Args:
+        candle: Zweryfikowana świeca EUR/USD przesłana przez klienta IBKR.
+        request: Żądanie udostępniające repozytorium bazy danych aplikacji.
+
+    Returns:
+        Tekstowy status zapisu: 1 dla zapisu albo 0 dla zamkniętego rynku.
+
+    Raises:
+        HTTPException: Gdy żądanie dotyczy instrumentu innego niż EUR/USD.
+    """
+    if candle.symbol != "EUR/USD":
+        raise HTTPException(
+            status_code=422,
+            detail="Tabela candles_IBKR obsługuje wyłącznie instrument EUR/USD.",
+        )
+    saved = request.app.state.repository.save_ibkr_candle(candle)
+    return Response(
+        content="1\n" if saved else "0\n",
+        media_type="text/plain; charset=utf-8",
     )
 
 

@@ -6,6 +6,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timezone, tzinfo
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -53,6 +54,83 @@ class CandleBackfillTimestampTests(unittest.TestCase):
             ["2026-11-17 11:58:00", "2026-11-17 11:59:00"],
         )
         self.assertTrue(all(len(timestamp) == 19 for timestamp in missing_times))
+
+
+class IBKRCandlePersistenceTests(unittest.TestCase):
+    """Weryfikuje zapis świec IBKR w osobnej tabeli i czasie warszawskim."""
+
+    def test_ibkr_candle_is_upserted_with_warsaw_timestamp_and_quotes(self) -> None:
+        """Zapis obejmuje kwotowania i oba warianty czasu letniego w Polsce."""
+        cases = (
+            (
+                datetime(2026, 1, 15, 12, 34, tzinfo=timezone.utc),
+                datetime(2026, 1, 15, 13, 34),
+                60,
+            ),
+            (
+                datetime(2026, 7, 15, 12, 34, tzinfo=timezone.utc),
+                datetime(2026, 7, 15, 14, 34),
+                120,
+            ),
+        )
+        for utc_datetime, expected_local_datetime, expected_offset in cases:
+            with self.subTest(utc_datetime=utc_datetime):
+                repository = app.MarketDataRepository()
+                candle = app.IBKRCandleRecord(
+                    symbol="EUR/USD",
+                    datetime=utc_datetime,
+                    open=Decimal("1.10000"),
+                    high=Decimal("1.10100"),
+                    low=Decimal("1.09900"),
+                    close=Decimal("1.10050"),
+                    volume=None,
+                    bid=Decimal("1.10040"),
+                    ask=Decimal("1.10060"),
+                )
+                connection = Mock()
+                cursor = Mock()
+                connection.cursor.return_value = cursor
+
+                with patch.object(
+                    app.mysql.connector, "connect", return_value=connection
+                ), patch.object(
+                    repository, "_is_market_open", return_value=True
+                ):
+                    self.assertTrue(repository.save_ibkr_candle(candle))
+
+                self.assertEqual(cursor.execute.call_count, 2)
+                insert_sql, insert_values = cursor.execute.call_args_list[1].args
+                self.assertIn("INSERT INTO candles_IBKR", insert_sql)
+                self.assertIn("bid = VALUES(bid)", insert_sql)
+                self.assertIn("ask = VALUES(ask)", insert_sql)
+                self.assertEqual(insert_values[1], expected_local_datetime)
+                self.assertEqual(insert_values[7:9], (
+                    Decimal("1.10040"),
+                    Decimal("1.10060"),
+                ))
+                self.assertEqual(insert_values[9], expected_offset)
+                connection.commit.assert_called_once()
+                connection.close.assert_called_once()
+
+    def test_ibkr_endpoint_only_calls_the_preview_repository_method(self) -> None:
+        """Endpoint nie uruchamia algorytmów ani przetwarzania zwykłych świec."""
+        candle = app.IBKRCandleRecord(
+            symbol="EUR/USD",
+            datetime=datetime(2026, 1, 15, 12, 34, tzinfo=timezone.utc),
+            open=Decimal("1.10000"),
+            high=Decimal("1.10100"),
+            low=Decimal("1.09900"),
+            close=Decimal("1.10050"),
+        )
+        request = Mock()
+        request.app.state.repository.save_ibkr_candle.return_value = True
+
+        response = app.save_ibkr_candle(candle, request)
+
+        self.assertEqual(response.body, b"1\n")
+        request.app.state.repository.save_ibkr_candle.assert_called_once_with(
+            candle
+        )
 
 
 if __name__ == "__main__":

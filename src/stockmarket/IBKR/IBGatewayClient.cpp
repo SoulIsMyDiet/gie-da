@@ -1,11 +1,18 @@
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 #include "IBGatewayClient.h"
 
+#include "CandleHistoryClient.h"
+#include "Decimal.h"
 #include "EClientSocket.h"
 #include "EReader.h"
 #include "ErrorLogger.h"
 
+#include <charconv>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <exception>
 #include <memory>
 #include <sstream>
@@ -18,6 +25,77 @@ namespace {
 constexpr auto connectionHandshakeTimeout = std::chrono::seconds(15);
 constexpr int oneMinuteCandleRequestId = 9251;
 constexpr int eurUsdQuoteRequestId = 9252;
+
+/**
+ * Odczytuje czas świecy IBKR jako znacznik Unix i zaokrągla go do pełnej minuty.
+ * @param value Tekstowy znacznik czasu odebrany od IBKR.
+ * @param timestampUtc Otrzymuje czas otwarcia świecy w sekundach UTC.
+ * @return true, jeśli wartość jest dodatnim znacznikiem Unix.
+ */
+bool parseIbkrTimestamp(
+    const std::string& value, std::int64_t& timestampUtc) {
+    std::int64_t parsedTimestamp = 0;
+    const auto result = std::from_chars(
+        value.data(), value.data() + value.size(), parsedTimestamp);
+    if (result.ec != std::errc{} ||
+        result.ptr != value.data() + value.size() ||
+        parsedTimestamp <= 0) {
+        return false;
+    }
+
+    const auto minute = std::chrono::floor<std::chrono::minutes>(
+        std::chrono::seconds{parsedTimestamp});
+    timestampUtc = std::chrono::duration_cast<std::chrono::seconds>(
+        minute).count();
+    return true;
+}
+
+/**
+ * Formatuje czas UTC świecy według strefy ustawionej w systemie Windows.
+ * @param timestampUtc Czas otwarcia świecy w sekundach UTC.
+ * @param formattedTimestamp Otrzymuje czas w lokalnym formacie daty i godziny.
+ * @return true, jeśli system przeliczył czas na swoją strefę czasową.
+ */
+bool formatLocalTimestamp(
+    std::int64_t timestampUtc, std::string& formattedTimestamp) {
+    const std::chrono::sys_seconds timestamp{
+        std::chrono::seconds{timestampUtc}};
+    const auto day = std::chrono::floor<std::chrono::days>(timestamp);
+    const std::chrono::year_month_day date{day};
+    if (!date.ok()) {
+        return false;
+    }
+    const std::chrono::hh_mm_ss time{timestamp - day};
+    SYSTEMTIME utcTime{};
+    utcTime.wYear = static_cast<WORD>(static_cast<int>(date.year()));
+    utcTime.wMonth =
+        static_cast<WORD>(static_cast<unsigned int>(date.month()));
+    utcTime.wDay = static_cast<WORD>(static_cast<unsigned int>(date.day()));
+    utcTime.wHour = static_cast<WORD>(time.hours().count());
+    utcTime.wMinute = static_cast<WORD>(time.minutes().count());
+    utcTime.wSecond = static_cast<WORD>(time.seconds().count());
+
+    TIME_ZONE_INFORMATION localTimeZone{};
+    if (GetTimeZoneInformation(&localTimeZone) == TIME_ZONE_ID_INVALID) {
+        return false;
+    }
+    SYSTEMTIME localTime{};
+    if (!SystemTimeToTzSpecificLocalTime(
+            &localTimeZone, &utcTime, &localTime)) {
+        return false;
+    }
+
+    std::ostringstream result;
+    result << std::setfill('0')
+           << std::setw(4) << localTime.wYear << '-'
+           << std::setw(2) << localTime.wMonth << '-'
+           << std::setw(2) << localTime.wDay << ' '
+           << std::setw(2) << localTime.wHour << ':'
+           << std::setw(2) << localTime.wMinute << ':'
+           << std::setw(2) << localTime.wSecond;
+    formattedTimestamp = result.str();
+    return true;
+}
 
 /**
  * Przygotowuje czytelny opis błędu zwróconego przez oficjalne API IBKR.
@@ -282,9 +360,21 @@ void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
         return;
     }
 
+    std::int64_t timestampUtc = 0;
+    if (!parseIbkrTimestamp(bar.time, timestampUtc)) {
+        ErrorLogger::warning(
+            "IBKR zwróciło nieprawidłowy znacznik czasu świecy historycznej.");
+        updateCandleMessage(
+            "IBKR zwróciło nieprawidłowy czas świecy historycznej.");
+        return;
+    }
+
     const std::lock_guard<std::mutex> lock(statusMutex_);
     candle_.available = true;
-    candle_.timestamp = bar.time;
+    candle_.timestampUtc = timestampUtc;
+    if (!formatLocalTimestamp(timestampUtc, candle_.timestamp)) {
+        candle_.timestamp = "Nie można przeliczyć czasu świecy.";
+    }
     candle_.open = bar.open;
     candle_.high = bar.high;
     candle_.low = bar.low;
@@ -299,17 +389,49 @@ void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
         return;
     }
 
+    std::int64_t timestampUtc = 0;
+    if (!parseIbkrTimestamp(bar.time, timestampUtc)) {
+        ErrorLogger::warning(
+            "IBKR zwróciło nieprawidłowy znacznik czasu aktualnej świecy.");
+        updateCandleMessage(
+            "IBKR zwróciło nieprawidłowy czas aktualnej świecy.");
+        return;
+    }
+
+    IBKRCandleData candleToSave;
     {
         const std::lock_guard<std::mutex> lock(statusMutex_);
         candle_.available = true;
-        candle_.timestamp = bar.time;
+        candle_.timestampUtc = timestampUtc;
+        if (!formatLocalTimestamp(timestampUtc, candle_.timestamp)) {
+            candle_.timestamp = "Nie można przeliczyć czasu świecy.";
+        }
         candle_.open = bar.open;
         candle_.high = bar.high;
         candle_.low = bar.low;
         candle_.close = bar.close;
         candle_.message = "Aktualizacja świecy EUR/USD 1-minutowej z IBKR.";
+        candleToSave.timestampUtc = timestampUtc;
+        candleToSave.open = bar.open;
+        candleToSave.high = bar.high;
+        candleToSave.low = bar.low;
+        candleToSave.close = bar.close;
+        candleToSave.volume = DecimalFunctions::decimalToString(bar.volume);
     }
     notifyStatusChanged();
+
+    const IBGatewayQuoteSnapshot quote = quoteSnapshot();
+    candleToSave.bidAvailable = quote.bidAvailable;
+    candleToSave.bid = quote.bid;
+    candleToSave.askAvailable = quote.askAvailable;
+    candleToSave.ask = quote.ask;
+    std::string saveError;
+    if (!CandleHistoryClient::saveIbkrCandle(candleToSave, saveError)) {
+        ErrorLogger::warning(
+            "Nie udało się zapisać świecy IBKR w candles_IBKR: " + saveError);
+        updateCandleMessage(
+            "Nie udało się zapisać świecy IBKR w candles_IBKR: " + saveError);
+    }
 }
 
 /**
@@ -407,7 +529,7 @@ void IBGatewayClient::runConnection(
                         "1 min",
                         "MIDPOINT",
                         0,
-                        1,
+                        2,
                         true,
                         TagValueListSPtr());
                     historicalRequestStarted = true;
