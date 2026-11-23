@@ -24,6 +24,7 @@ constexpr wchar_t apiHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT apiPort = 8000;
 constexpr wchar_t singleCandleApiPath[] = L"/api/candles";
 constexpr wchar_t ibkrCandleApiPath[] = L"/api/candles/ibkr";
+constexpr wchar_t ibkrCandleBatchApiPath[] = L"/api/candles/ibkr/batch";
 constexpr wchar_t batchApiPath[] = L"/api/candles/batch";
 constexpr wchar_t monitoredProductsApiPath[] = L"/api/products/monitored";
 constexpr wchar_t openProductsApiPath[] = L"/api/products/open";
@@ -47,6 +48,8 @@ constexpr DWORD maxResponseSize = 64 * 1024;
 // Pozostałe żądania mają limit 3 s; zapis ES ma 70 s na analizę do 60 s i bufor.
 constexpr DWORD apiRequestTimeoutMs = 3000;
 constexpr DWORD singleCandleReceiveTimeoutMs = 70000;
+constexpr DWORD ibkrBatchReceiveTimeoutMs = 30000;
+constexpr std::size_t maximumIbkrBatchSize = 1000;
 constexpr std::size_t pageSize = 20;
 constexpr std::size_t filteredCandlePageSize = 10;
 constexpr std::size_t signalPageSize = 15;
@@ -231,11 +234,16 @@ bool createIbkrRequestBody(
     } else {
         ask = "\"" + ask + "\"";
     }
+    if (candle.symbol.empty()) {
+        error = "IBKR nie przypisało świecy do instrumentu.";
+        return false;
+    }
     const std::string volume = candle.volume.empty()
         ? "null"
         : "\"" + escapeJsonString(candle.volume) + "\"";
     requestBody =
-        "{\"symbol\":\"EUR/USD\",\"datetime\":\"" + utcDatetime +
+        "{\"symbol\":\"" + escapeJsonString(candle.symbol) +
+        "\",\"datetime\":\"" + utcDatetime +
         "\",\"open\":\"" + open + "\",\"high\":\"" + high +
         "\",\"low\":\"" + low + "\",\"close\":\"" + close +
         "\",\"volume\":" + volume + ",\"bid\":" + bid +
@@ -389,6 +397,8 @@ bool sendApiRequest(
     const DWORD receiveTimeoutMs =
         std::wstring_view(path) == singleCandleApiPath
         ? singleCandleReceiveTimeoutMs
+        : std::wstring_view(path) == ibkrCandleBatchApiPath
+        ? ibkrBatchReceiveTimeoutMs
         : apiRequestTimeoutMs;
     WinHttpSetTimeouts(
         session.value,
@@ -1439,6 +1449,70 @@ bool CandleHistoryClient::saveIbkrCandle(
     }
     if (responseBody != "1") {
         error = "Lokalne API zwróciło nieprawidłowy status zapisu świecy IBKR.";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Wysyła unikalną paczkę świec IBKR do lokalnego API.
+ */
+bool CandleHistoryClient::saveIbkrCandles(
+    const std::vector<IBKRCandleData>& candles,
+    std::size_t& savedCandleCount,
+    std::string& error) {
+    savedCandleCount = 0;
+    error.clear();
+    if (candles.empty() || candles.size() > maximumIbkrBatchSize) {
+        error = "Paczka świec IBKR musi zawierać od 1 do 1000 rekordów.";
+        return false;
+    }
+
+    std::string requestBody = "{\"candles\":[";
+    for (std::size_t index = 0; index < candles.size(); ++index) {
+        std::string utcDatetime;
+        if (!formatUnixTimestampUtc(candles[index].timestampUtc, utcDatetime)) {
+            error = "IBKR zwróciło nieprawidłowy czas świecy.";
+            return false;
+        }
+        std::string candleBody;
+        if (!createIbkrRequestBody(
+                candles[index], utcDatetime, candleBody, error)) {
+            return false;
+        }
+        if (index != 0) {
+            requestBody += ",";
+        }
+        requestBody += candleBody;
+    }
+    requestBody += "]}";
+
+    std::string responseBody;
+    if (!sendApiRequest(
+            ibkrCandleBatchApiPath,
+            requestBody,
+            200,
+            responseBody,
+            error,
+            nullptr,
+            false,
+            true)) {
+        return false;
+    }
+    while (!responseBody.empty() &&
+           (responseBody.back() == '\n' || responseBody.back() == '\r')) {
+        responseBody.pop_back();
+    }
+    const auto parseResult = std::from_chars(
+        responseBody.data(),
+        responseBody.data() + responseBody.size(),
+        savedCandleCount);
+    if (responseBody.empty() ||
+        parseResult.ec != std::errc{} ||
+        parseResult.ptr != responseBody.data() + responseBody.size() ||
+        savedCandleCount > candles.size()) {
+        savedCandleCount = 0;
+        error = "Lokalne API zwróciło nieprawidłową liczbę zapisanych świec.";
         return false;
     }
     return true;

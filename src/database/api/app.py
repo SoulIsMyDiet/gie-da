@@ -778,6 +778,14 @@ class CandleBatch(BaseModel):
     candles: list[CandleRecord] = Field(min_length=1, max_length=MAX_BACKFILL_CANDLES)
 
 
+class IBKRCandleBatch(BaseModel):
+    """Opis paczki świec IBKR zapisywanych bez uruchamiania algorytmów."""
+
+    candles: list[IBKRCandleRecord] = Field(
+        min_length=1, max_length=MAX_BACKFILL_CANDLES
+    )
+
+
 class Grok45SignalRecord(BaseModel):
     """Opis sygnału LONG/SHORT wygenerowanego przez algorytm Grok-45."""
 
@@ -1802,6 +1810,96 @@ class MarketDataRepository:
             )
             connection.commit()
             return True
+        except (mysql.connector.Error, ValueError):
+            connection.rollback()
+            raise
+        finally:
+            if cursor is not None:
+                cursor.close()
+            connection.close()
+
+    def save_ibkr_candles(self, candles: list[IBKRCandleRecord]) -> int:
+        """Zapisuje paczkę świec IBKR bez tworzenia duplikatów rekordów.
+
+        Args:
+            candles: Zweryfikowane świece z czasem i kwotowaniami bid/ask.
+
+        Returns:
+            Liczbę unikalnych świec z otwartych sesji przekazanych do zapisu.
+
+        Raises:
+            mysql.connector.Error: Gdy zapis paczki do bazy się nie powiedzie.
+            ValueError: Gdy podczas zapisu wystąpi nieprawidłowa wartość.
+        """
+        unique_candles: dict[tuple[str, datetime], IBKRCandleRecord] = {}
+        for candle in candles:
+            candle_time_utc = candle.datetime.astimezone(timezone.utc)
+            unique_candles[(candle.symbol, candle_time_utc)] = candle
+
+        open_candles = [
+            candle
+            for candle in unique_candles.values()
+            if self._is_market_open(
+                candle.symbol, candle.datetime.astimezone(timezone.utc)
+            )
+        ]
+        if not open_candles:
+            return 0
+
+        candle_values = []
+        product_symbols = set()
+        for candle in open_candles:
+            candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
+            local_datetime = candle_datetime_local.replace(tzinfo=None)
+            offset_minutes = int(
+                candle_datetime_local.utcoffset().total_seconds() // 60
+            )
+            product_symbols.add(candle.symbol)
+            candle_values.append(
+                (
+                    candle.symbol,
+                    local_datetime,
+                    candle.open,
+                    candle.high,
+                    candle.low,
+                    candle.close,
+                    candle.volume,
+                    candle.bid,
+                    candle.ask,
+                    offset_minutes,
+                )
+            )
+
+        connection = mysql.connector.connect(**self.database_settings)
+        cursor = None
+        try:
+            cursor = connection.cursor()
+            cursor.executemany(
+                """
+                INSERT INTO products (symbol) VALUES (%s)
+                ON DUPLICATE KEY UPDATE symbol = VALUES(symbol)
+                """,
+                [(symbol,) for symbol in sorted(product_symbols)],
+            )
+            cursor.executemany(
+                """
+                INSERT INTO candles_IBKR
+                    (symbol, datetime, open, high, low, close, volume,
+                     bid, ask, utc_offset_minutes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    open = VALUES(open),
+                    high = VALUES(high),
+                    low = VALUES(low),
+                    close = VALUES(close),
+                    volume = VALUES(volume),
+                    bid = VALUES(bid),
+                    ask = VALUES(ask)
+                """,
+                candle_values,
+            )
+            connection.commit()
+            return len(candle_values)
         except (mysql.connector.Error, ValueError):
             connection.rollback()
             raise
@@ -4376,16 +4474,57 @@ def save_ibkr_candle(candle: IBKRCandleRecord, request: Request) -> Response:
         Tekstowy status zapisu: 1 dla zapisu albo 0 dla zamkniętego rynku.
 
     Raises:
-        HTTPException: Gdy żądanie dotyczy instrumentu innego niż EUR/USD.
+        HTTPException: Gdy żądanie dotyczy nieobsługiwanego instrumentu.
     """
-    if candle.symbol != "EUR/USD":
+    if not is_monitored_product(candle.symbol):
         raise HTTPException(
             status_code=422,
-            detail="Tabela candles_IBKR obsługuje wyłącznie instrument EUR/USD.",
+            detail=f"Instrument {candle.symbol} nie jest skonfigurowany.",
         )
     saved = request.app.state.repository.save_ibkr_candle(candle)
     return Response(
         content="1\n" if saved else "0\n",
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+@app.post("/api/candles/ibkr/batch", response_class=Response)
+def save_ibkr_candle_batch(
+    batch: IBKRCandleBatch, request: Request
+) -> Response:
+    """Zapisuje paczkę świec IBKR bez uruchamiania algorytmów.
+
+    Args:
+        batch: Zweryfikowana paczka świec jednego lub wielu instrumentów.
+        request: Żądanie udostępniające repozytorium bazy.
+
+    Returns:
+        Liczbę unikalnych świec przekazanych do zapisu, w formacie tekstowym.
+
+    Raises:
+        HTTPException: Gdy paczka zawiera nieobsługiwany instrument.
+        mysql.connector.Error: Gdy zapis do bazy danych się nie powiedzie.
+    """
+    unsupported_symbols = sorted(
+        {
+            candle.symbol
+            for candle in batch.candles
+            if not is_monitored_product(candle.symbol)
+        }
+    )
+    if unsupported_symbols:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Nie skonfigurowano instrumentów: "
+                + ", ".join(unsupported_symbols)
+            ),
+        )
+    saved_candle_count = request.app.state.repository.save_ibkr_candles(
+        batch.candles
+    )
+    return Response(
+        content=f"{saved_candle_count}\n",
         media_type="text/plain; charset=utf-8",
     )
 

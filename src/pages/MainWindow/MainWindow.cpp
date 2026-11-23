@@ -37,6 +37,7 @@ constexpr UINT ibkrStatusMessage = WM_APP + 2;
 constexpr int connectPaperCommandId = 1501;
 constexpr int connectLiveCommandId = 1502;
 constexpr int disconnectIbkrCommandId = 1503;
+constexpr int synchronizeIbkrHistoryCommandId = 1504;
 constexpr int ibkrPaperPort = 4002;
 constexpr int ibkrLivePort = 4001;
 #endif
@@ -225,6 +226,20 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 }
                 if (LOWORD(wParam) == disconnectIbkrCommandId) {
                     ibkrClient_.disconnect();
+                    updateIbkrStatus();
+                    return 0;
+                }
+                if (LOWORD(wParam) == synchronizeIbkrHistoryCommandId) {
+                    std::string error;
+                    if (!ibkrClient_.requestHistorySync(error)) {
+                        std::wstring wideError;
+                        if (!convertUtf8ToWide(error, wideError)) {
+                            wideError =
+                                L"Nie udało się rozpocząć synchronizacji "
+                                L"historii IBKR.";
+                        }
+                        showErrorMessage(handle_, wideError.c_str());
+                    }
                     updateIbkrStatus();
                     return 0;
                 }
@@ -667,6 +682,12 @@ void MainWindow::onPaint() {
                        << candle.open << "  H: " << candle.high
                        << "  L: " << candle.low
                        << "  C: " << candle.close;
+            if (candle.message !=
+                    "Aktualizacja świecy EUR/USD 1-minutowej z IBKR." &&
+                candle.message !=
+                    "Ostatnia świeca EUR/USD 1-minutowa z IBKR.") {
+                marketText << "\n" << candle.message;
+            }
         } else {
             marketText << candle.message;
         }
@@ -732,7 +753,14 @@ bool MainWindow::createIbkrMenu() {
         return false;
     }
     HMENU connectionMenu = CreatePopupMenu();
-    if (connectionMenu == nullptr) {
+    HMENU toolsMenu = CreatePopupMenu();
+    if (connectionMenu == nullptr || toolsMenu == nullptr) {
+        if (connectionMenu != nullptr) {
+            DestroyMenu(connectionMenu);
+        }
+        if (toolsMenu != nullptr) {
+            DestroyMenu(toolsMenu);
+        }
         DestroyMenu(mainMenu);
         return false;
     }
@@ -750,8 +778,12 @@ bool MainWindow::createIbkrMenu() {
         AppendMenuW(
             connectionMenu, MF_STRING,
             disconnectIbkrCommandId, L"Rozłącz");
-    if (!commandsCreated) {
+    if (!commandsCreated ||
+        !AppendMenuW(
+            toolsMenu, MF_STRING,
+            synchronizeIbkrHistoryCommandId, L"Synchronizuj")) {
         DestroyMenu(connectionMenu);
+        DestroyMenu(toolsMenu);
         DestroyMenu(mainMenu);
         return false;
     }
@@ -759,6 +791,14 @@ bool MainWindow::createIbkrMenu() {
             mainMenu, MF_POPUP,
             reinterpret_cast<UINT_PTR>(connectionMenu), L"IB Gateway")) {
         DestroyMenu(connectionMenu);
+        DestroyMenu(toolsMenu);
+        DestroyMenu(mainMenu);
+        return false;
+    }
+    if (!AppendMenuW(
+            mainMenu, MF_POPUP,
+            reinterpret_cast<UINT_PTR>(toolsMenu), L"Narzędzia")) {
+        DestroyMenu(toolsMenu);
         DestroyMenu(mainMenu);
         return false;
     }
@@ -850,5 +890,19 @@ void MainWindow::updateIbkrMenu() {
     EnableMenuItem(
         connectionMenu, disconnectIbkrCommandId,
         MF_BYCOMMAND | (canDisconnect ? MF_ENABLED : MF_GRAYED));
+
+    HMENU toolsMenu = GetSubMenu(ibkrMenu_, 1);
+    if (toolsMenu == nullptr) {
+        ErrorLogger::warning(
+            "Nie można odnaleźć menu Narzędzia.");
+        return;
+    }
+    const bool canSynchronize =
+        state == IBGatewayConnectionState::Connected &&
+        !ibkrClient_.historySyncInProgress();
+    EnableMenuItem(
+        toolsMenu, synchronizeIbkrHistoryCommandId,
+        MF_BYCOMMAND |
+            (canSynchronize ? MF_ENABLED : MF_GRAYED));
 }
 #endif

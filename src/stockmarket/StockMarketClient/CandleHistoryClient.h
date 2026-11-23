@@ -10,6 +10,7 @@
  * Przechowuje zamkniętą świecę i kwotowania IBKR wyłącznie do podglądu.
  */
 struct IBKRCandleData {
+    std::string symbol;
     std::int64_t timestampUtc = 0;
     double open = 0.0;
     double high = 0.0;
@@ -183,6 +184,19 @@ public:
      */
     static bool saveIbkrCandle(
         const IBKRCandleData& candle, std::string& error);
+
+    /**
+     * Zapisuje paczkę świec IBKR bez uruchamiania algorytmów.
+     * @param candles Świece jednego instrumentu, uporządkowane chronologicznie.
+     * @param savedCandleCount Otrzymuje liczbę świec zaakceptowanych przez API.
+     * @param error Otrzymuje opis błędu walidacji lub żądania.
+     * @return true, jeśli API poprawnie obsłużyło całą paczkę.
+     * @throws std::bad_alloc, jeśli nie można przygotować żądania.
+     */
+    static bool saveIbkrCandles(
+        const std::vector<IBKRCandleData>& candles,
+        std::size_t& savedCandleCount,
+        std::string& error);
 
     /**
      * Pobiera listę instrumentów aktywnych w konfiguracji lokalnego API.

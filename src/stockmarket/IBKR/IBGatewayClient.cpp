@@ -9,6 +9,8 @@
 #include "EReader.h"
 #include "ErrorLogger.h"
 
+#include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -26,6 +28,47 @@ constexpr auto connectionHandshakeTimeout = std::chrono::seconds(15);
 constexpr auto candleSaveRetryDelay = std::chrono::seconds(5);
 constexpr int oneMinuteCandleRequestId = 9251;
 constexpr int eurUsdQuoteRequestId = 9252;
+constexpr std::size_t maximumHistoryCandlesPerInstrument = 1000;
+
+/**
+ * Opisuje kontrakt IBKR oraz symbol używany przez lokalną bazę.
+ */
+struct IBKRInstrumentDefinition {
+    const char* databaseSymbol;
+    const char* contractSymbol;
+    const char* securityType;
+    const char* exchange;
+    const char* currency;
+};
+
+// Dodanie instrumentu do tego rejestru udostępnia go synchronizacji historii.
+constexpr std::array<IBKRInstrumentDefinition, 1> ibkrInstrumentRegistry{{
+    {"EUR/USD", "EUR", "CASH", "IDEALPRO", "USD"},
+}};
+
+/**
+ * Wypełnia kontrakt IBKR danymi z rejestru instrumentów.
+ */
+void configureContract(
+    Contract& contract, const IBKRInstrumentDefinition& instrument) {
+    contract.symbol = instrument.contractSymbol;
+    contract.secType = instrument.securityType;
+    contract.exchange = instrument.exchange;
+    contract.currency = instrument.currency;
+}
+
+/**
+ * Odczytuje wolumen z paska i pomija ujemny znacznik braku danych IBKR.
+ * @param bar Pasek otrzymany z API IBKR.
+ * @return Wolumen jako tekst albo pusty tekst, jeśli IBKR go nie podało.
+ */
+std::string formatIbkrVolume(const Bar& bar) {
+    std::string volume = DecimalFunctions::decimalToString(bar.volume);
+    if (!volume.empty() && volume.front() == '-') {
+        volume.clear();
+    }
+    return volume;
+}
 
 /**
  * Odczytuje czas świecy IBKR jako znacznik Unix i zaokrągla go do pełnej minuty.
@@ -167,6 +210,13 @@ bool IBGatewayClient::connect(
         pendingCandle_.reset();
         quote_ = {};
         quote_.message = "Oczekiwanie na kwotowania bid/ask z IBKR.";
+        historySyncRequested_ = false;
+        historySyncInProgress_ = false;
+        historySyncRequestId_ = 0;
+        historySyncInstrumentIndex_ = 0;
+        historySyncSavedCandleCount_ = 0;
+        historySyncSymbol_.clear();
+        historySyncCandles_.clear();
     }
     notifyStatusChanged();
     try {
@@ -208,6 +258,44 @@ void IBGatewayClient::disconnect() {
     updateStatus(
         IBGatewayConnectionState::Disconnected,
         "Rozłączono.");
+}
+
+/**
+ * Przyjmuje jedno zlecenie synchronizacji historii dla całego rejestru.
+ */
+bool IBGatewayClient::requestHistorySync(std::string& errorMessage) {
+    errorMessage.clear();
+    if (status().state != IBGatewayConnectionState::Connected) {
+        errorMessage = "Połącz się z IB Gateway przed synchronizacją historii.";
+        return false;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (historySyncInProgress_) {
+            errorMessage = "Synchronizacja historii IBKR już trwa.";
+            return false;
+        }
+        historySyncRequested_ = true;
+        historySyncInProgress_ = true;
+        historySyncRequestId_ = 0;
+        historySyncInstrumentIndex_ = 0;
+        historySyncSavedCandleCount_ = 0;
+        historySyncSymbol_.clear();
+        historySyncCandles_.clear();
+        candle_.message = "Przygotowywanie synchronizacji historii IBKR...";
+    }
+    readerSignal_.issueSignal();
+    notifyStatusChanged();
+    return true;
+}
+
+/**
+ * Odczytuje stan synchronizacji pod tą samą blokadą co jej dane.
+ */
+bool IBGatewayClient::historySyncInProgress() const {
+    const std::lock_guard<std::mutex> lock(statusMutex_);
+    return historySyncInProgress_;
 }
 
 /**
@@ -265,7 +353,6 @@ void IBGatewayClient::error(
     int errorCode,
     const std::string& errorString,
     const std::string& advancedOrderRejectJson) {
-    static_cast<void>(id);
     static_cast<void>(errorTimeMs);
     static_cast<void>(advancedOrderRejectJson);
 
@@ -279,11 +366,25 @@ void IBGatewayClient::error(
         currentStatus.state == IBGatewayConnectionState::Error) {
         updateStatus(IBGatewayConnectionState::Error, message);
     } else if (currentStatus.state == IBGatewayConnectionState::Connected) {
-        ErrorLogger::warning(message);
         if (id == oneMinuteCandleRequestId) {
+            ErrorLogger::warning(message);
             updateCandleMessage(message);
         } else if (id == eurUsdQuoteRequestId) {
+            ErrorLogger::warning(message);
             updateQuoteMessage(message);
+        } else {
+            bool historyRequestFailed = false;
+            {
+                const std::lock_guard<std::mutex> lock(statusMutex_);
+                historyRequestFailed =
+                    historySyncInProgress_ &&
+                    id == historySyncRequestId_;
+            }
+            if (historyRequestFailed) {
+                failHistorySync(message);
+            } else {
+                ErrorLogger::warning(message);
+            }
         }
     }
 }
@@ -293,6 +394,10 @@ void IBGatewayClient::error(
  */
 void IBGatewayClient::connectionClosed() {
     const bool requestedByApplication = stopRequested_.load();
+    const bool historyWasInProgress = historySyncInProgress();
+    if (historyWasInProgress) {
+        failHistorySync("Połączenie z IB Gateway zostało przerwane.");
+    }
     const IBGatewayConnectionStatus currentStatus = status();
     if (currentStatus.state == IBGatewayConnectionState::Error) {
         return;
@@ -310,10 +415,12 @@ void IBGatewayClient::connectionClosed() {
         requestedByApplication
             ? "Rozłączono."
             : "Połączenie z IB Gateway zostało przerwane.");
-    updateCandleMessage(
-        requestedByApplication
-            ? "Rozłączono strumień świec EUR/USD."
-            : "Utracono połączenie; ostatnia odebrana świeca pozostaje widoczna.");
+    if (!historyWasInProgress) {
+        updateCandleMessage(
+            requestedByApplication
+                ? "Rozłączono strumień świec EUR/USD."
+                : "Utracono połączenie; ostatnia odebrana świeca pozostaje widoczna.");
+    }
     updateQuoteMessage(
         requestedByApplication
             ? "Rozłączono kwotowania EUR/USD."
@@ -355,32 +462,81 @@ void IBGatewayClient::tickPrice(
 }
 
 /**
- * Zachowuje ostatni bar z początkowej odpowiedzi historii bez odświeżania UI.
+ * Odbiera świece z początkowej historii lub bieżącej synchronizacji.
  */
 void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
-    if (requestId != oneMinuteCandleRequestId) {
+    if (requestId == oneMinuteCandleRequestId) {
+        std::int64_t timestampUtc = 0;
+        if (!parseIbkrTimestamp(bar.time, timestampUtc)) {
+            ErrorLogger::warning(
+                "IBKR zwróciło nieprawidłowy znacznik czasu "
+                "świecy historycznej.");
+            updateCandleMessage(
+                "IBKR zwróciło nieprawidłowy czas świecy historycznej.");
+            return;
+        }
+
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        candle_.available = true;
+        candle_.timestampUtc = timestampUtc;
+        if (!formatLocalTimestamp(timestampUtc, candle_.timestamp)) {
+            candle_.timestamp = "Nie można przeliczyć czasu świecy.";
+        }
+        candle_.open = bar.open;
+        candle_.high = bar.high;
+        candle_.low = bar.low;
+        candle_.close = bar.close;
         return;
+    }
+
+    std::string symbol;
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (!historySyncInProgress_ ||
+            requestId != historySyncRequestId_) {
+            return;
+        }
+        symbol = historySyncSymbol_;
     }
 
     std::int64_t timestampUtc = 0;
     if (!parseIbkrTimestamp(bar.time, timestampUtc)) {
         ErrorLogger::warning(
-            "IBKR zwróciło nieprawidłowy znacznik czasu świecy historycznej.");
-        updateCandleMessage(
-            "IBKR zwróciło nieprawidłowy czas świecy historycznej.");
+            "Pominięto świecę synchronizacji IBKR z nieprawidłowym czasem.");
+        return;
+    }
+    const auto currentMinute = std::chrono::floor<std::chrono::minutes>(
+        std::chrono::system_clock::now());
+    const auto currentMinuteUtc = std::chrono::duration_cast<
+        std::chrono::seconds>(currentMinute.time_since_epoch()).count();
+    if (timestampUtc >= currentMinuteUtc) {
+        return;
+    }
+    if (!std::isfinite(bar.open) || !std::isfinite(bar.high) ||
+        !std::isfinite(bar.low) || !std::isfinite(bar.close) ||
+        bar.high < bar.open || bar.high < bar.close ||
+        bar.low > bar.open || bar.low > bar.close ||
+        bar.low > bar.high) {
+        ErrorLogger::warning(
+            "Pominięto świecę synchronizacji IBKR z nieprawidłowym OHLC.");
         return;
     }
 
-    const std::lock_guard<std::mutex> lock(statusMutex_);
-    candle_.available = true;
-    candle_.timestampUtc = timestampUtc;
-    if (!formatLocalTimestamp(timestampUtc, candle_.timestamp)) {
-        candle_.timestamp = "Nie można przeliczyć czasu świecy.";
+    IBKRCandleData candle;
+    candle.symbol = std::move(symbol);
+    candle.timestampUtc = timestampUtc;
+    candle.open = bar.open;
+    candle.high = bar.high;
+    candle.low = bar.low;
+    candle.close = bar.close;
+    candle.volume = formatIbkrVolume(bar);
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (historySyncInProgress_ &&
+            requestId == historySyncRequestId_) {
+            historySyncCandles_.push_back(std::move(candle));
+        }
     }
-    candle_.open = bar.open;
-    candle_.high = bar.high;
-    candle_.low = bar.low;
-    candle_.close = bar.close;
 }
 
 /**
@@ -401,17 +557,13 @@ void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
     }
 
     IBKRCandleData updatedCandle;
+    updatedCandle.symbol = ibkrInstrumentRegistry.front().databaseSymbol;
     updatedCandle.timestampUtc = timestampUtc;
     updatedCandle.open = bar.open;
     updatedCandle.high = bar.high;
     updatedCandle.low = bar.low;
     updatedCandle.close = bar.close;
-    updatedCandle.volume = DecimalFunctions::decimalToString(bar.volume);
-    if (!updatedCandle.volume.empty() &&
-        updatedCandle.volume.front() == '-') {
-        // IBKR używa ujemnego wolumenu jako znacznika braku danych.
-        updatedCandle.volume.clear();
-    }
+    updatedCandle.volume = formatIbkrVolume(bar);
 
     const IBGatewayQuoteSnapshot quote = quoteSnapshot();
     updatedCandle.bidAvailable = quote.bidAvailable;
@@ -457,7 +609,7 @@ void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
 }
 
 /**
- * Kończy początkowy odczyt i informuje, jeśli IBKR nie zwróciło żadnej świecy.
+ * Kończy początkowy odczyt lub zapis historii synchronizacyjnej.
  */
 void IBGatewayClient::historicalDataEnd(
     int requestId,
@@ -465,6 +617,84 @@ void IBGatewayClient::historicalDataEnd(
     const std::string& endDateStr) {
     static_cast<void>(startDateStr);
     static_cast<void>(endDateStr);
+
+    std::vector<IBKRCandleData> synchronizedCandles;
+    std::size_t instrumentIndex = 0;
+    bool isHistorySyncRequest = false;
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (historySyncInProgress_ &&
+            requestId == historySyncRequestId_) {
+            isHistorySyncRequest = true;
+            instrumentIndex = historySyncInstrumentIndex_;
+            historySyncRequestId_ = 0;
+            historySyncSymbol_.clear();
+            synchronizedCandles.swap(historySyncCandles_);
+        }
+    }
+
+    if (isHistorySyncRequest) {
+        std::sort(
+            synchronizedCandles.begin(),
+            synchronizedCandles.end(),
+            [](const IBKRCandleData& first, const IBKRCandleData& second) {
+                return first.timestampUtc < second.timestampUtc;
+            });
+        synchronizedCandles.erase(
+            std::unique(
+                synchronizedCandles.begin(),
+                synchronizedCandles.end(),
+                [](const IBKRCandleData& first, const IBKRCandleData& second) {
+                    return first.symbol == second.symbol &&
+                           first.timestampUtc == second.timestampUtc;
+                }),
+            synchronizedCandles.end());
+        if (synchronizedCandles.size() > maximumHistoryCandlesPerInstrument) {
+            synchronizedCandles.erase(
+                synchronizedCandles.begin(),
+                synchronizedCandles.end() -
+                    maximumHistoryCandlesPerInstrument);
+        }
+
+        std::size_t savedCandleCount = 0;
+        std::string saveError;
+        if (!synchronizedCandles.empty() &&
+            !CandleHistoryClient::saveIbkrCandles(
+                synchronizedCandles, savedCandleCount, saveError)) {
+            failHistorySync(saveError);
+            return;
+        }
+
+        bool moreInstrumentsRemain = false;
+        {
+            const std::lock_guard<std::mutex> lock(statusMutex_);
+            if (!historySyncInProgress_) {
+                return;
+            }
+            historySyncSavedCandleCount_ += savedCandleCount;
+            ++historySyncInstrumentIndex_;
+            moreInstrumentsRemain =
+                historySyncInstrumentIndex_ < ibkrInstrumentRegistry.size();
+            if (moreInstrumentsRemain) {
+                historySyncRequested_ = true;
+                candle_.message =
+                    "Zapisano historię " +
+                    std::string(
+                        ibkrInstrumentRegistry[instrumentIndex].databaseSymbol) +
+                    "; pobieranie kolejnego instrumentu.";
+            } else {
+                historySyncInProgress_ = false;
+                historySyncRequested_ = false;
+                candle_.message =
+                    "Synchronizacja historii IBKR zakończona. Zapisano " +
+                    std::to_string(historySyncSavedCandleCount_) +
+                    " świec.";
+            }
+        }
+        notifyStatusChanged();
+        return;
+    }
+
     if (requestId != oneMinuteCandleRequestId) {
         return;
     }
@@ -537,10 +767,8 @@ void IBGatewayClient::runConnection(
                     currentStatus.state ==
                         IBGatewayConnectionState::Connected) {
                     Contract contract;
-                    contract.symbol = "EUR";
-                    contract.secType = "CASH";
-                    contract.exchange = "IDEALPRO";
-                    contract.currency = "USD";
+                    configureContract(
+                        contract, ibkrInstrumentRegistry.front());
                     updateCandleMessage(
                         "Pobieranie świec EUR/USD 1-minutowych z IBKR...");
                     client->reqHistoricalData(
@@ -560,10 +788,8 @@ void IBGatewayClient::runConnection(
                     currentStatus.state ==
                         IBGatewayConnectionState::Connected) {
                     Contract contract;
-                    contract.symbol = "EUR";
-                    contract.secType = "CASH";
-                    contract.exchange = "IDEALPRO";
-                    contract.currency = "USD";
+                    configureContract(
+                        contract, ibkrInstrumentRegistry.front());
                     updateQuoteMessage(
                         "Oczekiwanie na kwotowania bid/ask z IBKR...");
                     client->reqMktData(
@@ -574,6 +800,47 @@ void IBGatewayClient::runConnection(
                         false,
                         TagValueListSPtr());
                     marketDataRequestStarted = true;
+                }
+                int historyRequestId = 0;
+                std::size_t historyInstrumentIndex = 0;
+                {
+                    const std::lock_guard<std::mutex> lock(statusMutex_);
+                    if (historySyncRequested_ &&
+                        historySyncInProgress_ &&
+                        historySyncInstrumentIndex_ <
+                            ibkrInstrumentRegistry.size() &&
+                        currentStatus.state ==
+                            IBGatewayConnectionState::Connected) {
+                        historySyncRequested_ = false;
+                        historyInstrumentIndex =
+                            historySyncInstrumentIndex_;
+                        historyRequestId = nextHistorySyncRequestId_++;
+                        historySyncRequestId_ = historyRequestId;
+                        historySyncSymbol_ =
+                            ibkrInstrumentRegistry[
+                                historyInstrumentIndex].databaseSymbol;
+                        historySyncCandles_.clear();
+                    }
+                }
+                if (historyRequestId != 0) {
+                    const IBKRInstrumentDefinition& instrument =
+                        ibkrInstrumentRegistry[historyInstrumentIndex];
+                    Contract contract;
+                    configureContract(contract, instrument);
+                    updateCandleMessage(
+                        "Pobieranie 1000 ostatnich zamkniętych świec " +
+                        std::string(instrument.databaseSymbol) + " z IBKR...");
+                    client->reqHistoricalData(
+                        historyRequestId,
+                        contract,
+                        "",
+                        "1 W",
+                        "1 min",
+                        "MIDPOINT",
+                        0,
+                        2,
+                        false,
+                        TagValueListSPtr());
                 }
                 if (currentStatus.state ==
                         IBGatewayConnectionState::Connecting &&
@@ -593,6 +860,14 @@ void IBGatewayClient::runConnection(
 
             if (historicalRequestStarted && client->isConnected()) {
                 client->cancelHistoricalData(oneMinuteCandleRequestId);
+            }
+            int activeHistoryRequestId = 0;
+            {
+                const std::lock_guard<std::mutex> lock(statusMutex_);
+                activeHistoryRequestId = historySyncRequestId_;
+            }
+            if (activeHistoryRequestId != 0 && client->isConnected()) {
+                client->cancelHistoricalData(activeHistoryRequestId);
             }
             if (marketDataRequestStarted && client->isConnected()) {
                 client->cancelMktData(eurUsdQuoteRequestId);
@@ -615,10 +890,22 @@ void IBGatewayClient::runConnection(
         if (historicalRequestStarted && client->isConnected()) {
             client->cancelHistoricalData(oneMinuteCandleRequestId);
         }
+        int activeHistoryRequestId = 0;
+        {
+            const std::lock_guard<std::mutex> lock(statusMutex_);
+            activeHistoryRequestId = historySyncRequestId_;
+        }
+        if (activeHistoryRequestId != 0 && client->isConnected()) {
+            client->cancelHistoricalData(activeHistoryRequestId);
+        }
         if (marketDataRequestStarted && client->isConnected()) {
             client->cancelMktData(eurUsdQuoteRequestId);
         }
         client->eDisconnect();
+    }
+    if (historySyncInProgress()) {
+        failHistorySync(
+            "Połączenie z IB Gateway zakończyło się przed zapisem historii.");
     }
     const IBGatewayConnectionStatus finalStatus = status();
     if (finalStatus.state == IBGatewayConnectionState::Disconnecting) {
@@ -664,6 +951,27 @@ void IBGatewayClient::updateCandleMessage(std::string message) {
         const std::lock_guard<std::mutex> lock(statusMutex_);
         candle_.message = std::move(message);
     }
+    notifyStatusChanged();
+}
+
+/**
+ * Kończy bieżącą synchronizację i przekazuje błąd do logu oraz widoku.
+ */
+void IBGatewayClient::failHistorySync(std::string message) {
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (!historySyncInProgress_) {
+            return;
+        }
+        historySyncRequested_ = false;
+        historySyncInProgress_ = false;
+        historySyncRequestId_ = 0;
+        historySyncSymbol_.clear();
+        historySyncCandles_.clear();
+        candle_.message = message;
+    }
+    ErrorLogger::warning("Synchronizacja historii IBKR nie powiodła się: " +
+                         message);
     notifyStatusChanged();
 }
 

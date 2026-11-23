@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 enum class IBGatewayConnectionState {
     Disconnected,
@@ -89,6 +91,20 @@ public:
      * @throws std::system_error, jeśli system nie może połączyć wątków.
      */
     void disconnect();
+
+    /**
+     * Zleca pobranie i zapis ostatnich 1000 zamkniętych świec dla rejestru IBKR.
+     * @param error Otrzymuje opis błędu, jeśli synchronizacja nie mogła ruszyć.
+     * @return true, jeśli zadanie zostało przyjęte.
+     * @throws std::bad_alloc, jeśli nie można przygotować komunikatu statusu.
+     */
+    bool requestHistorySync(std::string& error);
+
+    /**
+     * Sprawdza, czy trwa pobieranie lub zapis historii IBKR.
+     * @return true, gdy synchronizacja blokuje ponowne uruchomienie.
+     */
+    bool historySyncInProgress() const;
 
     /**
      * Zwraca bezpieczną dla wielu wątków kopię bieżącego statusu.
@@ -195,6 +211,13 @@ private:
     void persistNextCompletedCandle();
 
     /**
+     * Zatrzymuje synchronizację historii i pokazuje jej przyczynę.
+     * @param message Komunikat błędu lub przerwania do pokazania użytkownikowi.
+     * @throws std::bad_alloc, jeśli nie można zapisać komunikatu błędu.
+     */
+    void failHistorySync(std::string message);
+
+    /**
      * Ustawia komunikat kwotowań i powiadamia widok o zmianie.
      */
     void updateQuoteMessage(std::string message);
@@ -223,6 +246,14 @@ private:
     std::deque<IBKRCandleData> completedCandlesPendingSave_;
     std::chrono::steady_clock::time_point nextCandleSaveRetry_{};
     bool completedCandleSaveInProgress_ = false;
+    bool historySyncRequested_ = false;
+    bool historySyncInProgress_ = false;
+    int historySyncRequestId_ = 0;
+    int nextHistorySyncRequestId_ = 9300;
+    std::size_t historySyncInstrumentIndex_ = 0;
+    std::size_t historySyncSavedCandleCount_ = 0;
+    std::string historySyncSymbol_;
+    std::vector<IBKRCandleData> historySyncCandles_;
     StatusChangedCallback statusChangedCallback_;
     std::thread connectionThread_;
 };
