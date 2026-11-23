@@ -7,7 +7,7 @@
 #include "CandlesDataClient.h"
 
 /**
- * Przechowuje świecę i kwotowania IBKR przeznaczone wyłącznie do podglądu.
+ * Przechowuje zamkniętą świecę i kwotowania IBKR wyłącznie do podglądu.
  */
 struct IBKRCandleData {
     std::int64_t timestampUtc = 0;

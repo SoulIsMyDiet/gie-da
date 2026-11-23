@@ -23,6 +23,7 @@
 namespace {
 
 constexpr auto connectionHandshakeTimeout = std::chrono::seconds(15);
+constexpr auto candleSaveRetryDelay = std::chrono::seconds(5);
 constexpr int oneMinuteCandleRequestId = 9251;
 constexpr int eurUsdQuoteRequestId = 9252;
 
@@ -163,6 +164,7 @@ bool IBGatewayClient::connect(
         candle_ = {};
         candle_.message =
             "Łączenie z IB Gateway przed pobraniem świecy...";
+        pendingCandle_.reset();
         quote_ = {};
         quote_.message = "Oczekiwanie na kwotowania bid/ask z IBKR.";
     }
@@ -382,7 +384,7 @@ void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
 }
 
 /**
- * Zapisuje i pokazuje nową wartość dla aktywnej świecy 1-minutowej.
+ * Pokazuje aktywną świecę i zapisuje poprzednią po rozpoczęciu kolejnej minuty.
  */
 void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
     if (requestId != oneMinuteCandleRequestId) {
@@ -398,45 +400,60 @@ void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
         return;
     }
 
-    IBKRCandleData candleToSave;
-    {
-        const std::lock_guard<std::mutex> lock(statusMutex_);
-        candle_.available = true;
-        candle_.timestampUtc = timestampUtc;
-        if (!formatLocalTimestamp(timestampUtc, candle_.timestamp)) {
-            candle_.timestamp = "Nie można przeliczyć czasu świecy.";
-        }
-        candle_.open = bar.open;
-        candle_.high = bar.high;
-        candle_.low = bar.low;
-        candle_.close = bar.close;
-        candle_.message = "Aktualizacja świecy EUR/USD 1-minutowej z IBKR.";
-        candleToSave.timestampUtc = timestampUtc;
-        candleToSave.open = bar.open;
-        candleToSave.high = bar.high;
-        candleToSave.low = bar.low;
-        candleToSave.close = bar.close;
-        candleToSave.volume = DecimalFunctions::decimalToString(bar.volume);
-        if (!candleToSave.volume.empty() &&
-            candleToSave.volume.front() == '-') {
-            // IBKR używa ujemnego wolumenu jako znacznika braku danych.
-            candleToSave.volume.clear();
-        }
+    IBKRCandleData updatedCandle;
+    updatedCandle.timestampUtc = timestampUtc;
+    updatedCandle.open = bar.open;
+    updatedCandle.high = bar.high;
+    updatedCandle.low = bar.low;
+    updatedCandle.close = bar.close;
+    updatedCandle.volume = DecimalFunctions::decimalToString(bar.volume);
+    if (!updatedCandle.volume.empty() &&
+        updatedCandle.volume.front() == '-') {
+        // IBKR używa ujemnego wolumenu jako znacznika braku danych.
+        updatedCandle.volume.clear();
     }
-    notifyStatusChanged();
 
     const IBGatewayQuoteSnapshot quote = quoteSnapshot();
-    candleToSave.bidAvailable = quote.bidAvailable;
-    candleToSave.bid = quote.bid;
-    candleToSave.askAvailable = quote.askAvailable;
-    candleToSave.ask = quote.ask;
-    std::string saveError;
-    if (!CandleHistoryClient::saveIbkrCandle(candleToSave, saveError)) {
-        ErrorLogger::warning(
-            "Nie udało się zapisać świecy IBKR w candles_IBKR: " + saveError);
-        updateCandleMessage(
-            "Nie udało się zapisać świecy IBKR w candles_IBKR: " + saveError);
+    updatedCandle.bidAvailable = quote.bidAvailable;
+    updatedCandle.bid = quote.bid;
+    updatedCandle.askAvailable = quote.askAvailable;
+    updatedCandle.ask = quote.ask;
+
+    bool isOutOfOrderUpdate = false;
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (pendingCandle_.has_value() &&
+            timestampUtc < pendingCandle_->timestampUtc) {
+            isOutOfOrderUpdate = true;
+        } else {
+            if (pendingCandle_.has_value() &&
+                timestampUtc > pendingCandle_->timestampUtc) {
+                completedCandlesPendingSave_.push_back(
+                    std::move(*pendingCandle_));
+            }
+            pendingCandle_ = std::move(updatedCandle);
+
+            candle_.available = true;
+            candle_.timestampUtc = timestampUtc;
+            if (!formatLocalTimestamp(timestampUtc, candle_.timestamp)) {
+                candle_.timestamp = "Nie można przeliczyć czasu świecy.";
+            }
+            candle_.open = bar.open;
+            candle_.high = bar.high;
+            candle_.low = bar.low;
+            candle_.close = bar.close;
+            candle_.message = "Aktualizacja świecy EUR/USD 1-minutowej z IBKR.";
+        }
     }
+
+    if (isOutOfOrderUpdate) {
+        ErrorLogger::warning(
+            "IBKR zwróciło aktualizację świecy starszą niż bieżąca; "
+            "pominięto ją.");
+    } else {
+        notifyStatusChanged();
+    }
+    persistNextCompletedCandle();
 }
 
 /**
@@ -648,6 +665,51 @@ void IBGatewayClient::updateCandleMessage(std::string message) {
         candle_.message = std::move(message);
     }
     notifyStatusChanged();
+}
+
+/**
+ * Zapisuje najstarszą zamkniętą świecę, zostawiając ją w kolejce przy błędzie.
+ */
+void IBGatewayClient::persistNextCompletedCandle() {
+    IBKRCandleData candleToSave;
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (completedCandlesPendingSave_.empty() ||
+            completedCandleSaveInProgress_ ||
+            std::chrono::steady_clock::now() < nextCandleSaveRetry_) {
+            return;
+        }
+        candleToSave = completedCandlesPendingSave_.front();
+        completedCandleSaveInProgress_ = true;
+    }
+
+    std::string saveError;
+    if (!CandleHistoryClient::saveIbkrCandle(candleToSave, saveError)) {
+        {
+            const std::lock_guard<std::mutex> lock(statusMutex_);
+            completedCandleSaveInProgress_ = false;
+            nextCandleSaveRetry_ =
+                std::chrono::steady_clock::now() + candleSaveRetryDelay;
+        }
+        ErrorLogger::warning(
+            "Nie udało się zapisać zamkniętej świecy IBKR "
+            "w candles_IBKR: " + saveError);
+        updateCandleMessage(
+            "Nie udało się zapisać zamkniętej świecy IBKR "
+            "w candles_IBKR: " + saveError);
+        return;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        if (!completedCandlesPendingSave_.empty() &&
+            completedCandlesPendingSave_.front().timestampUtc ==
+                candleToSave.timestampUtc) {
+            completedCandlesPendingSave_.pop_front();
+        }
+        completedCandleSaveInProgress_ = false;
+        nextCandleSaveRetry_ = {};
+    }
 }
 
 /**

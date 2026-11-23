@@ -1,12 +1,16 @@
 #pragma once
 
+#include "CandleHistoryClient.h"
 #include "DefaultEWrapper.h"
 #include "EReaderOSSignal.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -27,7 +31,7 @@ struct IBGatewayConnectionStatus {
 };
 
 /**
- * Przechowuje ostatnią świecę EUR/USD pobraną z interwałem jednej minuty.
+ * Przechowuje ostatnią świecę EUR/USD, także tę aktualnie tworzoną.
  */
 struct IBGatewayOneMinuteCandle {
     bool available = false;
@@ -186,6 +190,11 @@ private:
     void updateCandleMessage(std::string message);
 
     /**
+     * Zapisuje najstarszą zamkniętą świecę i ponawia próbę po błędzie.
+     */
+    void persistNextCompletedCandle();
+
+    /**
      * Ustawia komunikat kwotowań i powiadamia widok o zmianie.
      */
     void updateQuoteMessage(std::string message);
@@ -208,6 +217,12 @@ private:
     IBGatewayConnectionStatus status_;
     IBGatewayOneMinuteCandle candle_;
     IBGatewayQuoteSnapshot quote_;
+    // Backend: buforuje świecę w trakcie tworzenia do nadejścia kolejnej minuty.
+    std::optional<IBKRCandleData> pendingCandle_;
+    // Backend: przechowuje zamknięte świece do czasu potwierdzenia zapisu.
+    std::deque<IBKRCandleData> completedCandlesPendingSave_;
+    std::chrono::steady_clock::time_point nextCandleSaveRetry_{};
+    bool completedCandleSaveInProgress_ = false;
     StatusChangedCallback statusChangedCallback_;
     std::thread connectionThread_;
 };
