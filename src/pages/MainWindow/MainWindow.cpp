@@ -304,7 +304,9 @@ LRESULT MainWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             }
             break;
         case candleUpdateMessage:
-            InvalidateRect(handle_, nullptr, TRUE);
+            if (currentViewId() == 0) {
+                InvalidateRect(handle_, nullptr, TRUE);
+            }
             return 0;
 #ifdef ENABLE_IBKR_TWS_API
         case ibkrStatusMessage:
@@ -768,7 +770,7 @@ void MainWindow::connectToIbkr(int port) {
 }
 
 /**
- * Pokazuje status API w tytule okna i prezentuje błędy po stronie użytkownika.
+ * Pokazuje status API w tytule i odświeża pulpit tylko, gdy jest widoczny.
  */
 void MainWindow::updateIbkrStatus() {
     const IBGatewayConnectionStatus connectionStatus = ibkrClient_.status();
@@ -779,7 +781,9 @@ void MainWindow::updateIbkrStatus() {
     const std::wstring title =
         std::wstring(L"Raport sygnałów - IB Gateway: ") + wideMessage;
     SetWindowTextW(handle_, title.c_str());
-    InvalidateRect(handle_, nullptr, TRUE);
+    if (currentViewId() == 0) {
+        InvalidateRect(handle_, nullptr, TRUE);
+    }
     updateIbkrMenu();
 
     if (connectionStatus.state == IBGatewayConnectionState::Error &&

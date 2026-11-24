@@ -57,8 +57,8 @@ constexpr std::array<IBKRInstrumentDefinition, 6> ibkrInstrumentRegistry{{
         9254, 9259, "USD/JPY", "USD", "CASH", "IDEALPRO", "JPY",
         "MIDPOINT", false},
     {
-        9255, 0, "XAU/USD", "XAUUSD", "CMDTY", "SMART", "USD", "MIDPOINT",
-        false},
+        9255, 9260, "XAU/USD", "XAUUSD", "CMDTY", "SMART", "USD",
+        "MIDPOINT", false},
     // Świece rynku krypto wymagają typu AGGTRADES w IBKR.
     {
         9256, 0, "BTC/USD", "BTC", "CRYPTO", "PAXOS", "USD", "AGGTRADES",
