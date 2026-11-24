@@ -735,7 +735,7 @@ void SignalsPage::drawDetails(
 
     // Front
     nextLine += WindowScale::size(parent_, 16);
-    if (details_.bestCandle60Datetime.empty() || details_.saldo60.empty() ||
+    if (details_.bestCandle60Minute.empty() || details_.saldo60.empty() ||
         details_.deal100Pln60.empty()) {
         drawWrappedParagraph(
             deviceContext, textBounds, nextLine,
@@ -749,12 +749,12 @@ void SignalsPage::drawDetails(
                 {{L"Wartość wyniku dla 60 minut jest nieprawidłowa.", false}},
                 regularFont, boldFont, WindowScale::size(parent_, 6));
         } else {
-            std::wstring bestCandle60Datetime;
+            std::wstring bestCandle60Minute;
             std::wstring saldo60;
             std::wstring deal100Pln60;
             if (!convertUtf8ToWide(
-                    details_.bestCandle60Datetime, bestCandle60Datetime)) {
-                bestCandle60Datetime = L"--";
+                    details_.bestCandle60Minute, bestCandle60Minute)) {
+                bestCandle60Minute = L"--";
             }
             if (!convertUtf8ToWide(details_.saldo60, saldo60)) {
                 saldo60 = L"--";
@@ -767,8 +767,8 @@ void SignalsPage::drawDetails(
                 : (sign60 < 0 ? RGB(200, 0, 0) : RGB(0, 0, 0));
             nextLine = drawWrappedParagraph(
                 deviceContext, textBounds, nextLine,
-                {{L"Najkorzystniejsza świeca w ciągu 60 minut wystąpiła o", false},
-                 {bestCandle60Datetime, true},
+                {{L"Najkorzystniejsza świeca w ciągu 60 minut była świecą nr", false},
+                 {bestCandle60Minute, true},
                  {L"; saldo wyniosło", false},
                  {saldo60, true, resultColor60},
                  {L".", false}},

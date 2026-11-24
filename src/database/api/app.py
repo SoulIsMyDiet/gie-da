@@ -1015,7 +1015,7 @@ class MarketDataRepository:
                         saldo_20_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         best_candle_20_minute INT NULL DEFAULT NULL,
                         `100zl_deal_20` DECIMAL(20, 5) NULL DEFAULT NULL,
-                        best_candle_60_datetime DATETIME NULL DEFAULT NULL,
+                        best_candle_60_minute INT NULL DEFAULT NULL,
                         saldo_60_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         `100zl_deal_60` DECIMAL(20, 5) NULL DEFAULT NULL,
                         average_spread DECIMAL(20, 5) NOT NULL,
@@ -1564,16 +1564,41 @@ class MarketDataRepository:
             )
             column_names.add("100zl_deal_20")
 
+        old_60_minute_column = "best_candle_60_datetime"
+        new_60_minute_column = "best_candle_60_minute"
+        if old_60_minute_column in column_names:
+            if new_60_minute_column in column_names:
+                cursor.execute(
+                    "ALTER TABLE signal_potention "
+                    "DROP COLUMN best_candle_60_datetime"
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE signal_potention
+                    SET best_candle_60_datetime = NULL
+                    """
+                )
+                cursor.execute(
+                    """
+                    ALTER TABLE signal_potention
+                    CHANGE COLUMN best_candle_60_datetime
+                        best_candle_60_minute INT NULL DEFAULT NULL
+                    """
+                )
+                column_names.add(new_60_minute_column)
+            column_names.remove(old_60_minute_column)
+
         new_60_minute_columns = (
             (
-                "best_candle_60_datetime",
-                "DATETIME NULL DEFAULT NULL",
+                "best_candle_60_minute",
+                "INT NULL DEFAULT NULL",
                 "`100zl_deal_20`",
             ),
             (
                 "saldo_60_aggr_candles",
                 "DECIMAL(20, 5) NULL DEFAULT NULL",
-                "best_candle_60_datetime",
+                "best_candle_60_minute",
             ),
             (
                 "100zl_deal_60",
@@ -3520,7 +3545,7 @@ class MarketDataRepository:
                         CAST(best_candle_20_minute AS CHAR),
                         CAST(`100zl_deal_20` AS CHAR),
                         CAST(average_spread AS CHAR),
-                        CAST(best_candle_60_datetime AS CHAR),
+                        CAST(best_candle_60_minute AS CHAR),
                         CAST(saldo_60_aggr_candles AS CHAR),
                         CAST(`100zl_deal_60` AS CHAR)
                     FROM signal_potention

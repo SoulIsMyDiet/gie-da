@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -81,36 +82,30 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         self.assertIsNone(result["best_candle_20_minute"])
         self.assertIsNone(result["100zl_deal_20"])
         self.assertIsNone(result["saldo_60_aggr_candles"])
+        self.assertIsNone(result["best_candle_60_minute"])
         self.assertIsNone(result["100zl_deal_60"])
 
-    def test_60_candle_window_uses_same_best_candle_and_profit_calculation(self) -> None:
-        """Okno 60 świec wybiera ekstremum bez zmiany wyniku dla 20 świec."""
+    def test_60_candle_window_records_best_candle_number(self) -> None:
+        """Okno 60 świec zapisuje numer świecy z najlepszym ekstremum."""
         candles = [
             (Decimal("1.1001"), Decimal("1.0999"))
             for _ in range(60)
         ]
         candles[12] = (Decimal("1.1020"), Decimal("1.0999"))
         candles[42] = (Decimal("1.1030"), Decimal("1.0999"))
-        timestamps = [
-            datetime(2025, 1, 1) + timedelta(minutes=index)
-            for index in range(60)
-        ]
 
         result = self.calculator.calculate(
             "long",
             self.entry_price,
             candles,
-            candle_timestamps=timestamps,
         )
 
         self.assertEqual(result["saldo_20_aggr_candles"], Decimal("0.0017"))
         self.assertEqual(result["best_candle_20_minute"], 13)
         self.assertEqual(result["100zl_deal_20"], Decimal("4.63636"))
         self.assertEqual(result["saldo_60_aggr_candles"], Decimal("0.0027"))
+        self.assertEqual(result["best_candle_60_minute"], 43)
         self.assertEqual(result["100zl_deal_60"], Decimal("7.36363"))
-        self.assertEqual(
-            result["best_candle_60_datetime"], timestamps[42]
-        )
 
     def test_60_candle_window_uses_lowest_low_for_short(self) -> None:
         """Okno 60 świec SHORT wybiera najniższe low."""
@@ -119,23 +114,64 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
             for _ in range(60)
         ]
         candles[47] = (Decimal("1.1001"), Decimal("1.0980"))
-        timestamps = [
-            datetime(2025, 1, 1) + timedelta(minutes=index)
-            for index in range(60)
-        ]
-
         result = self.calculator.calculate(
             "short",
             self.entry_price,
             candles,
-            candle_timestamps=timestamps,
         )
 
         self.assertEqual(result["saldo_60_aggr_candles"], Decimal("0.0017"))
+        self.assertEqual(result["best_candle_60_minute"], 48)
         self.assertEqual(result["100zl_deal_60"], Decimal("4.63636"))
-        self.assertEqual(
-            result["best_candle_60_datetime"], timestamps[47]
+
+    def test_60_candle_number_uses_one_based_positions_at_window_edges(self) -> None:
+        """Numer najlepszej świecy mieści się w zakresie 1–60."""
+        candles = [
+            (Decimal("1.1001"), Decimal("1.0999"))
+            for _ in range(60)
+        ]
+        candles[0] = (Decimal("1.1010"), Decimal("1.0999"))
+        first_candle_result = self.calculator.calculate(
+            "long", self.entry_price, candles
         )
+        self.assertEqual(first_candle_result["best_candle_60_minute"], 1)
+
+        candles[0] = (Decimal("1.1001"), Decimal("1.0999"))
+        candles[59] = (Decimal("1.1020"), Decimal("1.0999"))
+        last_candle_result = self.calculator.calculate(
+            "long", self.entry_price, candles
+        )
+        self.assertEqual(last_candle_result["best_candle_60_minute"], 60)
+
+    def test_update_pending_persists_the_best_60_candle_number(self) -> None:
+        """Zapisuje wyliczoną pozycję świecy w kolumnie bazy danych."""
+        cursor = Mock()
+        candle_rows = [
+            (Decimal("1.1001"), Decimal("1.0999"))
+            for _ in range(60)
+        ]
+        candle_rows[42] = (Decimal("1.1030"), Decimal("1.0999"))
+        cursor.fetchall.side_effect = [
+            [
+                (
+                    42,
+                    "EUR/USD",
+                    Decimal("1.1000"),
+                    "long",
+                    Decimal("0.00030"),
+                    {"timestamp": "2025-01-01T00:00:00Z"},
+                )
+            ],
+            candle_rows,
+        ]
+
+        self.calculator.update_pending(cursor)
+
+        pending_query = cursor.execute.call_args_list[0].args[0]
+        update_query, update_values = cursor.execute.call_args_list[-1].args
+        self.assertIn("p.best_candle_60_minute IS NULL", pending_query)
+        self.assertIn("best_candle_60_minute =", update_query)
+        self.assertEqual(update_values[9], 43)
 
     def test_rejects_invalid_direction_and_entry_price(self) -> None:
         """Nieprawidłowy kierunek lub cena wejścia powodują jawny błąd."""

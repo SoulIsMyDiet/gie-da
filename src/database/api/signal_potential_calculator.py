@@ -54,8 +54,7 @@ class SignalPotentialCalculator:
         entry_price: Decimal,
         candles: Sequence[tuple[Decimal, Decimal]],
         spread_price: Decimal | None = None,
-        candle_timestamps: Sequence[datetime] | None = None,
-    ) -> dict[str, Decimal | int | datetime | None]:
+    ) -> dict[str, Decimal | int | None]:
         """Liczy salda i wyniki dla kolejnych okien świec.
 
         Args:
@@ -63,8 +62,6 @@ class SignalPotentialCalculator:
             entry_price: Cena wejścia sygnału.
             candles: Świece w kolejności czasu, jako pary ``(high, low)``.
             spread_price: Spread odejmowany od każdej zmiany ceny.
-            candle_timestamps: Czasy świec w tej samej kolejności, potrzebne
-                do zapisania czasu najlepszej świecy w oknie 60 świec.
 
         Returns:
             Słownik obliczonych wartości; wyniki niekompletnych okien mają
@@ -84,7 +81,7 @@ class SignalPotentialCalculator:
         if effective_spread < 0:
             raise ValueError("Spread nie może być ujemny.")
 
-        results: dict[str, Decimal | int | datetime | None] = {
+        results: dict[str, Decimal | int | None] = {
             "saldo_1st_candle": None,
             "saldo_2nd_candle": None,
             "saldo_3rd_candle": None,
@@ -94,7 +91,7 @@ class SignalPotentialCalculator:
             "saldo_20_aggr_candles": None,
             "best_candle_20_minute": None,
             "100zl_deal_20": None,
-            "best_candle_60_datetime": None,
+            "best_candle_60_minute": None,
             "saldo_60_aggr_candles": None,
             "100zl_deal_60": None,
         }
@@ -144,13 +141,10 @@ class SignalPotentialCalculator:
                 effective_spread,
             )
             results["saldo_60_aggr_candles"] = balance_60
+            results["best_candle_60_minute"] = selected_index + 1
             results["100zl_deal_60"] = (
                 self.DEPOSIT_PLN * self.LEVERAGE * balance_60 / entry_price
             )
-            if candle_timestamps is not None and len(candle_timestamps) >= 60:
-                results["best_candle_60_datetime"] = candle_timestamps[
-                    selected_index
-                ]
 
         for field_name, value in results.items():
             if isinstance(value, Decimal):
@@ -190,7 +184,7 @@ class SignalPotentialCalculator:
             JOIN signals AS s ON s.id = p.signal_id
             WHERE (
                     p.saldo_20_aggr_candles IS NULL
-                OR p.best_candle_60_datetime IS NULL
+                OR p.best_candle_60_minute IS NULL
                 OR p.saldo_60_aggr_candles IS NULL
                 OR p.`100zl_deal_60` IS NULL
             )
@@ -219,7 +213,7 @@ class SignalPotentialCalculator:
             )
             cursor.execute(
                 """
-                SELECT datetime, high, low
+                SELECT high, low
                 FROM candles
                 WHERE symbol = %s
                     AND datetime >= %s
@@ -230,17 +224,15 @@ class SignalPotentialCalculator:
                 (product, search_from_local, signal_timestamp),
             )
             candle_rows = cursor.fetchall()
-            candle_timestamps = [row[0] for row in candle_rows]
             candles = [
                 (Decimal(str(high)), Decimal(str(low)))
-                for _, high, low in candle_rows
+                for high, low in candle_rows
             ]
             balances = self.calculate(
                 direction,
                 Decimal(str(entry_price)),
                 candles,
                 Decimal(str(spread_price)),
-                candle_timestamps,
             )
             cursor.execute(
                 """
@@ -257,8 +249,8 @@ class SignalPotentialCalculator:
                     best_candle_20_minute =
                         COALESCE(best_candle_20_minute, %s),
                     `100zl_deal_20` = COALESCE(`100zl_deal_20`, %s),
-                    best_candle_60_datetime =
-                        COALESCE(best_candle_60_datetime, %s),
+                    best_candle_60_minute =
+                        COALESCE(best_candle_60_minute, %s),
                     saldo_60_aggr_candles =
                         COALESCE(saldo_60_aggr_candles, %s),
                     `100zl_deal_60` =
@@ -275,7 +267,7 @@ class SignalPotentialCalculator:
                     balances["saldo_20_aggr_candles"],
                     balances["best_candle_20_minute"],
                     balances["100zl_deal_20"],
-                    balances["best_candle_60_datetime"],
+                    balances["best_candle_60_minute"],
                     balances["saldo_60_aggr_candles"],
                     balances["100zl_deal_60"],
                     signal_id,

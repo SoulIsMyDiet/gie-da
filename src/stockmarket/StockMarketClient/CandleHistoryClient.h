@@ -83,7 +83,7 @@ struct SignalPotentialDetails {
     std::string bestCandle20Minute;
     std::string deal100Pln20;
     std::string averageSpread;
-    std::string bestCandle60Datetime;
+    std::string bestCandle60Minute;
     std::string saldo60;
     std::string deal100Pln60;
 };

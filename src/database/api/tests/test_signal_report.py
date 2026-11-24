@@ -69,8 +69,8 @@ def test_signal_report_returns_aggregated_decision_without_price() -> None:
     assert "THEN 'ODRZUCENIE'" in query
 
 
-def test_signal_potential_schema_preserves_values_when_old_and_new_columns_coexist() -> None:
-    """Migruje nazwy kolumn, zachowując istniejące wartości z obu wersji."""
+def test_signal_potential_schema_migrates_60_minute_datetime_to_rank() -> None:
+    """Zamienia stary znacznik czasu na wyliczany numer świecy."""
     decimal_columns = {
         "saldo_1st_candle",
         "saldo_2nd_candle",
@@ -97,11 +97,22 @@ def test_signal_potential_schema_preserves_values_when_old_and_new_columns_coexi
         "max_candle",
         "100zl_deal",
         "spread",
+        "best_candle_60_datetime",
     }
+    migrated_columns.add("best_candle_60_minute")
     cursor = Mock()
     cursor.fetchall.side_effect = [
         [
-            (column, "decimal(20,5)" if column in decimal_columns else "int")
+            (
+                column,
+                "datetime"
+                if column == "best_candle_60_datetime"
+                else (
+                    "decimal(20,5)"
+                    if column in decimal_columns
+                    else "int"
+                ),
+            )
             for column in initial_columns
         ],
         [
@@ -127,3 +138,12 @@ def test_signal_potential_schema_preserves_values_when_old_and_new_columns_coexi
             f"DROP COLUMN `{old_name}`" in statement
             for statement in statements
         )
+    assert any(
+        "SET best_candle_60_datetime = NULL" in statement
+        for statement in statements
+    )
+    assert any(
+        "CHANGE COLUMN best_candle_60_datetime" in statement
+        and "best_candle_60_minute INT NULL DEFAULT NULL" in statement
+        for statement in statements
+    )

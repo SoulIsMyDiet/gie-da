@@ -2382,7 +2382,7 @@ bool CandleHistoryClient::fetchSignalPotential(
         &details.bestCandle20Minute,
         &details.deal100Pln20,
         &details.averageSpread,
-        &details.bestCandle60Datetime,
+        &details.bestCandle60Minute,
         &details.saldo60,
         &details.deal100Pln60
     };
