@@ -522,6 +522,218 @@ bool fetchApiResponse(
         request.value, responseBody, error, maximumResponseBytes);
 }
 
+/**
+ * Wysyła treść JSON do lokalnego API i odczytuje odpowiedź tekstową.
+ * @param path Ścieżka lokalnego endpointu API.
+ * @param requestBody Treść żądania w formacie JSON.
+ * @param responseBody Otrzymuje treść odpowiedzi serwera.
+ * @param error Otrzymuje opis błędu transportu lub odpowiedzi serwera.
+ * @param maximumResponseBytes Maksymalny rozmiar akceptowanej odpowiedzi.
+ * @return true, jeśli serwer zwrócił odpowiedź HTTP z kodem sukcesu.
+ * @throws std::bad_alloc Gdy nie można przydzielić pamięci na żądanie lub odpowiedź.
+ */
+bool postApiResponse(
+    const std::wstring& path,
+    const std::string& requestBody,
+    std::string& responseBody,
+    std::string& error,
+    std::size_t maximumResponseBytes = 4 * 1024 * 1024) {
+    if (requestBody.size() > std::numeric_limits<DWORD>::max()) {
+        error = "Dane raportu transakcji są zbyt duże.";
+        return false;
+    }
+
+    InternetHandle session{WinHttpOpen(
+        L"gie-da/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+    if (session.value == nullptr) {
+        error = "Nie udało się rozpocząć żądania raportu transakcji.";
+        return false;
+    }
+    WinHttpSetTimeouts(session.value, 3000, 3000, 3000, 10000);
+
+    InternetHandle connection{WinHttpConnect(session.value, apiHost, apiPort, 0)};
+    if (connection.value == nullptr) {
+        error = "Nie można połączyć się z lokalnym API bazy danych.";
+        return false;
+    }
+
+    InternetHandle request{WinHttpOpenRequest(
+        connection.value, L"POST", path.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)};
+    if (request.value == nullptr) {
+        error = "Nie udało się utworzyć żądania raportu transakcji.";
+        return false;
+    }
+
+    constexpr wchar_t requestHeaders[] =
+        L"Content-Type: application/json\r\n";
+    const DWORD requestSize = static_cast<DWORD>(requestBody.size());
+    if (!WinHttpSendRequest(
+            request.value, requestHeaders, static_cast<DWORD>(-1L),
+            const_cast<char*>(requestBody.data()), requestSize,
+            requestSize, 0) ||
+        !WinHttpReceiveResponse(request.value, nullptr)) {
+        error = "Lokalne API nie odpowiedziało na żądanie raportu transakcji.";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (!WinHttpQueryHeaders(
+            request.value,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX)) {
+        error = "Nie udało się odczytać odpowiedzi lokalnego API.";
+        return false;
+    }
+    if (statusCode != 200) {
+        error = "Lokalne API zwróciło HTTP " +
+                std::to_string(statusCode) +
+                " podczas generowania raportu transakcji.";
+        return false;
+    }
+    return readResponse(
+        request.value, responseBody, error, maximumResponseBytes);
+}
+
+/**
+ * Dodaje tekst UTF-8 do treści JSON, zabezpieczając znaki sterujące i cudzysłowy.
+ * @param json Otrzymuje dopisywany tekst JSON.
+ * @param value Tekst UTF-8 do zapisania jako wartość JSON.
+ * @return Brak (funkcja dopisuje wynik do parametru json).
+ * @throws std::bad_alloc Gdy nie można powiększyć bufora JSON.
+ */
+void appendJsonString(std::string& json, const std::string& value) {
+    constexpr char hexDigits[] = "0123456789ABCDEF";
+    json.push_back('"');
+    for (const unsigned char character : value) {
+        switch (character) {
+        case '"':
+            json += "\\\"";
+            break;
+        case '\\':
+            json += "\\\\";
+            break;
+        case '\b':
+            json += "\\b";
+            break;
+        case '\f':
+            json += "\\f";
+            break;
+        case '\n':
+            json += "\\n";
+            break;
+        case '\r':
+            json += "\\r";
+            break;
+        case '\t':
+            json += "\\t";
+            break;
+        default:
+            if (character < 0x20) {
+                json += "\\u00";
+                json.push_back(hexDigits[character >> 4]);
+                json.push_back(hexDigits[character & 0x0F]);
+            } else {
+                json.push_back(static_cast<char>(character));
+            }
+            break;
+        }
+    }
+    json.push_back('"');
+}
+
+/**
+ * Odczytuje cyfrę szesnastkową używaną w kodowaniu procentowym.
+ * @param character Znak cyfry szesnastkowej.
+ * @return Wartość od 0 do 15 albo -1 dla niepoprawnego znaku.
+ */
+int hexDigitValue(char character) {
+    if (character >= '0' && character <= '9') {
+        return character - '0';
+    }
+    if (character >= 'A' && character <= 'F') {
+        return character - 'A' + 10;
+    }
+    if (character >= 'a' && character <= 'f') {
+        return character - 'a' + 10;
+    }
+    return -1;
+}
+
+/**
+ * Odtwarza tekst UTF-8 zakodowany procentowo w odpowiedzi TSV API.
+ * @param encodedText Tekst z kodowaniem procentowym.
+ * @param decodedText Otrzymuje zdekodowany tekst UTF-8.
+ * @return true, jeśli kodowanie procentowe wejścia było poprawne.
+ * @throws std::bad_alloc Gdy nie można przydzielić pamięci na wynik.
+ */
+bool decodePercentEncoded(
+    std::string_view encodedText, std::string& decodedText) {
+    std::string decoded;
+    decoded.reserve(encodedText.size());
+    for (std::size_t index = 0; index < encodedText.size(); ++index) {
+        if (encodedText[index] != '%') {
+            decoded.push_back(encodedText[index]);
+            continue;
+        }
+        if (index + 2 >= encodedText.size()) {
+            return false;
+        }
+        const int high = hexDigitValue(encodedText[index + 1]);
+        const int low = hexDigitValue(encodedText[index + 2]);
+        if (high < 0 || low < 0) {
+            return false;
+        }
+        decoded.push_back(static_cast<char>((high << 4) | low));
+        index += 2;
+    }
+    decodedText = std::move(decoded);
+    return true;
+}
+
+/**
+ * Rozdziela i dekoduje wiersz TSV o ustalonej liczbie kolumn.
+ * @param row Wiersz danych z odpowiedzi API.
+ * @param expectedColumns Oczekiwana liczba pól w wierszu.
+ * @param fields Otrzymuje zdekodowane pola wiersza.
+ * @return true, jeśli wszystkie pola wiersza są poprawnie zakodowane.
+ * @throws std::bad_alloc Gdy nie można przydzielić pamięci na pola wiersza.
+ */
+bool parseEncodedTsvRow(
+    std::string_view row,
+    std::size_t expectedColumns,
+    std::vector<std::string>& fields) {
+    std::vector<std::string> decodedFields;
+    decodedFields.reserve(expectedColumns);
+    std::size_t fieldStart = 0;
+    for (std::size_t index = 0; index < expectedColumns; ++index) {
+        const std::size_t separator = row.find('\t', fieldStart);
+        if (index + 1 < expectedColumns &&
+            separator == std::string_view::npos) {
+            return false;
+        }
+        if (index + 1 == expectedColumns &&
+            separator != std::string_view::npos) {
+            return false;
+        }
+        const std::size_t fieldEnd =
+            separator == std::string_view::npos ? row.size() : separator;
+        std::string decodedField;
+        if (!decodePercentEncoded(
+                row.substr(fieldStart, fieldEnd - fieldStart),
+                decodedField)) {
+            return false;
+        }
+        decodedFields.push_back(std::move(decodedField));
+        fieldStart = fieldEnd + 1;
+    }
+    fields = std::move(decodedFields);
+    return true;
+}
+
 // Backend
 /**
  * Odczytuje ograniczony podzbiór JSON używany w odpowiedziach powiadomień.
@@ -2090,6 +2302,188 @@ bool CandleHistoryClient::fetchFilteredCandlePage(
         L"&end_date=" + wideEndDate + L"&page=" + std::to_wstring(page);
     return fetchCandlePageFromApi(
         requestPath, filteredCandlePageSize, candles, hasNextPage, error);
+}
+
+/**
+ * Pobiera i dekoduje aktualne opcje dynamicznych filtrów transakcji.
+ */
+bool CandleHistoryClient::fetchTransactionReportOptions(
+    std::map<std::string, std::vector<TransactionReportFilterOption>>& options,
+    std::string& error) {
+    std::string response;
+    if (!fetchApiResponse(
+            L"/api/reports/transactions/options", response, error,
+            4 * 1024 * 1024)) {
+        return false;
+    }
+
+    std::map<std::string, std::vector<TransactionReportFilterOption>>
+        receivedOptions;
+    std::size_t lineStart = 0;
+    while (lineStart < response.size()) {
+        const std::size_t lineEnd = response.find('\n', lineStart);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? response.size() : lineEnd;
+        std::string_view line(response.data() + lineStart,
+                              effectiveEnd - lineStart);
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+        const std::size_t firstSeparator = line.find('\t');
+        const std::size_t secondSeparator =
+            firstSeparator == std::string_view::npos
+                ? std::string_view::npos
+                : line.find('\t', firstSeparator + 1);
+        if (firstSeparator == std::string_view::npos ||
+            secondSeparator == std::string_view::npos ||
+            line.find('\t', secondSeparator + 1) != std::string_view::npos) {
+            error = "Lokalne API zwróciło nieprawidłowe opcje filtrów.";
+            return false;
+        }
+
+        TransactionReportFilterOption option;
+        if (!decodePercentEncoded(
+                line.substr(firstSeparator + 1,
+                            secondSeparator - firstSeparator - 1),
+                option.value) ||
+            !decodePercentEncoded(
+                line.substr(secondSeparator + 1), option.label)) {
+            error = "Lokalne API zwróciło nieprawidłowy tekst opcji filtra.";
+            return false;
+        }
+        receivedOptions[std::string(line.substr(0, firstSeparator))]
+            .push_back(std::move(option));
+
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    options = std::move(receivedOptions);
+    return true;
+}
+
+/**
+ * Pobiera i sprawdza dynamiczną stronę raportu transakcji.
+ */
+bool CandleHistoryClient::fetchTransactionReportPage(
+    const std::string& startDate,
+    const std::string& endDate,
+    std::size_t page,
+    const std::vector<std::string>& columns,
+    const std::map<std::string, std::vector<std::string>>& filters,
+    TransactionReportPage& report,
+    std::string& error) {
+    if (page > 1000000) {
+        error = "Numer strony raportu transakcji jest poza dozwolonym zakresem.";
+        return false;
+    }
+    if (columns.empty() || columns.size() > 20) {
+        error = "Raport transakcji musi zawierać od 1 do 20 kolumn.";
+        return false;
+    }
+
+    std::string requestBody = "{\"columns\":[";
+    for (std::size_t index = 0; index < columns.size(); ++index) {
+        if (index != 0) {
+            requestBody.push_back(',');
+        }
+        appendJsonString(requestBody, columns[index]);
+    }
+    requestBody += "],\"filters\":{";
+    bool firstFilter = true;
+    for (const auto& [columnName, selectedValues] : filters) {
+        if (!firstFilter) {
+            requestBody.push_back(',');
+        }
+        firstFilter = false;
+        appendJsonString(requestBody, columnName);
+        requestBody += ":[";
+        for (std::size_t index = 0; index < selectedValues.size(); ++index) {
+            if (index != 0) {
+                requestBody.push_back(',');
+            }
+            appendJsonString(requestBody, selectedValues[index]);
+        }
+        requestBody.push_back(']');
+    }
+    requestBody += "}}";
+
+    const std::wstring requestPath =
+        L"/api/reports/transactions/filtered?start_date=" +
+        std::wstring(startDate.begin(), startDate.end()) +
+        L"&end_date=" + std::wstring(endDate.begin(), endDate.end()) +
+        L"&page=" + std::to_wstring(page);
+    std::string response;
+    if (!postApiResponse(requestPath, requestBody, response, error)) {
+        return false;
+    }
+
+    std::size_t responsePosition = 0;
+    const auto readLine = [&response, &responsePosition](
+                              std::string_view& line) {
+        if (responsePosition >= response.size()) {
+            return false;
+        }
+        const std::size_t lineEnd = response.find('\n', responsePosition);
+        const std::size_t effectiveEnd =
+            lineEnd == std::string::npos ? response.size() : lineEnd;
+        line = std::string_view(response).substr(
+            responsePosition, effectiveEnd - responsePosition);
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+        responsePosition =
+            lineEnd == std::string::npos ? response.size() : lineEnd + 1;
+        return true;
+    };
+
+    std::string_view hasNextPageText;
+    std::string_view rowCountText;
+    if (!readLine(hasNextPageText) ||
+        (hasNextPageText != "0" && hasNextPageText != "1") ||
+        !readLine(rowCountText)) {
+        error = "Lokalne API zwróciło nieprawidłowy nagłówek raportu.";
+        return false;
+    }
+
+    std::size_t rowCount = 0;
+    const auto rowCountResult = std::from_chars(
+        rowCountText.data(), rowCountText.data() + rowCountText.size(),
+        rowCount);
+    if (rowCountResult.ec != std::errc{} ||
+        rowCountResult.ptr != rowCountText.data() + rowCountText.size() ||
+        rowCount > filteredCandlePageSize) {
+        error = "Lokalne API zwróciło nieprawidłową liczbę rekordów.";
+        return false;
+    }
+
+    TransactionReportPage receivedReport;
+    receivedReport.hasNextPage = hasNextPageText == "1";
+    receivedReport.rows.reserve(rowCount);
+    for (std::size_t index = 0; index < rowCount; ++index) {
+        std::string_view rowText;
+        std::vector<std::string> row;
+        if (!readLine(rowText) ||
+            !parseEncodedTsvRow(rowText, columns.size(), row)) {
+            error = "Lokalne API zwróciło nieprawidłowy wiersz raportu.";
+            return false;
+        }
+        receivedReport.rows.push_back(std::move(row));
+    }
+
+    std::string_view summaryText;
+    if (!readLine(summaryText) ||
+        !parseEncodedTsvRow(
+            summaryText, columns.size(), receivedReport.summary) ||
+        responsePosition != response.size()) {
+        error = "Lokalne API zwróciło nieprawidłowe podsumowanie raportu.";
+        return false;
+    }
+
+    report = std::move(receivedReport);
+    return true;
 }
 
 /**

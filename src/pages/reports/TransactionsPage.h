@@ -3,30 +3,40 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <cstddef>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "CandleHistoryClient.h"
 
+/**
+ * Zarządza filtrami i dynamiczną tabelą raportu transakcji.
+ */
 class TransactionsPage {
 public:
     ~TransactionsPage();
 
     /**
-     * Tworzy kompaktowe filtry daty, tabelę świec i przyciski widoku.
+     * Tworzy filtry daty, przyciski kolumn, listy wyboru i nawigację.
      * @param instance Instancja aplikacji Windows.
      * @param parent Okno nadrzędne dla utworzonych kontrolek.
      * @return true, jeśli wszystkie kontrolki utworzono poprawnie.
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na stan filtrów.
      */
     bool create(HINSTANCE instance, HWND parent);
 
     /**
-     * Pokazuje pola zakresu dat widoku transakcji.
+     * Pokazuje filtry i zachowuje poprzednio wybrane kolumny oraz wartości.
+     * @return Brak (funkcja zmienia widoczność kontrolek).
+     * @throws std::bad_alloc Gdy nie można zapisać zaznaczonych wartości filtra.
      */
     void open();
 
     /**
-     * Ukrywa pola zakresu dat, zachowując wybrane wartości.
+     * Ukrywa widok i zapisuje wybór z aktualnie otwartej listy.
+     * @return Brak (funkcja zmienia widoczność kontrolek).
+     * @throws std::bad_alloc Gdy nie można zapisać zaznaczonych wartości filtra.
      */
     void close();
 
@@ -41,34 +51,72 @@ public:
      * @param controlId Identyfikator klikniętej kontrolki.
      * @param notificationCode Kod powiadomienia Windows.
      * @return true, jeśli komunikat należał do tego widoku.
+     * @throws std::bad_alloc Gdy aktualizacja listy wymaga pamięci, której brakuje.
      */
     bool handleCommand(int controlId, int notificationCode);
 
     /**
-     * Dopasowuje położenie i czcionkę kontrolek do rozmiaru okna.
+     * Dopasowuje układ i czcionki kontrolek do rozmiaru okna.
+     * @return Brak (funkcja zmienia położenie kontrolek).
      */
     void positionControls();
 
     /**
-     * Rysuje nagłówek widoku transakcji.
+     * Rysuje wybrane kolumny, rekordy i wiersz podsumowania.
      * @param deviceContext Kontekst używany do rysowania.
      * @param clientArea Obszar dostępny dla widoku.
+     * @return Brak (funkcja rysuje zawartość widoku).
+     * @throws std::bad_alloc Gdy nie można utworzyć tekstu wyświetlanego w tabeli.
      */
     void draw(HDC deviceContext, RECT& clientArea) const;
 
 private:
     /**
-     * Pobiera wybraną stronę tabeli z zapisanym zakresem dat.
+     * Pobiera wybraną stronę raportu z aktywnym zestawem kolumn i filtrów.
+     * @return Brak (wynik zapisuje w stanie widoku).
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na wynik.
      */
     void loadCurrentPage();
 
     /**
-     * Odczytuje zakres z pól daty i generuje pierwszą stronę tabeli.
+     * Odczytuje formularz i generuje pierwszą stronę nowego raportu.
+     * @return Brak (wynik zapisuje w stanie widoku).
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na filtry.
      */
     void generateReport();
 
     /**
+     * Pobiera aktualne opcje i pokazuje listę dla wskazanego filtra.
+     * @param filterIndex Indeks pola w konfiguracji przycisków raportu.
+     * @return true, jeśli pobrano i pokazano listę opcji.
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na opcje.
+     */
+    bool showFilterOptions(std::size_t filterIndex);
+
+    /**
+     * Zapisuje zaznaczone wartości aktualnie widocznej listy.
+     * @return Brak (funkcja uaktualnia stan filtrów).
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na wartości filtra.
+     */
+    void storeActiveFilterSelection();
+
+    /**
+     * Zwraca klucze wybranych kolumn w kolejności widocznej w formularzu.
+     * @return Lista kluczy aktywnych kolumn.
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na listę.
+     */
+    std::vector<std::string> selectedColumnKeys() const;
+
+    /**
+     * Zwraca wybrane wartości filtrów aktywnych kolumn.
+     * @return Mapa kluczy kolumn na wybrane wartości.
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na mapę.
+     */
+    std::map<std::string, std::vector<std::string>> selectedFilterValues() const;
+
+    /**
      * Pokazuje lub ukrywa kontrolki i ustawia ich aktywność.
+     * @return Brak (funkcja aktualizuje właściwości kontrolek).
      */
     void updateControls();
 
@@ -77,16 +125,28 @@ private:
     HWND fromDatePicker_ = nullptr;
     HWND toDateLabel_ = nullptr;
     HWND toDatePicker_ = nullptr;
+    HWND generateButton_ = nullptr;
+    HWND closeFilterButton_ = nullptr;
     HWND previousPageButton_ = nullptr;
     HWND nextPageButton_ = nullptr;
-    HWND generateButton_ = nullptr;
+    std::vector<HWND> filterButtons_;
+    std::vector<HWND> filterLists_;
+    std::vector<bool> filterSelected_;
+    std::vector<std::vector<std::string>> filterOptionValues_;
+    std::vector<std::vector<std::string>> selectedFilterValues_;
+    std::map<std::string, std::vector<TransactionReportFilterOption>>
+        filterOptions_;
+    int activeFilterIndex_ = -1;
+    bool filterOptionsLoaded_ = false;
     bool visible_ = false;
     bool generated_ = false;
     bool hasNextPage_ = false;
     std::size_t currentPage_ = 0;
     std::string appliedStartDate_;
     std::string appliedEndDate_;
-    std::vector<CandleReportEntry> candles_;
+    std::vector<std::string> appliedColumns_;
+    std::map<std::string, std::vector<std::string>> appliedFilters_;
+    TransactionReportPage report_;
     std::string status_;
     HFONT controlFont_ = nullptr;
     int controlFontHeight_ = 0;

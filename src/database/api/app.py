@@ -26,6 +26,223 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from error_file_logging import configure_error_file_logging  # noqa: E402
 from todo_repository import TodoRepository  # noqa: E402
 
+# Backend
+TRANSACTION_REPORT_COLUMNS = {
+    "product": {
+        "expression": "s.product",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "algorithm_name": {
+        "expression": "s.algorithm_name",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "signal_status": {
+        "expression": "s.`signal`",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "saldo_20_aggr_candles": {
+        "expression": "p.saldo_20_aggr_candles",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "sign",
+    },
+    "best_candle_20_minute": {
+        "expression": "p.best_candle_20_minute",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "exact",
+    },
+    "deal_20": {
+        "expression": "p.`100zl_deal_20`",
+        "summary": "SUM",
+        "weight": 1,
+        "filter": "sign",
+    },
+    "saldo_60_aggr_candles": {
+        "expression": "p.saldo_60_aggr_candles",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "sign",
+    },
+    "best_candle_60_minute": {
+        "expression": "p.best_candle_60_minute",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "exact",
+    },
+    "deal_60": {
+        "expression": "p.`100zl_deal_60`",
+        "summary": "SUM",
+        "weight": 1,
+        "filter": "sign",
+    },
+    "ai_name": {
+        "expression": "ad.ai_name",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "mode": {
+        "expression": "ad.`mode`",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "ai_decision_status": {
+        "expression": "t.ai_decision_status",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "ai_pts": {
+        "expression": "ad.ai_pts",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "range",
+    },
+    "ai_decision": {
+        "expression": "ad.ai_decision",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "ai_decision_reason_msg": {
+        "expression": "ad.ai_decision_reason_msg",
+        "summary": None,
+        "weight": 2,
+        "filter": "exact",
+    },
+    "transaction_saldo": {
+        "expression": "t.transaction_saldo",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "sign",
+    },
+    "transaction_100zl_deal": {
+        "expression": "t.transaction_100zl_deal",
+        "summary": "SUM",
+        "weight": 1,
+        "filter": "sign",
+    },
+    "time_to_open": {
+        "expression": "t.time_to_open",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "range",
+    },
+    "time_from_open_to_close": {
+        "expression": "t.time_from_open_to_close",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "range",
+    },
+    "transaction_status": {
+        "expression": "t.transaction_status",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+}
+
+TRANSACTION_REPORT_STATIC_OPTIONS = {
+    "signal_status": [("long", "Long"), ("short", "Short")],
+    "saldo_20_aggr_candles": [
+        ("positive", "Dodatnie (w tym 0)"),
+        ("negative", "Ujemne"),
+    ],
+    "best_candle_20_minute": [
+        (str(minute), str(minute)) for minute in range(1, 21)
+    ],
+    "deal_20": [
+        ("positive", "Dodatnie (w tym 0)"),
+        ("negative", "Ujemne"),
+    ],
+    "saldo_60_aggr_candles": [
+        ("positive", "Dodatnie (w tym 0)"),
+        ("negative", "Ujemne"),
+    ],
+    "best_candle_60_minute": [
+        (str(minute), str(minute)) for minute in range(1, 61)
+    ],
+    "deal_60": [
+        ("positive", "Dodatnie (w tym 0)"),
+        ("negative", "Ujemne"),
+    ],
+    "mode": [
+        ("aggressive", "Aggressive"),
+        ("moderate", "Moderate"),
+    ],
+    "ai_decision_status": [("long", "Long"), ("short", "Short")],
+    "ai_pts": [
+        ("1-20", "1–20"),
+        ("21-40", "21–40"),
+        ("41-60", "41–60"),
+        ("61-80", "61–80"),
+        ("81-100", "81–100"),
+    ],
+    "ai_decision": [
+        ("accept", "Accept"),
+        ("decline", "Decline"),
+    ],
+    "transaction_saldo": [
+        ("positive", "Dodatnie (w tym 0)"),
+        ("negative", "Ujemne"),
+    ],
+    "transaction_100zl_deal": [
+        ("positive", "Dodatnie (w tym 0)"),
+        ("negative", "Ujemne"),
+    ],
+    "time_to_open": [
+        ("0", "0"),
+        ("1-5", "1–5"),
+        ("6-10", "6–10"),
+        ("11-15", "11–15"),
+        ("16-20", "16–20"),
+        ("21+", "21+"),
+    ],
+    "time_from_open_to_close": [
+        ("0", "0"),
+        ("1-5", "1–5"),
+        ("6-10", "6–10"),
+        ("11-15", "11–15"),
+        ("16-20", "16–20"),
+        ("21+", "21+"),
+    ],
+    "transaction_status": [
+        ("awaiting", "Awaiting"),
+        ("in progress", "In progress"),
+        ("closed", "Closed"),
+        ("canceled", "Canceled"),
+    ],
+}
+
+
+class TransactionReportRequest(BaseModel):
+    """Opisuje wybrane kolumny raportu i wartości filtrów wielokrotnego wyboru."""
+
+    columns: list[str] = Field(min_length=1, max_length=20)
+    filters: dict[str, list[str]] = Field(default_factory=dict)
+
+
+def _format_transaction_report_value(value: Any) -> str:
+    """Zamienia wartość z MySQL na tekst używany w tabeli raportu.
+
+    :param value: Wartość zwrócona przez sterownik MySQL.
+    :return: Tekst pola albo pusty tekst dla wartości NULL.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+    return str(value)
+
+
 algorithm_directory = Path(__file__).resolve().parent / "algorithm"
 if not algorithm_directory.is_dir():
     algorithm_directory = (
@@ -3281,6 +3498,230 @@ class MarketDataRepository:
         finally:
             connection.close()
 
+    def fetch_transaction_report_options(self) -> dict[str, list[str]]:
+        """Pobiera aktualne instrumenty, algorytmy i teksty weryfikacji AI.
+
+        :return: Wartości dynamiczne zgrupowane według klucza kolumny.
+        :raises mysql.connector.Error: Gdy MySQL nie udostępni opcji.
+        """
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                dynamic_options = {
+                    "product": """
+                        SELECT DISTINCT s.product
+                        FROM signals AS s
+                        JOIN `transactions` AS t ON t.signal_id = s.id
+                        ORDER BY s.product
+                    """,
+                    "algorithm_name": """
+                        SELECT DISTINCT s.algorithm_name
+                        FROM signals AS s
+                        JOIN `transactions` AS t ON t.signal_id = s.id
+                        ORDER BY s.algorithm_name
+                    """,
+                    "ai_name": """
+                        SELECT DISTINCT ad.ai_name
+                        FROM ai_decisions AS ad
+                        ORDER BY ad.ai_name
+                    """,
+                    "ai_decision_reason_msg": """
+                        SELECT DISTINCT ad.ai_decision_reason_msg
+                        FROM ai_decisions AS ad
+                        ORDER BY ad.ai_decision_reason_msg
+                    """,
+                }
+                options: dict[str, list[str]] = {}
+                for column_name, query in dynamic_options.items():
+                    cursor.execute(query)
+                    options[column_name] = [
+                        str(row[0]) for row in cursor.fetchall()
+                        if row[0] is not None
+                    ]
+                return options
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def fetch_transaction_report_page(
+        self,
+        start_date: date,
+        end_date: date,
+        page: int,
+        columns: list[str],
+        filters: dict[str, list[str]],
+    ) -> tuple[list[list[str]], list[str], bool]:
+        """Pobiera stronę transakcji i podsumowanie wszystkich dopasowanych rekordów.
+
+        :param start_date: Początek włącznego zakresu dat sygnału.
+        :param end_date: Koniec włącznego zakresu dat sygnału.
+        :param page: Numer strony liczony od zera.
+        :param columns: Zaufane klucze wybranych kolumn raportu.
+        :param filters: Wybrane wartości filtrów dla kolumn raportu.
+        :return: Wiersze strony, wiersz podsumowania i informacja o kolejnej stronie.
+        :raises ValueError: Gdy filtr zawiera nieprawidłowy zakres.
+        :raises mysql.connector.Error: Gdy odczyt bazy danych się nie powiedzie.
+        """
+        page_size = 10
+        end_exclusive = end_date + timedelta(days=1)
+        selected_definitions = [
+            TRANSACTION_REPORT_COLUMNS[column_name]
+            for column_name in columns
+        ]
+        conditions = ["s.`datetime` >= %s", "s.`datetime` < %s"]
+        query_values: list[Any] = [start_date, end_exclusive]
+
+        for column_name, selected_values in filters.items():
+            if not selected_values:
+                continue
+            definition = TRANSACTION_REPORT_COLUMNS[column_name]
+            expression = definition["expression"]
+            filter_type = definition["filter"]
+            allowed_options = TRANSACTION_REPORT_STATIC_OPTIONS.get(
+                column_name
+            )
+            if allowed_options is not None:
+                allowed_values = {
+                    value for value, _label in allowed_options
+                }
+                if any(value not in allowed_values for value in selected_values):
+                    raise ValueError(
+                        f"Nieprawidłowa wartość filtra: {column_name}."
+                    )
+
+            if filter_type == "exact":
+                placeholders = ", ".join(["%s"] * len(selected_values))
+                conditions.append(f"{expression} IN ({placeholders})")
+                query_values.extend(selected_values)
+            elif filter_type == "sign":
+                sign_conditions = []
+                if "positive" in selected_values:
+                    sign_conditions.append(f"{expression} >= 0")
+                if "negative" in selected_values:
+                    sign_conditions.append(f"{expression} < 0")
+                if sign_conditions:
+                    conditions.append(
+                        "(" + " OR ".join(sign_conditions) + ")"
+                    )
+            elif filter_type == "range":
+                range_conditions = []
+                for selected_value in selected_values:
+                    if selected_value == "21+":
+                        range_conditions.append(f"{expression} >= %s")
+                        query_values.append(21)
+                    elif selected_value == "0":
+                        range_conditions.append(f"{expression} = %s")
+                        query_values.append(0)
+                    else:
+                        try:
+                            lower_bound, upper_bound = (
+                                int(bound)
+                                for bound in selected_value.split("-", 1)
+                            )
+                        except (TypeError, ValueError) as error:
+                            raise ValueError(
+                                f"Nieprawidłowy zakres filtra: {column_name}."
+                            ) from error
+                        range_conditions.append(
+                            f"{expression} BETWEEN %s AND %s"
+                        )
+                        query_values.extend((lower_bound, upper_bound))
+                if range_conditions:
+                    conditions.append(
+                        "(" + " OR ".join(range_conditions) + ")"
+                    )
+
+        where_clause = "WHERE " + " AND ".join(conditions)
+        from_clause = """
+            FROM signals AS s
+            JOIN `transactions` AS t ON t.signal_id = s.id
+            LEFT JOIN signal_potention AS p ON p.signal_id = s.id
+            LEFT JOIN (
+                SELECT current_decision.*
+                FROM ai_decisions AS current_decision
+                JOIN (
+                    SELECT transaction_id, MAX(`version`) AS latest_version
+                    FROM ai_decisions
+                    GROUP BY transaction_id
+                ) AS latest
+                    ON latest.transaction_id = current_decision.transaction_id
+                    AND latest.latest_version = current_decision.`version`
+            ) AS ad ON ad.transaction_id = t.id
+        """
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                selected_expressions = ", ".join(
+                    definition["expression"]
+                    for definition in selected_definitions
+                )
+                cursor.execute(
+                    f"""
+                    SELECT {selected_expressions}
+                    {from_clause}
+                    {where_clause}
+                    ORDER BY s.`datetime` DESC, s.id DESC, t.id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (*query_values, page_size + 1, page * page_size),
+                )
+                database_rows = cursor.fetchall()
+                has_next_page = len(database_rows) > page_size
+                rows = [
+                    [
+                        _format_transaction_report_value(value)
+                        for value in row
+                    ]
+                    for row in database_rows[:page_size]
+                ]
+
+                aggregate_columns = [
+                    (index, definition["summary"], definition["expression"])
+                    for index, definition in enumerate(selected_definitions)
+                    if definition["summary"] is not None
+                ]
+                summary = [""] * len(columns)
+                if aggregate_columns:
+                    aggregate_expressions = ", ".join(
+                        f"{summary_type}({expression})"
+                        for _index, summary_type, expression
+                        in aggregate_columns
+                    )
+                    cursor.execute(
+                        f"""
+                        SELECT {aggregate_expressions}
+                        {from_clause}
+                        {where_clause}
+                        """,
+                        tuple(query_values),
+                    )
+                    aggregate_values = cursor.fetchone()
+                    if aggregate_values is not None:
+                        for aggregate_index, (
+                            column_index,
+                            summary_type,
+                            _expression,
+                        ) in enumerate(aggregate_columns):
+                            value = aggregate_values[aggregate_index]
+                            if value is not None:
+                                summary_label = (
+                                    "Średnia"
+                                    if summary_type == "AVG"
+                                    else "Suma"
+                                )
+                                summary[column_index] = (
+                                    f"{summary_label}: "
+                                    f"{_format_transaction_report_value(value)}"
+                                )
+                return rows, summary, has_next_page
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     def fetch_latest_analysis_candles(
         self, limit: int
     ) -> list[tuple[str, str, str, str, str, str]]:
@@ -5283,6 +5724,152 @@ def filtered_candle_report(
 
     report_lines = ["1" if has_next_page else "0"]
     report_lines.extend("\t".join(row) for row in rows)
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.get("/api/reports/transactions/options", response_class=Response)
+def transaction_report_options(request: Request) -> Response:
+    """Udostępnia aktualne wartości do list wyboru raportu.
+
+    :param request: Żądanie zawierające aktywne repozytorium bazy.
+    :return: Opcje filtrów w TSV z wartościami zakodowanymi procentowo.
+    :raises HTTPException: Z kodem 503, gdy MySQL nie udostępnia opcji.
+    """
+    try:
+        dynamic_options = (
+            request.app.state.repository.fetch_transaction_report_options()
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się pobrać opcji raportu transakcji z MySQL.",
+        ) from error
+
+    all_options = {
+        column_name: list(
+            TRANSACTION_REPORT_STATIC_OPTIONS.get(column_name, [])
+        )
+        for column_name in TRANSACTION_REPORT_COLUMNS
+    }
+    for column_name, values in dynamic_options.items():
+        all_options[column_name] = [
+            (value, value if value else "(pusta wartość)")
+            for value in values
+        ]
+
+    report_lines = []
+    for column_name in TRANSACTION_REPORT_COLUMNS:
+        for value, label in all_options[column_name]:
+            report_lines.append(
+                "\t".join(
+                    (column_name, quote(value, safe=""), quote(label, safe=""))
+                )
+            )
+    return Response(
+        content="\n".join(report_lines),
+        media_type="text/tab-separated-values; charset=utf-8",
+    )
+
+
+@app.post("/api/reports/transactions/filtered", response_class=Response)
+def filtered_transaction_report(
+    request: Request,
+    report: TransactionReportRequest,
+    start_date: date,
+    end_date: date,
+    page: int = Query(ge=0, le=1000000),
+) -> Response:
+    """Zwraca stronę danych i podsumowanie dla wybranych kolumn.
+
+    :param request: Żądanie zawierające aktywne repozytorium bazy.
+    :param report: Kolumny i filtry przekazane w treści JSON.
+    :param start_date: Początek włącznego zakresu dat sygnału.
+    :param end_date: Koniec włącznego zakresu dat sygnału.
+    :param page: Numer strony liczony od zera.
+    :return: Maksymalnie 10 wierszy oraz wiersz podsumowania w formacie TSV.
+    :raises HTTPException: Z kodem 422 dla błędnego wyboru lub 503 dla błędu MySQL.
+    """
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="Data końcowa nie może być wcześniejsza niż data początkowa.",
+        )
+
+    if len(set(report.columns)) != len(report.columns):
+        raise HTTPException(
+            status_code=422,
+            detail="Raport nie może zawierać powtórzonych kolumn.",
+        )
+    unknown_columns = set(report.columns) - set(TRANSACTION_REPORT_COLUMNS)
+    if unknown_columns:
+        raise HTTPException(
+            status_code=422,
+            detail="Raport zawiera nieobsługiwane kolumny.",
+        )
+    selected_weight = sum(
+        TRANSACTION_REPORT_COLUMNS[column_name]["weight"]
+        for column_name in report.columns
+    )
+    if selected_weight > 8:
+        raise HTTPException(
+            status_code=422,
+            detail="Raport może zawierać najwyżej osiem jednostek kolumn.",
+        )
+
+    for column_name, selected_values in report.filters.items():
+        if column_name not in report.columns:
+            raise HTTPException(
+                status_code=422,
+                detail="Filtry można ustawiać tylko dla wybranych kolumn.",
+            )
+        if len(selected_values) > 1000 or any(
+            len(value) > 255 for value in selected_values
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Filtr zawiera zbyt wiele lub zbyt długie wartości.",
+            )
+        allowed_options = TRANSACTION_REPORT_STATIC_OPTIONS.get(column_name)
+        if allowed_options is not None:
+            allowed_values = {value for value, _label in allowed_options}
+            if any(value not in allowed_values for value in selected_values):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Filtr zawiera nieobsługiwaną wartość.",
+                )
+
+    try:
+        rows, summary, has_next_page = (
+            request.app.state.repository.fetch_transaction_report_page(
+                start_date,
+                end_date,
+                page,
+                report.columns,
+                report.filters,
+            )
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się wygenerować raportu transakcji z MySQL.",
+        ) from error
+
+    report_lines = [
+        "1" if has_next_page else "0",
+        str(len(rows)),
+    ]
+    report_lines.extend(
+        "\t".join(quote(value, safe="") for value in row)
+        for row in rows
+    )
+    report_lines.append(
+        "\t".join(quote(value, safe="") for value in summary)
+    )
     return Response(
         content="\n".join(report_lines),
         media_type="text/tab-separated-values; charset=utf-8",

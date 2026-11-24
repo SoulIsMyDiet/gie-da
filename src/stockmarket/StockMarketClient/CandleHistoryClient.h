@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,23 @@ struct CandleReportEntry {
     std::string volume;
     std::string bid;
     std::string ask;
+};
+
+/**
+ * Przechowuje wartość i polską etykietę opcji filtra raportu transakcji.
+ */
+struct TransactionReportFilterOption {
+    std::string value;
+    std::string label;
+};
+
+/**
+ * Przechowuje dane jednej strony dynamicznego raportu transakcji.
+ */
+struct TransactionReportPage {
+    bool hasNextPage = false;
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::string> summary;
 };
 
 /**
@@ -368,6 +386,38 @@ public:
         std::size_t page,
         std::vector<CandleReportEntry>& candles,
         bool& hasNextPage,
+        std::string& error);
+
+    /**
+     * Pobiera aktualne wartości dla filtrów dynamicznych raportu transakcji.
+     * @param options Otrzymuje listę opcji pogrupowaną według pola raportu.
+     * @param error Otrzymuje opis błędu pobierania lub odpowiedzi API.
+     * @return true, jeśli API zwróciło poprawne opcje filtrów.
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na opcje.
+     */
+    static bool fetchTransactionReportOptions(
+        std::map<std::string, std::vector<TransactionReportFilterOption>>& options,
+        std::string& error);
+
+    /**
+     * Pobiera stronę wybranych kolumn raportu oraz wiersz podsumowania.
+     * @param startDate Początkowa data w formacie YYYY-MM-DD.
+     * @param endDate Końcowa data w formacie YYYY-MM-DD, włącznie.
+     * @param page Numer strony liczony od zera.
+     * @param columns Klucze kolumn, które mają zostać zwrócone.
+     * @param filters Wartości filtrów wybranych dla poszczególnych kolumn.
+     * @param report Otrzymuje maksymalnie 10 rekordów i podsumowanie.
+     * @param error Otrzymuje opis błędu pobierania lub odpowiedzi API.
+     * @return true, jeśli API zwróciło poprawną stronę raportu.
+     * @throws std::bad_alloc Gdy nie można przydzielić pamięci na odpowiedź.
+     */
+    static bool fetchTransactionReportPage(
+        const std::string& startDate,
+        const std::string& endDate,
+        std::size_t page,
+        const std::vector<std::string>& columns,
+        const std::map<std::string, std::vector<std::string>>& filters,
+        TransactionReportPage& report,
         std::string& error);
 
     /**

@@ -59,6 +59,25 @@ pliki pozostają zachowane.
 
 Dane bazy są przechowywane w wolumenie Dockera `mysql_data`. Przy uruchomieniu API tabela `price_history`, jeśli istnieje, jest usuwana wraz z zawartością. Nie używaj `docker compose down -v`, jeśli chcesz zachować pozostałe dane — opcja `-v` usuwa cały wolumen.
 
+## Raport transakcji
+
+Widok „Transakcje” pobiera aktualne wartości list wyboru z
+`GET /api/reports/transactions/options`; instrumenty, algorytmy i nazwy oraz
+argumenty modeli AI są odczytywane z bazy, więc nowe wartości pojawiają się bez
+zmiany klienta. Raport jest generowany przez
+`POST /api/reports/transactions/filtered` z datami `start_date` i `end_date`,
+numerem strony oraz listą wybranych kolumn i filtrów. Zakres dat dotyczy
+`signals.datetime` i obejmuje oba wskazane dni.
+
+Wyniki łączą `signals`, `signal_potention`, `transactions` i najnowszą wersję
+`ai_decisions` dla każdej transakcji. Kierunek sygnału jest pobierany z
+`signals.signal`; wyniki okien 20- i 60-minutowych pochodzą z
+`signal_potention`. Strona zawiera do 10 transakcji oraz dodatkowy wiersz
+podsumowania obliczony dla wszystkich rekordów spełniających filtry. Wartości
+„Dodatnie” obejmują zero; kolumny oznaczone jako średnia używają `AVG`, a
+kolumny wyniku dla 100 zł używają `SUM`. Można wybrać najwyżej 8 jednostek
+szerokości kolumn; argumenty AI zajmują 2 jednostki.
+
 ## Struktura danych
 
 - `products`: unikalne symbole wewnętrzne produktów (np. `EUR/USD`). Przed wysłaniem żądania symbol `EUR/USD` jest uzywany zarowno w lokalnej bazie, jak i w zadaniach Twelve Data.
