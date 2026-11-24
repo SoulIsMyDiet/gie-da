@@ -35,6 +35,7 @@ constexpr std::size_t maximumHistoryCandlesPerInstrument = 1000;
  */
 struct IBKRInstrumentDefinition {
     int historicalRequestId;
+    int quoteRequestId;
     const char* databaseSymbol;
     const char* contractSymbol;
     const char* securityType;
@@ -46,13 +47,23 @@ struct IBKRInstrumentDefinition {
 
 // Rejestr musi odpowiadać instrumentom z market_products.py.
 constexpr std::array<IBKRInstrumentDefinition, 6> ibkrInstrumentRegistry{{
-    {9251, "EUR/USD", "EUR", "CASH", "IDEALPRO", "USD", "MIDPOINT", false},
-    {9253, "USD/MXN", "USD", "CASH", "IDEALPRO", "MXN", "MIDPOINT", false},
-    {9254, "USD/JPY", "USD", "CASH", "IDEALPRO", "JPY", "MIDPOINT", false},
-    {9255, "XAU/USD", "XAUUSD", "CMDTY", "SMART", "USD", "MIDPOINT", false},
+    {
+        9251, 9252, "EUR/USD", "EUR", "CASH", "IDEALPRO", "USD",
+        "MIDPOINT", false},
+    {
+        9253, 9258, "USD/MXN", "USD", "CASH", "IDEALPRO", "MXN",
+        "MIDPOINT", false},
+    {
+        9254, 9259, "USD/JPY", "USD", "CASH", "IDEALPRO", "JPY",
+        "MIDPOINT", false},
+    {
+        9255, 0, "XAU/USD", "XAUUSD", "CMDTY", "SMART", "USD", "MIDPOINT",
+        false},
     // Świece rynku krypto wymagają typu AGGTRADES w IBKR.
-    {9256, "BTC/USD", "BTC", "CRYPTO", "PAXOS", "USD", "AGGTRADES", false},
-    {9257, "AAPL", "AAPL", "STK", "SMART", "USD", "TRADES", true},
+    {
+        9256, 0, "BTC/USD", "BTC", "CRYPTO", "PAXOS", "USD", "AGGTRADES",
+        false},
+    {9257, 0, "AAPL", "AAPL", "STK", "SMART", "USD", "TRADES", true},
 }};
 
 /**
@@ -75,6 +86,22 @@ const IBKRInstrumentDefinition* findInstrumentByRequestId(int requestId) {
     for (const IBKRInstrumentDefinition& instrument :
          ibkrInstrumentRegistry) {
         if (instrument.historicalRequestId == requestId) {
+            return &instrument;
+        }
+    }
+    return nullptr;
+}
+
+/**
+ * Znajduje konfigurację instrumentu po identyfikatorze kwotowań IBKR.
+ * @param requestId Identyfikator żądania kwotowań zwrócony przez IBKR.
+ * @return Wskaźnik do konfiguracji albo nullptr dla innego żądania.
+ */
+const IBKRInstrumentDefinition* findInstrumentByQuoteRequestId(int requestId) {
+    for (const IBKRInstrumentDefinition& instrument :
+         ibkrInstrumentRegistry) {
+        if (instrument.quoteRequestId != 0 &&
+            instrument.quoteRequestId == requestId) {
             return &instrument;
         }
     }
@@ -234,6 +261,7 @@ bool IBGatewayClient::connect(
         pendingCandlesBySymbol_.clear();
         quote_ = {};
         quote_.message = "Oczekiwanie na kwotowania bid/ask z IBKR.";
+        quotesBySymbol_.clear();
         historySyncRequested_ = false;
         historySyncInProgress_ = false;
         historySyncRequestId_ = 0;
@@ -394,12 +422,18 @@ void IBGatewayClient::error(
     } else if (currentStatus.state == IBGatewayConnectionState::Connected) {
         const IBKRInstrumentDefinition* instrument =
             findInstrumentByRequestId(id);
+        const IBKRInstrumentDefinition* quoteInstrument =
+            findInstrumentByQuoteRequestId(id);
         if (id == eurUsdHistoricalRequestId) {
             ErrorLogger::warning(message);
             updateCandleMessage(message);
-        } else if (id == eurUsdQuoteRequestId) {
-            ErrorLogger::warning(message);
-            updateQuoteMessage(message);
+        } else if (quoteInstrument != nullptr) {
+            const std::string symbol = quoteInstrument->databaseSymbol;
+            ErrorLogger::warning(
+                "Błąd kwotowań IBKR dla " + symbol + ": " + message);
+            if (id == eurUsdQuoteRequestId) {
+                updateQuoteMessage(message);
+            }
         } else if (instrument != nullptr) {
             ErrorLogger::warning(
                 "Błąd strumienia IBKR dla " +
@@ -468,29 +502,41 @@ void IBGatewayClient::tickPrice(
     double price,
     const TickAttrib& attrib) {
     static_cast<void>(attrib);
+    const IBKRInstrumentDefinition* instrument =
+        findInstrumentByQuoteRequestId(requestId);
     const bool isBid = tickType == BID || tickType == DELAYED_BID;
     const bool isAsk = tickType == ASK || tickType == DELAYED_ASK;
-    if (requestId != eurUsdQuoteRequestId ||
+    if (instrument == nullptr ||
         !std::isfinite(price) || price <= 0.0 || (!isBid && !isAsk)) {
         return;
     }
 
+    bool shouldNotify = false;
     {
         const std::lock_guard<std::mutex> lock(statusMutex_);
-        quote_.delayed =
+        IBGatewayQuoteSnapshot& quote =
+            quotesBySymbol_[instrument->databaseSymbol];
+        quote.delayed =
             tickType == DELAYED_BID || tickType == DELAYED_ASK;
         if (isBid) {
-            quote_.bid = price;
-            quote_.bidAvailable = true;
+            quote.bid = price;
+            quote.bidAvailable = true;
         } else {
-            quote_.ask = price;
-            quote_.askAvailable = true;
+            quote.ask = price;
+            quote.askAvailable = true;
         }
-        quote_.message = quote_.delayed
-            ? "Uwaga: kwotowania EUR/USD są opóźnione."
-            : "Bieżące kwotowania EUR/USD z IBKR.";
+        const std::string symbol = instrument->databaseSymbol;
+        quote.message = quote.delayed
+            ? "Uwaga: kwotowania " + symbol + " są opóźnione."
+            : "Bieżące kwotowania " + symbol + " z IBKR.";
+        if (requestId == eurUsdQuoteRequestId) {
+            quote_ = quote;
+            shouldNotify = true;
+        }
     }
-    notifyStatusChanged();
+    if (shouldNotify) {
+        notifyStatusChanged();
+    }
 }
 
 /**
@@ -607,13 +653,6 @@ void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
 
     const bool isDisplayedInstrument =
         requestId == eurUsdHistoricalRequestId;
-    if (isDisplayedInstrument) {
-        const IBGatewayQuoteSnapshot quote = quoteSnapshot();
-        updatedCandle.bidAvailable = quote.bidAvailable;
-        updatedCandle.bid = quote.bid;
-        updatedCandle.askAvailable = quote.askAvailable;
-        updatedCandle.ask = quote.ask;
-    }
 
     const auto currentMinute = std::chrono::floor<std::chrono::minutes>(
         std::chrono::system_clock::now());
@@ -624,6 +663,13 @@ void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
     bool shouldUpdateDisplay = false;
     {
         const std::lock_guard<std::mutex> lock(statusMutex_);
+        const auto quote = quotesBySymbol_.find(symbol);
+        if (quote != quotesBySymbol_.end()) {
+            updatedCandle.bidAvailable = quote->second.bidAvailable;
+            updatedCandle.bid = quote->second.bid;
+            updatedCandle.askAvailable = quote->second.askAvailable;
+            updatedCandle.ask = quote->second.ask;
+        }
         const auto lastCompleted =
             lastCompletedCandleTimestampBySymbol_.find(symbol);
         const auto pending =
@@ -828,7 +874,7 @@ void IBGatewayClient::runConnection(
     std::unique_ptr<EClientSocket> client;
     bool disconnected = false;
     std::array<bool, ibkrInstrumentRegistry.size()> historicalRequestsStarted{};
-    bool marketDataRequestStarted = false;
+    std::array<bool, ibkrInstrumentRegistry.size()> quoteRequestsStarted{};
     try {
         client = std::make_unique<EClientSocket>(this, &readerSignal_);
         client->asyncEConnect(true);
@@ -907,22 +953,34 @@ void IBGatewayClient::runConnection(
                         historicalRequestsStarted[index] = true;
                     }
                 }
-                if (!marketDataRequestStarted &&
-                    currentStatus.state ==
-                        IBGatewayConnectionState::Connected) {
-                    Contract contract;
-                    configureContract(
-                        contract, ibkrInstrumentRegistry.front());
-                    updateQuoteMessage(
-                        "Oczekiwanie na kwotowania bid/ask z IBKR...");
-                    client->reqMktData(
-                        eurUsdQuoteRequestId,
-                        contract,
-                        "",
-                        false,
-                        false,
-                        TagValueListSPtr());
-                    marketDataRequestStarted = true;
+                if (currentStatus.state ==
+                    IBGatewayConnectionState::Connected) {
+                    for (std::size_t index = 0;
+                         index < ibkrInstrumentRegistry.size();
+                         ++index) {
+                        const IBKRInstrumentDefinition& instrument =
+                            ibkrInstrumentRegistry[index];
+                        if (instrument.quoteRequestId == 0 ||
+                            quoteRequestsStarted[index]) {
+                            continue;
+                        }
+
+                        Contract contract;
+                        configureContract(contract, instrument);
+                        if (instrument.quoteRequestId ==
+                            eurUsdQuoteRequestId) {
+                            updateQuoteMessage(
+                                "Oczekiwanie na kwotowania bid/ask z IBKR...");
+                        }
+                        client->reqMktData(
+                            instrument.quoteRequestId,
+                            contract,
+                            "",
+                            false,
+                            false,
+                            TagValueListSPtr());
+                        quoteRequestsStarted[index] = true;
+                    }
                 }
                 int historyRequestId = 0;
                 std::size_t historyInstrumentIndex = 0;
@@ -1005,8 +1063,13 @@ void IBGatewayClient::runConnection(
             if (activeHistoryRequestId != 0 && client->isConnected()) {
                 client->cancelHistoricalData(activeHistoryRequestId);
             }
-            if (marketDataRequestStarted && client->isConnected()) {
-                client->cancelMktData(eurUsdQuoteRequestId);
+            for (std::size_t index = 0;
+                 index < quoteRequestsStarted.size();
+                 ++index) {
+                if (quoteRequestsStarted[index] && client->isConnected()) {
+                    client->cancelMktData(
+                        ibkrInstrumentRegistry[index].quoteRequestId);
+                }
             }
             client->eDisconnect();
             disconnected = true;
@@ -1040,8 +1103,13 @@ void IBGatewayClient::runConnection(
         if (activeHistoryRequestId != 0 && client->isConnected()) {
             client->cancelHistoricalData(activeHistoryRequestId);
         }
-        if (marketDataRequestStarted && client->isConnected()) {
-            client->cancelMktData(eurUsdQuoteRequestId);
+        for (std::size_t index = 0;
+             index < quoteRequestsStarted.size();
+             ++index) {
+            if (quoteRequestsStarted[index] && client->isConnected()) {
+                client->cancelMktData(
+                    ibkrInstrumentRegistry[index].quoteRequestId);
+            }
         }
         client->eDisconnect();
     }

@@ -48,7 +48,7 @@ struct IBGatewayOneMinuteCandle {
 };
 
 /**
- * Przechowuje ostatnie dostępne ceny bid i ask dla EUR/USD.
+ * Przechowuje ostatnie dostępne ceny bid i ask dla instrumentu IBKR.
  */
 struct IBGatewayQuoteSnapshot {
     bool bidAvailable = false;
@@ -251,6 +251,9 @@ private:
     IBGatewayConnectionStatus status_;
     IBGatewayOneMinuteCandle candle_;
     IBGatewayQuoteSnapshot quote_;
+    // Backend: przechowuje osobne kwotowania dla każdego instrumentu z rejestru.
+    std::unordered_map<std::string, IBGatewayQuoteSnapshot>
+        quotesBySymbol_;
     // Backend: buforuje osobną, aktualnie tworzoną świecę każdego instrumentu.
     std::unordered_map<std::string, IBKRCandleData> pendingCandlesBySymbol_;
     // Backend: zapamiętuje czasy już zakolejkowanych świec dla każdego symbolu.
