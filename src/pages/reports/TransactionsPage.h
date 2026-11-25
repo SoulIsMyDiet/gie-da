@@ -27,16 +27,15 @@ public:
     bool create(HINSTANCE instance, HWND parent);
 
     /**
-     * Pokazuje filtry i zachowuje poprzednio wybrane kolumny oraz wartości.
+     * Otwiera widok i pokazuje listy opcji dla zaznaczonych kolumn.
      * @return Brak (funkcja zmienia widoczność kontrolek).
-     * @throws std::bad_alloc Gdy nie można zapisać zaznaczonych wartości filtra.
+     * @throws std::bad_alloc Gdy nie można wczytać lub wyświetlić opcji filtrów.
      */
     void open();
 
     /**
-     * Ukrywa widok i zapisuje wybór z aktualnie otwartej listy.
+     * Ukrywa widok i zamyka wszystkie otwarte listy filtrów.
      * @return Brak (funkcja zmienia widoczność kontrolek).
-     * @throws std::bad_alloc Gdy nie można zapisać zaznaczonych wartości filtra.
      */
     void close();
 
@@ -94,11 +93,12 @@ private:
     bool showFilterOptions(std::size_t filterIndex);
 
     /**
-     * Zapisuje zaznaczone wartości aktualnie widocznej listy.
+     * Zapisuje zaznaczone wartości wskazanej listy po każdej zmianie.
+     * @param filterIndex Indeks filtra, którego lista zmieniła zaznaczenie.
      * @return Brak (funkcja uaktualnia stan filtrów).
      * @throws std::bad_alloc Gdy nie można przydzielić pamięci na wartości filtra.
      */
-    void storeActiveFilterSelection();
+    void storeFilterSelection(std::size_t filterIndex);
 
     /**
      * Zwraca klucze wybranych kolumn w kolejności widocznej w formularzu.
@@ -126,17 +126,16 @@ private:
     HWND toDateLabel_ = nullptr;
     HWND toDatePicker_ = nullptr;
     HWND generateButton_ = nullptr;
-    HWND closeFilterButton_ = nullptr;
     HWND previousPageButton_ = nullptr;
     HWND nextPageButton_ = nullptr;
     std::vector<HWND> filterButtons_;
     std::vector<HWND> filterLists_;
+    std::vector<bool> openFilterLists_;
     std::vector<bool> filterSelected_;
     std::vector<std::vector<std::string>> filterOptionValues_;
     std::vector<std::vector<std::string>> selectedFilterValues_;
     std::map<std::string, std::vector<TransactionReportFilterOption>>
         filterOptions_;
-    int activeFilterIndex_ = -1;
     bool filterOptionsLoaded_ = false;
     bool visible_ = false;
     bool generated_ = false;
@@ -152,4 +151,6 @@ private:
     int controlFontHeight_ = 0;
     HFONT buttonFont_ = nullptr;
     int buttonFontHeight_ = 0;
+    HFONT filterButtonFont_ = nullptr;
+    int filterButtonFontHeight_ = 0;
 };

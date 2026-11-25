@@ -23,22 +23,26 @@ constexpr int nextPageButtonId = 1504;
 constexpr int generateButtonId = 1505;
 constexpr int firstFilterButtonId = 1510;
 constexpr int firstFilterListId = 1600;
-constexpr int closeFilterButtonId = 1540;
-constexpr int filterButtonColumns = 6;
+constexpr int filterButtonColumns = 12;
+constexpr int referenceFilterButtonColumns = 6;
+constexpr int filterButtonWidthDivisor = 2;
+constexpr int filterButtonFontHeight = 7;
+constexpr int datePickerSizeDivisor = 3;
+constexpr int filterListHeightDivisor = 2;
 constexpr int formTop = 12;
 constexpr int formMargin = 12;
 constexpr int formGap = 6;
 constexpr int labelHeight = 16;
 constexpr int pickerHeight = 24;
-constexpr int filterButtonHeight = 30;
-constexpr int filterButtonGap = 4;
+constexpr int filterButtonHeight = 15;
+constexpr int referenceFilterButtonGap = 4;
+constexpr int filterButtonGap = 2;
 constexpr int filterListHeight = 78;
 constexpr int tableGap = 8;
-constexpr int navigationReservedHeight = 52;
-constexpr int footerMargin = 8;
 constexpr int pageLabelHeight = 16;
-constexpr int pageButtonWidth = 44;
-constexpr int pageButtonHeight = 22;
+constexpr int pageLabelWidth = 72;
+constexpr int pageButtonWidth = 24;
+constexpr int pageButtonHeight = 16;
 constexpr int generateButtonWidth = 78;
 
 struct ReportColumnDefinition {
@@ -75,8 +79,6 @@ const std::array<ReportColumnDefinition, 20> reportColumns{{
 constexpr std::size_t reportColumnCount = reportColumns.size();
 constexpr std::size_t legacyButtonIndex = reportColumnCount;
 constexpr std::size_t filterButtonCount = reportColumnCount + 1;
-constexpr int dropdownReservedHeight = filterListHeight;
-
 /**
  * Konwertuje tekst UTF-8 z API do tekstu Unicode używanego przez Windows.
  * @param text Tekst źródłowy w UTF-8.
@@ -134,28 +136,56 @@ void drawCell(HDC deviceContext, const std::wstring& text, RECT bounds) {
 }
 
 /**
- * Zwraca pozycję początku tabeli, pozostawiając miejsce na filtry.
+ * Wyznacza początek tabeli z uwzględnieniem filtrów i nawigacji stron.
  * @param parent Okno, którego skalowanie określa położenie tabeli.
- * @return Wysokość górnego obszaru filtrów w pikselach.
+ * @return Wysokość górnego obszaru filtrów i nawigacji w pikselach.
  */
-int calculateTableTop(HWND parent) {
+int calculateTableTop(
+    HWND parent,
+    const std::vector<bool>& openFilterLists) {
     const int top = WindowScale::size(parent, formTop);
     const int margin = WindowScale::size(parent, formMargin);
     const int gap = WindowScale::size(parent, formGap);
-    const int labelHeightScaled = WindowScale::size(parent, labelHeight);
-    const int pickerHeightScaled = WindowScale::size(parent, pickerHeight);
+    const int labelHeightScaled =
+        WindowScale::size(parent, labelHeight / datePickerSizeDivisor);
+    const int pickerHeightScaled =
+        WindowScale::size(parent, pickerHeight / datePickerSizeDivisor);
+    const int generateButtonHeightScaled =
+        WindowScale::size(parent, pickerHeight);
     const int buttonHeight = WindowScale::size(parent, filterButtonHeight);
     const int buttonGap = WindowScale::size(parent, filterButtonGap);
-    const int gridTop =
-        top + labelHeightScaled + pickerHeightScaled + gap;
+    const int filterListHeightScaled = WindowScale::size(
+        parent, filterListHeight / filterListHeightDivisor);
+    const int formHeight = std::max(
+        generateButtonHeightScaled,
+        labelHeightScaled + pickerHeightScaled);
+    const int gridTop = top + formHeight + gap;
     const int rowCount = static_cast<int>(
         (filterButtonCount + filterButtonColumns - 1) /
         filterButtonColumns);
     const int buttonGridBottom =
         gridTop + rowCount * (buttonHeight + buttonGap) - buttonGap;
+    int expandedRowCount = 0;
+    for (std::size_t row = 0; row < static_cast<std::size_t>(rowCount); ++row) {
+        const std::size_t firstIndex =
+            row * static_cast<std::size_t>(filterButtonColumns);
+        const std::size_t lastIndex = std::min(
+            openFilterLists.size(),
+            firstIndex + static_cast<std::size_t>(filterButtonColumns));
+        if (std::any_of(
+                openFilterLists.begin() + firstIndex,
+                openFilterLists.begin() + lastIndex,
+                [](bool isOpen) { return isOpen; })) {
+            ++expandedRowCount;
+        }
+    }
     return buttonGridBottom + gap +
-           WindowScale::size(parent, dropdownReservedHeight) +
-           WindowScale::size(parent, tableGap) + margin;
+           expandedRowCount * (filterListHeightScaled + buttonGap) +
+           WindowScale::size(parent, tableGap) + margin +
+           std::max(
+               WindowScale::size(parent, pageButtonHeight),
+               WindowScale::size(parent, pageLabelHeight)) +
+           gap;
 }
 
 } // namespace
@@ -170,6 +200,9 @@ TransactionsPage::~TransactionsPage() {
     if (buttonFont_ != nullptr) {
         DeleteObject(buttonFont_);
     }
+    if (filterButtonFont_ != nullptr) {
+        DeleteObject(filterButtonFont_);
+    }
 }
 
 /**
@@ -182,6 +215,7 @@ bool TransactionsPage::create(HINSTANCE instance, HWND parent) {
     parent_ = parent;
     filterButtons_.resize(filterButtonCount, nullptr);
     filterLists_.resize(reportColumnCount, nullptr);
+    openFilterLists_.resize(reportColumnCount, false);
     filterOptionValues_.resize(reportColumnCount);
     selectedFilterValues_.resize(reportColumnCount);
     filterSelected_.resize(filterButtonCount, false);
@@ -232,18 +266,10 @@ bool TransactionsPage::create(HINSTANCE instance, HWND parent) {
         0, 0, 0, 0, parent_,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(generateButtonId)),
         instance, nullptr);
-    closeFilterButton_ = CreateWindowExW(
-        0, L"BUTTON", L"Gotowe",
-        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, 0, 0, parent_,
-        reinterpret_cast<HMENU>(
-            static_cast<INT_PTR>(closeFilterButtonId)),
-        instance, nullptr);
-
     if (fromDateLabel_ == nullptr || fromDatePicker_ == nullptr ||
         toDateLabel_ == nullptr || toDatePicker_ == nullptr ||
         previousPageButton_ == nullptr || nextPageButton_ == nullptr ||
-        generateButton_ == nullptr || closeFilterButton_ == nullptr) {
+        generateButton_ == nullptr) {
         return false;
     }
 
@@ -305,23 +331,29 @@ bool TransactionsPage::create(HINSTANCE instance, HWND parent) {
 }
 
 /**
- * Otwiera widok, zachowując daty, kolumny i wybrane opcje filtrów.
+ * Otwiera widok i pokazuje listy opcji dla zaznaczonych kolumn.
  */
 void TransactionsPage::open() {
     visible_ = true;
-    activeFilterIndex_ = -1;
+    std::fill(openFilterLists_.begin(), openFilterLists_.end(), false);
     filterOptionsLoaded_ = false;
+    positionControls();
     updateControls();
+    for (std::size_t index = 0; index < reportColumnCount; ++index) {
+        if (filterSelected_[index] && !showFilterOptions(index)) {
+            break;
+        }
+    }
 }
 
 /**
  * Ukrywa widok, pozostawiając stan raportu do następnego otwarcia.
  */
 void TransactionsPage::close() {
-    storeActiveFilterSelection();
     visible_ = false;
-    activeFilterIndex_ = -1;
+    std::fill(openFilterLists_.begin(), openFilterLists_.end(), false);
     filterOptionsLoaded_ = false;
+    positionControls();
     updateControls();
 }
 
@@ -344,7 +376,7 @@ bool TransactionsPage::handleCommand(
         const int filterIndex = controlId - firstFilterListId;
         if (filterIndex >= 0 &&
             static_cast<std::size_t>(filterIndex) < reportColumnCount) {
-            storeActiveFilterSelection();
+            storeFilterSelection(static_cast<std::size_t>(filterIndex));
             return true;
         }
     }
@@ -355,14 +387,6 @@ bool TransactionsPage::handleCommand(
 
     if (controlId == generateButtonId) {
         generateReport();
-        return true;
-    }
-    if (controlId == closeFilterButtonId) {
-        storeActiveFilterSelection();
-        activeFilterIndex_ = -1;
-        status_.clear();
-        updateControls();
-        InvalidateRect(parent_, nullptr, TRUE);
         return true;
     }
     if (controlId == previousPageButtonId && currentPage_ > 0) {
@@ -385,6 +409,13 @@ bool TransactionsPage::handleCommand(
         const bool isChecked =
             SendMessageW(filterButtons_[filterIndex], BM_GETCHECK, 0, 0) ==
             BST_CHECKED;
+        if (filterSelected_[filterIndex] &&
+            !openFilterLists_[filterIndex] && !isChecked) {
+            SendMessageW(
+                filterButtons_[filterIndex], BM_SETCHECK, BST_CHECKED, 0);
+            showFilterOptions(filterIndex);
+            return true;
+        }
         if (isChecked && !filterSelected_[filterIndex]) {
             int selectedWeight = 0;
             for (std::size_t index = 0; index < reportColumnCount; ++index) {
@@ -402,15 +433,10 @@ bool TransactionsPage::handleCommand(
             }
             filterSelected_[filterIndex] = true;
         } else if (!isChecked && filterSelected_[filterIndex]) {
-            if (activeFilterIndex_ == static_cast<int>(filterIndex)) {
-                storeActiveFilterSelection();
-                activeFilterIndex_ = -1;
-                filterSelected_[filterIndex] = false;
-            } else {
-                SendMessageW(
-                    filterButtons_[filterIndex], BM_SETCHECK,
-                    BST_CHECKED, 0);
-            }
+            storeFilterSelection(filterIndex);
+            filterSelected_[filterIndex] = false;
+            openFilterLists_[filterIndex] = false;
+            positionControls();
         }
 
         status_.clear();
@@ -432,7 +458,7 @@ bool TransactionsPage::handleCommand(
 }
 
 /**
- * Rozmieszcza daty, siatkę filtrów, listę opcji i przyciski nawigacji.
+ * Rozmieszcza daty, siatkę filtrów, otwarte listy opcji i przyciski nawigacji.
  */
 void TransactionsPage::positionControls() {
     if (parent_ == nullptr) {
@@ -453,60 +479,89 @@ void TransactionsPage::positionControls() {
                 scaledGap * 3) /
                    2));
     const int firstX = scaledMargin;
-    const int secondX = firstX + fieldWidth + scaledGap;
+    const int datePickerWidth =
+        std::max(1, fieldWidth / datePickerSizeDivisor);
+    const int secondX = firstX + datePickerWidth + scaledGap;
+    const int generateX = secondX + datePickerWidth + scaledGap;
     const int labelY = WindowScale::size(parent_, formTop);
-    const int labelHeightScaled = WindowScale::size(parent_, labelHeight);
-    const int pickerY = labelY + labelHeightScaled;
+    const int labelHeightScaled =
+        WindowScale::size(parent_, labelHeight / datePickerSizeDivisor);
     const int pickerHeightScaled =
+        WindowScale::size(parent_, pickerHeight / datePickerSizeDivisor);
+    const int generateButtonHeightScaled =
         WindowScale::size(parent_, pickerHeight);
-    const int filterTop =
-        pickerY + pickerHeightScaled + scaledGap;
+    const int pickerY = labelY + labelHeightScaled;
+    const int formHeight = std::max(
+        generateButtonHeightScaled,
+        labelHeightScaled + pickerHeightScaled);
+    const int filterTop = labelY + formHeight + scaledGap;
     const int buttonHeight =
         WindowScale::size(parent_, filterButtonHeight);
     const int buttonGap =
         WindowScale::size(parent_, filterButtonGap);
     const int filterListHeightScaled =
-        WindowScale::size(parent_, filterListHeight);
+        WindowScale::size(
+            parent_, filterListHeight / filterListHeightDivisor);
     const int contentWidth =
         std::max(1, clientWidth - scaledMargin * 2);
-    const int buttonWidth = std::max(
+    const int referenceButtonGap =
+        WindowScale::size(parent_, referenceFilterButtonGap);
+    const int referenceButtonWidth = std::max(
         1, (contentWidth -
-            buttonGap * (filterButtonColumns - 1)) /
-               filterButtonColumns);
-    const int activeFilterRow = activeFilterIndex_ >= 0
-        ? activeFilterIndex_ / filterButtonColumns
-        : -1;
-    const int rowsBelowActiveFilter = WindowScale::size(parent_, formGap) +
-                                      filterListHeightScaled;
-    const int contentBottom = static_cast<int>(std::max<LONG>(
-        0, clientArea.bottom -
-               WindowScale::size(parent_, navigationReservedHeight)));
+            referenceButtonGap * (referenceFilterButtonColumns - 1)) /
+               referenceFilterButtonColumns);
+    const int buttonWidth = std::max(
+        1, referenceButtonWidth / filterButtonWidthDivisor);
+    const int buttonRowCount = static_cast<int>(
+        (filterButtonCount + filterButtonColumns - 1) /
+        filterButtonColumns);
+    std::vector<bool> rowHasOpenList(
+        static_cast<std::size_t>(buttonRowCount), false);
+    for (std::size_t index = 0; index < openFilterLists_.size(); ++index) {
+        if (openFilterLists_[index]) {
+            const std::size_t row =
+                index / static_cast<std::size_t>(filterButtonColumns);
+            rowHasOpenList[row] = true;
+        }
+    }
+    std::vector<int> expandedRowsBefore(
+        static_cast<std::size_t>(buttonRowCount), 0);
+    int expandedRowCount = 0;
+    for (int row = 0; row < buttonRowCount; ++row) {
+        expandedRowsBefore[static_cast<std::size_t>(row)] = expandedRowCount;
+        if (rowHasOpenList[static_cast<std::size_t>(row)]) {
+            ++expandedRowCount;
+        }
+    }
     const int pageButtonWidthScaled =
         WindowScale::size(parent_, pageButtonWidth);
     const int pageButtonHeightScaled =
         WindowScale::size(parent_, pageButtonHeight);
-    const int footer = WindowScale::size(parent_, footerMargin);
-    const int pageY = std::max(
-        0, contentBottom - pageButtonHeightScaled - footer);
-    const int pageButtonsWidth =
-        pageButtonWidthScaled * 2 + scaledGap;
-    const int pageButtonsX = std::max(
-        0, (clientWidth - pageButtonsWidth) / 2);
+    const int pageLabelWidthScaled =
+        WindowScale::size(parent_, pageLabelWidth);
+    const int pageLabelHeightScaled =
+        WindowScale::size(parent_, pageLabelHeight);
+    const int paginationRowHeight =
+        std::max(pageButtonHeightScaled, pageLabelHeightScaled);
+    const int paginationGap = scaledGap;
+    const int paginationGroupWidth =
+        pageButtonWidthScaled * 2 + pageLabelWidthScaled +
+        paginationGap * 2;
+    const int paginationGroupX =
+        std::max(0, (clientWidth - paginationGroupWidth) / 2);
+    const int paginationY = std::max(
+        0, calculateTableTop(parent_, openFilterLists_) -
+               paginationRowHeight - paginationGap);
 
     WindowScale::updateFont(
         parent_, controlFont_, controlFontHeight_, 4,
         {fromDateLabel_, fromDatePicker_, toDateLabel_, toDatePicker_});
     WindowScale::updateFont(
         parent_, buttonFont_, buttonFontHeight_, 14,
-        {previousPageButton_, nextPageButton_, generateButton_,
-         closeFilterButton_});
-    for (HWND button : filterButtons_) {
-        if (button != nullptr) {
-            SendMessageW(
-                button, WM_SETFONT,
-                reinterpret_cast<WPARAM>(buttonFont_), TRUE);
-        }
-    }
+        {previousPageButton_, nextPageButton_, generateButton_});
+    WindowScale::updateFont(
+        parent_, filterButtonFont_, filterButtonFontHeight_,
+        filterButtonFontHeight, filterButtons_);
     for (HWND list : filterLists_) {
         if (list != nullptr) {
             SendMessageW(
@@ -516,62 +571,44 @@ void TransactionsPage::positionControls() {
     }
 
     MoveWindow(
-        fromDateLabel_, firstX, labelY, fieldWidth, labelHeightScaled, TRUE);
+        fromDateLabel_, firstX, labelY, datePickerWidth, labelHeightScaled, TRUE);
     MoveWindow(
-        fromDatePicker_, firstX, pickerY, fieldWidth,
+        fromDatePicker_, firstX, pickerY, datePickerWidth,
         pickerHeightScaled, TRUE);
     MoveWindow(
-        toDateLabel_, secondX, labelY, fieldWidth, labelHeightScaled, TRUE);
+        toDateLabel_, secondX, labelY, datePickerWidth, labelHeightScaled, TRUE);
     MoveWindow(
-        toDatePicker_, secondX, pickerY, fieldWidth,
+        toDatePicker_, secondX, pickerY, datePickerWidth,
         pickerHeightScaled, TRUE);
     MoveWindow(
-        generateButton_, std::max(scaledMargin, clientWidth -
-            scaledMargin - generateWidth), pickerY, generateWidth,
-        pickerHeightScaled, TRUE);
+        generateButton_, generateX, labelY, generateWidth,
+        generateButtonHeightScaled, TRUE);
 
     for (std::size_t index = 0; index < filterButtonCount; ++index) {
         const int column = static_cast<int>(index % filterButtonColumns);
         const int row = static_cast<int>(index / filterButtonColumns);
         const int x = scaledMargin + column * (buttonWidth + buttonGap);
-        const int y = filterTop + row * (buttonHeight + buttonGap) +
-                      (activeFilterRow >= 0 && row > activeFilterRow
-                           ? rowsBelowActiveFilter
-                           : 0);
+        const int y =
+            filterTop + row * (buttonHeight + buttonGap) +
+            expandedRowsBefore[static_cast<std::size_t>(row)] *
+                (filterListHeightScaled + buttonGap);
         MoveWindow(filterButtons_[index], x, y, buttonWidth, buttonHeight, TRUE);
-    }
-
-    if (activeFilterIndex_ >= 0 &&
-        static_cast<std::size_t>(activeFilterIndex_) < reportColumnCount) {
-        const int activeColumn = activeFilterIndex_ % filterButtonColumns;
-        const int buttonX =
-            scaledMargin + activeColumn * (buttonWidth + buttonGap);
-        const int closeWidth = WindowScale::size(parent_, 60);
-        const int closeGap = buttonGap;
-        const int listWidth = std::min(
-            std::max(1, contentWidth - closeWidth - closeGap),
-            buttonWidth * 2 + buttonGap);
-        const int maximumListX = scaledMargin + std::max(
-            0, contentWidth - listWidth - closeGap - closeWidth);
-        const int listX = std::min(
-            buttonX, maximumListX);
-        const int activeButtonTop =
-            filterTop + activeFilterRow * (buttonHeight + buttonGap);
-        const int listTop = activeButtonTop + buttonHeight + buttonGap;
-        MoveWindow(
-            filterLists_[static_cast<std::size_t>(activeFilterIndex_)],
-            listX, listTop, listWidth, filterListHeightScaled, TRUE);
-        MoveWindow(
-            closeFilterButton_, listX + listWidth + closeGap, listTop,
-            closeWidth, WindowScale::size(parent_, 24), TRUE);
+        if (index < filterLists_.size() && openFilterLists_[index]) {
+            const int listY = y + buttonHeight + buttonGap;
+            MoveWindow(
+                filterLists_[index], x, listY, buttonWidth,
+                filterListHeightScaled, TRUE);
+        }
     }
 
     MoveWindow(
-        previousPageButton_, pageButtonsX, pageY,
+        previousPageButton_, paginationGroupX, paginationY,
         pageButtonWidthScaled, pageButtonHeightScaled, TRUE);
+    const int pageLabelX =
+        paginationGroupX + pageButtonWidthScaled + paginationGap;
     MoveWindow(
-        nextPageButton_,
-        pageButtonsX + pageButtonWidthScaled + scaledGap, pageY,
+        nextPageButton_, pageLabelX + pageLabelWidthScaled + paginationGap,
+        paginationY,
         pageButtonWidthScaled, pageButtonHeightScaled, TRUE);
 }
 
@@ -582,12 +619,40 @@ void TransactionsPage::positionControls() {
  */
 void TransactionsPage::draw(HDC deviceContext, RECT& clientArea) const {
     RECT tableArea = clientArea;
-    tableArea.top += calculateTableTop(parent_);
+    tableArea.top += calculateTableTop(parent_, openFilterLists_);
     tableArea.bottom = std::max(
         tableArea.top,
         static_cast<LONG>(
-            clientArea.bottom -
-            WindowScale::size(parent_, navigationReservedHeight)));
+            clientArea.bottom - WindowScale::size(parent_, formMargin)));
+
+    if (generated_) {
+        const int pageButtonWidthScaled =
+            WindowScale::size(parent_, pageButtonWidth);
+        const int pageLabelWidthScaled =
+            WindowScale::size(parent_, pageLabelWidth);
+        const int pageLabelHeightScaled =
+            WindowScale::size(parent_, pageLabelHeight);
+        const int paginationGap = WindowScale::size(parent_, formGap);
+        const int paginationGroupWidth =
+            pageButtonWidthScaled * 2 + pageLabelWidthScaled +
+            paginationGap * 2;
+        const int clientWidth =
+            static_cast<int>(clientArea.right - clientArea.left);
+        const int paginationGroupX = std::max(
+            0, (clientWidth - paginationGroupWidth) / 2);
+        const int paginationLabelX =
+            paginationGroupX + pageButtonWidthScaled + paginationGap;
+        RECT pageBounds{
+            paginationLabelX,
+            tableArea.top - paginationGap - pageLabelHeightScaled,
+            paginationLabelX + pageLabelWidthScaled,
+            tableArea.top - paginationGap};
+        const std::wstring pageLabel =
+            L"Strona " + std::to_wstring(currentPage_ + 1);
+        WindowScale::drawText(
+            deviceContext, parent_, pageLabel, pageBounds,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 
     if (!generated_) {
         const std::string message = !status_.empty()
@@ -763,23 +828,6 @@ void TransactionsPage::draw(HDC deviceContext, RECT& clientArea) const {
 
     SelectObject(deviceContext, previousFont);
     DeleteObject(tableFont);
-
-    const int pageLabelHeightScaled =
-        WindowScale::size(parent_, pageLabelHeight);
-    const int footer = WindowScale::size(parent_, footerMargin);
-    const int pageButtonHeightScaled =
-        WindowScale::size(parent_, pageButtonHeight);
-    const int contentBottom = clientArea.bottom -
-        WindowScale::size(parent_, navigationReservedHeight);
-    const int pageY = contentBottom - pageButtonHeightScaled - footer;
-    RECT pageBounds = clientArea;
-    pageBounds.top = pageY - pageLabelHeightScaled - footer;
-    pageBounds.bottom = pageY - footer;
-    const std::wstring pageLabel =
-        L"Strona " + std::to_wstring(currentPage_ + 1);
-    WindowScale::drawText(
-        deviceContext, parent_, pageLabel, pageBounds,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 /**
@@ -812,7 +860,6 @@ void TransactionsPage::generateReport() {
     hasNextPage_ = false;
     report_ = {};
     status_.clear();
-    storeActiveFilterSelection();
 
     SYSTEMTIME startDate{};
     SYSTEMTIME endDate{};
@@ -835,7 +882,9 @@ void TransactionsPage::generateReport() {
             } else {
                 appliedFilters_ = selectedFilterValues();
                 generated_ = true;
-                activeFilterIndex_ = -1;
+                std::fill(
+                    openFilterLists_.begin(), openFilterLists_.end(), false);
+                positionControls();
                 loadCurrentPage();
             }
         }
@@ -879,10 +928,12 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
         foundOptions == filterOptions_.end()
             ? emptyOptions
             : foundOptions->second;
-    std::vector<std::string> previousValues =
-        std::move(selectedFilterValues_[filterIndex]);
+    const std::vector<std::string>& previousValues =
+        selectedFilterValues_[filterIndex];
     std::vector<std::string> optionValues;
+    std::vector<std::string> validSelectedValues;
     optionValues.reserve(filterOptions.size());
+    validSelectedValues.reserve(previousValues.size());
 
     SendMessageW(
         filterLists_[filterIndex], LB_RESETCONTENT, 0, 0);
@@ -891,8 +942,6 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
         if (!convertUtf8ToWide(option.label, wideLabel)) {
             status_ = "API zwróciło nieprawidłowy tekst opcji filtra.";
             ErrorLogger::error(status_);
-            selectedFilterValues_[filterIndex] =
-                std::move(previousValues);
             updateControls();
             InvalidateRect(parent_, nullptr, TRUE);
             return false;
@@ -903,8 +952,6 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
         if (itemIndex == LB_ERR || itemIndex == LB_ERRSPACE) {
             status_ = "Nie udało się wypełnić listy opcji filtra.";
             ErrorLogger::error(status_);
-            selectedFilterValues_[filterIndex] =
-                std::move(previousValues);
             updateControls();
             InvalidateRect(parent_, nullptr, TRUE);
             return false;
@@ -913,6 +960,7 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
         if (std::find(
                 previousValues.begin(), previousValues.end(),
                 option.value) != previousValues.end()) {
+            validSelectedValues.push_back(option.value);
             SendMessageW(
                 filterLists_[filterIndex], LB_SETSEL, TRUE, itemIndex);
         }
@@ -922,17 +970,10 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
         static_cast<WPARAM>(WindowScale::size(parent_, 1200)), 0);
 
     filterOptionValues_[filterIndex] = std::move(optionValues);
-    selectedFilterValues_[filterIndex].clear();
-    for (const std::string& value : previousValues) {
-        if (std::find(
-                filterOptionValues_[filterIndex].begin(),
-                filterOptionValues_[filterIndex].end(), value) !=
-            filterOptionValues_[filterIndex].end()) {
-            selectedFilterValues_[filterIndex].push_back(value);
-        }
-    }
-    activeFilterIndex_ = static_cast<int>(filterIndex);
+    selectedFilterValues_[filterIndex] = std::move(validSelectedValues);
+    openFilterLists_[filterIndex] = true;
     status_.clear();
+    positionControls();
     updateControls();
     InvalidateRect(parent_, nullptr, TRUE);
     return true;
@@ -941,14 +982,11 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
 /**
  * Zapisuje zaznaczone wartości aktualnie widocznej listy.
  */
-void TransactionsPage::storeActiveFilterSelection() {
-    if (activeFilterIndex_ < 0 ||
-        static_cast<std::size_t>(activeFilterIndex_) >= reportColumnCount) {
+void TransactionsPage::storeFilterSelection(std::size_t filterIndex) {
+    if (filterIndex >= reportColumnCount) {
         return;
     }
 
-    const std::size_t filterIndex =
-        static_cast<std::size_t>(activeFilterIndex_);
     const LRESULT selectedCount = SendMessageW(
         filterLists_[filterIndex], LB_GETSELCOUNT, 0, 0);
     if (selectedCount == LB_ERR || selectedCount <= 0) {
@@ -1022,7 +1060,7 @@ void TransactionsPage::updateControls() {
     const int visibility = visible_ ? SW_SHOW : SW_HIDE;
     for (HWND control : {
              fromDateLabel_, fromDatePicker_, toDateLabel_, toDatePicker_,
-             generateButton_, closeFilterButton_}) {
+             generateButton_}) {
         if (control != nullptr) {
             ShowWindow(control, visibility);
         }
@@ -1033,13 +1071,9 @@ void TransactionsPage::updateControls() {
         }
     }
     for (std::size_t index = 0; index < filterLists_.size(); ++index) {
-        const bool showList =
-            visible_ && activeFilterIndex_ == static_cast<int>(index);
+        const bool showList = visible_ && openFilterLists_[index];
         ShowWindow(filterLists_[index], showList ? SW_SHOW : SW_HIDE);
     }
-    ShowWindow(
-        closeFilterButton_,
-        visible_ && activeFilterIndex_ >= 0 ? SW_SHOW : SW_HIDE);
 
     const int paginationVisibility =
         visible_ && generated_ ? SW_SHOW : SW_HIDE;
