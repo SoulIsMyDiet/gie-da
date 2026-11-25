@@ -55,7 +55,7 @@ class CandleDatabase:
                     low,
                     close,
                     volume
-                FROM candles
+                FROM candles_IBKR
                 WHERE symbol = %s
                 ORDER BY datetime DESC
                 LIMIT %s

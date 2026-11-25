@@ -47,8 +47,6 @@ def _valid_response() -> dict[str, object]:
     """Tworzy małą odpowiedź przykładową zgodną ze schematem weryfikatora."""
     variant = {
         "transaction": "LONG",
-        "spread": 0.003,
-        "spread_confidence": "MEDIUM",
         "open_price": 17.102,
         "take_profit": 17.125,
         "stop_loss": 17.085,
@@ -142,7 +140,9 @@ def test_validator_rejects_invalid_response_shapes(change) -> None:
 
 def test_validator_rejects_non_finite_json_values() -> None:
     """Nie akceptuje NaN, mimo że standardowy dekoder Pythona go dopuszcza."""
-    response = json.dumps(_valid_response()).replace('"spread": 0.003', '"spread": NaN')
+    response = json.dumps(_valid_response()).replace(
+        '"open_price": 17.102', '"open_price": NaN'
+    )
 
     with pytest.raises(AIVerificationError):
         validate_verifier_response(response)
@@ -165,6 +165,8 @@ def test_prompt_replaces_only_the_named_variables() -> None:
 def test_seed_prompt_does_not_spend_tokens_on_the_model_name() -> None:
     """Pozostawia identyfikację modelu kodowi i zachowuje zmienne promptu."""
     assert "llm_name" not in INITIAL_SIGNAL_REVIEW_PROMPT
+    assert "spread_confidence" not in INITIAL_SIGNAL_REVIEW_PROMPT
+    assert '"spread"' not in INITIAL_SIGNAL_REVIEW_PROMPT
     assert "<parametry_algorytmu>" in INITIAL_SIGNAL_REVIEW_PROMPT
     assert "<kontekst_algorytmu>" in INITIAL_SIGNAL_REVIEW_PROMPT
     assert "<historia_świec>" in INITIAL_SIGNAL_REVIEW_PROMPT
@@ -346,8 +348,12 @@ def test_worker_requests_all_models_assigned_to_the_signal_product() -> None:
         ("claude_sonnet55", claude_client),
         ("groq", groq_client),
     )
+    repository = SimpleNamespace(
+        database_settings={},
+        fetch_ibkr_spread=Mock(return_value=Decimal("0.0002")),
+    )
     worker = AIVerificationWorker(
-        SimpleNamespace(database_settings={}),
+        repository,
         router=router,
         transaction_tracker=Mock(),
     )
@@ -367,9 +373,13 @@ def test_worker_requests_all_models_assigned_to_the_signal_product() -> None:
             "long",
             "test-strategy",
             signal_parameters,
+            1_800_000_000,
         )
     )
 
+    repository.fetch_ibkr_spread.assert_called_once_with(
+        "USD/MXN", 1_800_000_000
+    )
     router.clients_for.assert_called_once_with("USD/MXN")
     claude_client.complete.assert_called_once_with("Sprawdź sygnał.")
     groq_client.complete.assert_called_once_with("Sprawdź sygnał.")
@@ -382,6 +392,38 @@ def test_worker_requests_all_models_assigned_to_the_signal_product() -> None:
         "Claude Sonnet 5.5 (Anthropic)",
         MODEL_DISPLAY_NAME,
     ]
+    assert worker._save_success.call_args.args[8] == Decimal("0.0002")
+
+
+def test_missing_ibkr_quotes_fail_before_requesting_a_model() -> None:
+    """Kończy weryfikację przed kosztochłonnym wywołaniem AI bez kwotowań."""
+    client = Mock()
+    repository = SimpleNamespace(
+        database_settings={},
+        fetch_ibkr_spread=Mock(return_value=None),
+    )
+    worker = AIVerificationWorker(repository, client=client)
+    worker._get_active_prompt = Mock(return_value="Sprawdź sygnał.")
+    worker._mark_failed = Mock()
+
+    worker._process_job(
+        (
+            1,
+            2,
+            "USD/MXN",
+            datetime(2026, 11, 17, 13, 0),
+            Decimal("17.102"),
+            "long",
+            "test-strategy",
+            json.dumps({"timestamp": "2026-11-17T12:00:00Z"}),
+            1_800_000_000,
+        )
+    )
+
+    client.complete.assert_not_called()
+    worker._get_active_prompt.assert_not_called()
+    worker._mark_failed.assert_called_once()
+    assert "bid/ask" in worker._mark_failed.call_args.args[1]
 
 
 def test_strategy_registry_maps_known_signal_names() -> None:
@@ -549,6 +591,7 @@ def test_success_persists_each_model_and_both_modes_even_when_decision_is_no() -
             "long",
             verifier_results,
             "pełny prompt",
+            Decimal("0.0002"),
         )
 
     transactions = [
@@ -571,6 +614,10 @@ def test_success_persists_each_model_and_both_modes_even_when_decision_is_no() -
     assert transactions[1][1:3] == ("claude_sonnet55", "moderate")
     assert transactions[0][9:11] == (0, "in progress")
     assert transactions[1][9:11] == (None, "awaiting")
+    assert all(
+        transaction[8] == Decimal("0.0002")
+        for transaction in transactions
+    )
     assert transactions[2][1:3] == ("groq", "aggressive")
     assert transactions[3][1:3] == ("groq", "moderate")
     assert [decision[1] for decision in decisions] == [

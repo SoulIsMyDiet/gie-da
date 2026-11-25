@@ -46,7 +46,7 @@ class DAX40Storage:
             cursor.execute(
                 """
                 SELECT datetime, utc_offset_minutes, open, high, low, close, volume
-                FROM candles
+                FROM candles_IBKR
                 WHERE symbol = %s
                 ORDER BY DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE) DESC
                 LIMIT %s

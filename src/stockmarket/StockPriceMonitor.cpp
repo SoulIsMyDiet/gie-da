@@ -339,6 +339,18 @@ StockPriceSnapshot StockPriceMonitor::snapshot() const {
 }
 
 /**
+ * Odtwarza po jednym dźwięku dla każdego zapisanego sygnału.
+ */
+bool StockPriceMonitor::playSavedSignalSounds(std::size_t signalCount) {
+    for (std::size_t index = 0; index < signalCount; ++index) {
+        if (!playSignalSavedAudio()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * Uruchamia pętlę świec i zatrzymuje powiadomienia po jej zakończeniu.
  * @param parameter Wskaźnik na monitor.
  * @return Kod zakończenia wątku Windows.

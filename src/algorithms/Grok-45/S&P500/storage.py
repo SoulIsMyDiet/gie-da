@@ -75,7 +75,7 @@ class SP500Storage:
         try:
             cursor = connection.cursor()
             cursor.execute(
-                """SELECT `datetime`, utc_offset_minutes FROM candles
+                """SELECT `datetime`, utc_offset_minutes FROM candles_IBKR
                    WHERE symbol = %s AND `datetime` BETWEEN %s AND %s
                      AND utc_offset_minutes BETWEEN 60 AND 120
                      AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE)
@@ -157,7 +157,7 @@ class SP500Storage:
             cursor = connection.cursor(dictionary=True)
             cursor.execute(
                 """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
-                   FROM candles
+                   FROM candles_IBKR
                    WHERE symbol = %s
                      AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) <= %s
                    ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC

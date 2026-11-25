@@ -26,11 +26,10 @@ from app import (  # noqa: E402
     GROK45_USDMXN_STRATEGY_NAME,
     MarketDataRepository,
     SignalPotentialCalculator,
-    _process_candle_batch_strategies,
     acknowledge_usdmxn_notification,
-    save_candle,
     save_candle_batch,
     usdmxn_notifications,
+    _process_live_ibkr_candle as save_candle,
 )
 from fastapi import Request  # noqa: E402
 
@@ -45,7 +44,7 @@ def create_request(state: SimpleNamespace) -> Request:
             "type": "http",
             "app": app,
             "method": "POST",
-            "path": "/api/candles",
+            "path": "/api/candles/ibkr",
             "headers": [],
         }
     )
@@ -68,7 +67,7 @@ def new_state(opened: datetime, saved: bool = True) -> SimpleNamespace:
     """Przygotowuje atrapy dla jednej nowej świecy zamkniętej."""
     repository = Mock()
     repository._is_market_open.return_value = True
-    repository.save_candle.return_value = (0, 1, "", 0)
+    repository.save_ibkr_candle.return_value = (saved, 0)
     repository.has_algorithm_evaluation.return_value = False
     repository.fetch_recent_candle_history.return_value = [
         {
@@ -123,8 +122,8 @@ class USDMXNIntegrationTests(unittest.TestCase):
             first = save_candle(live_candle(opened), request)
             second = save_candle(live_candle(opened), request)
 
-        self.assertEqual(first.body, b"0\n0")
-        self.assertEqual(second.body, b"0\n0")
+        self.assertEqual(first.body, b"1\n0\n")
+        self.assertEqual(second.body, b"1\n0\n")
         state.usdmxn_strategy.evaluate.assert_called_once()
         state.usdmxn_storage.save.assert_called_once_with(
             state.usdmxn_strategy.evaluate.return_value,
@@ -164,7 +163,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
                 live_candle(opened),
                 create_request(state),
             )
-        self.assertEqual(response.body, b"0\n0")
+        self.assertEqual(response.body, b"1\n0\n")
         state.usdmxn_strategy.evaluate.assert_not_called()
         state.usdmxn_storage.save.assert_not_called()
         state.grok45_usdmxn_strategy.evaluate.assert_not_called()
@@ -181,12 +180,12 @@ class USDMXNIntegrationTests(unittest.TestCase):
                 live_candle(opened),
                 create_request(state),
             )
-        self.assertEqual(response.body, b"0\n0")
+        self.assertEqual(response.body, b"0\n0\n")
         state.usdmxn_storage.save.assert_called_once()
         state.grok45_usdmxn_storage.save.assert_called_once()
 
-    def test_batch_saves_closed_usd_fx_candles_and_evaluates_strategies(self) -> None:
-        """Paczka ocenia niezależne strategie USD/JPY bez dźwięków historycznych."""
+    def test_legacy_batch_saves_candles_without_evaluating_strategies(self) -> None:
+        """Paczka legacy zapisuje świece, ale nie uruchamia strategii."""
         opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=2)
         usd_mxn = live_candle(opened)
         usd_jpy = CandleRecord(
@@ -235,22 +234,14 @@ class USDMXNIntegrationTests(unittest.TestCase):
             ],
         ) as claude_usdjpy:
             response = save_candle_batch(batch, request)
-            _process_candle_batch_strategies(request, batch)
 
         self.assertEqual(response.status_code, 200)
-        state.candle_strategy_batch_worker.enqueue.assert_called_once_with(batch)
-        claude_usdjpy.assert_called_once_with([opened])
-        state.usdmxn_strategy.evaluate.assert_called_once()
-        state.grok45_usdmxn_strategy.evaluate.assert_called_once()
-        state.usdjpy_strategy.evaluate.assert_called_once()
-        for storage in (
-            state.usdmxn_storage,
-            state.grok45_usdmxn_storage,
-            state.usdjpy_storage,
-        ):
-            self.assertFalse(
-                storage.save.call_args.kwargs["enqueue_notification"]
-            )
+        self.assertEqual(response.body, b"2\n")
+        state.candle_strategy_batch_worker.enqueue.assert_not_called()
+        claude_usdjpy.assert_not_called()
+        state.usdmxn_strategy.evaluate.assert_not_called()
+        state.grok45_usdmxn_strategy.evaluate.assert_not_called()
+        state.usdjpy_strategy.evaluate.assert_not_called()
 
     def test_recent_history_reconstructs_warsaw_winter_and_summer_offsets(self) -> None:
         """Odczyt uwzględnia zapisane CET/CEST bez traktowania czasu jako UTC."""

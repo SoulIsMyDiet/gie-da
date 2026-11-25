@@ -150,6 +150,44 @@ def test_repository_uses_minute_and_ai_point_ranges_as_filters() -> None:
     assert not has_next_page
 
 
+@pytest.mark.parametrize(
+    ("selected_era", "expected_condition"),
+    [
+        ("legacy", "s.id <= %s"),
+        ("new", "s.id > %s"),
+    ],
+)
+def test_repository_filters_signal_era_independently_of_report_columns(
+    selected_era: str, expected_condition: str
+) -> None:
+    """Filtruje sygnały po stałej granicy niezależnie od widocznych kolumn."""
+    repository = app.MarketDataRepository.__new__(app.MarketDataRepository)
+    repository.database_settings = {}
+    connection = Mock()
+    cursor = Mock()
+    connection.cursor.return_value = cursor
+    cursor.fetchall.return_value = []
+
+    with patch("app.mysql.connector.connect", return_value=connection):
+        repository.fetch_transaction_report_page(
+            date(2026, 11, 1),
+            date(2026, 11, 2),
+            0,
+            ["signal_datetime"],
+            {"signal_era": [selected_era]},
+        )
+
+    query, values = cursor.execute.call_args.args
+    assert expected_condition in query
+    assert values == (
+        date(2026, 11, 1),
+        date(2026, 11, 3),
+        app.LEGACY_SIGNAL_MAX_ID,
+        11,
+        0,
+    )
+
+
 def test_repository_refreshes_dynamic_filter_values_from_database() -> None:
     """Pobiera tylko opcje używane przez listy wielokrotnego wyboru."""
     repository = app.MarketDataRepository.__new__(app.MarketDataRepository)
@@ -216,6 +254,32 @@ def test_report_endpoint_returns_encoded_rows_summary_and_pagination() -> None:
     )
 
 
+def test_report_endpoint_accepts_signal_era_without_a_display_column() -> None:
+    """Pozwala filtrować legacy bez dodawania go do widocznych kolumn."""
+    repository = Mock()
+    repository.fetch_transaction_report_page.return_value = ([], [], False)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(repository=repository))
+    )
+    report = app.TransactionReportRequest(
+        columns=["signal_datetime"],
+        filters={"signal_era": ["legacy"]},
+    )
+
+    response = app.filtered_transaction_report(
+        request, report, date(2026, 11, 1), date(2026, 11, 2), page=0
+    )
+
+    assert response.status_code == 200
+    repository.fetch_transaction_report_page.assert_called_once_with(
+        date(2026, 11, 1),
+        date(2026, 11, 2),
+        0,
+        ["signal_datetime"],
+        {"signal_era": ["legacy"]},
+    )
+
+
 def test_report_endpoint_rejects_more_than_eight_column_units() -> None:
     """Odrzuca wybór przekraczający limit, licząc argumenty AI jako dwie kolumny."""
     repository = Mock()
@@ -266,4 +330,6 @@ def test_options_endpoint_returns_current_values_with_encoded_text() -> None:
         "45%0Av2"
     ) in response_text
     assert "ai_decision_reason_msg" not in response_text
+    assert "signal_era\tnew\tNowe" in response_text
+    assert "signal_era\tlegacy\tLegacy" in response_text
     repository.fetch_transaction_report_options.assert_called_once_with()

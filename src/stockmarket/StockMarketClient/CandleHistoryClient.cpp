@@ -1731,13 +1731,15 @@ bool CandleHistoryClient::saveCandle(
 }
 
 /**
- * Wysyła świecę IBKR do tabeli podglądowej, bez wywoływania obliczeń.
+ * Wysyła świecę IBKR i odczytuje zapis oraz liczbę nowych sygnałów.
  */
 bool CandleHistoryClient::saveIbkrCandle(
     const IBKRCandleData& candle,
     bool& candleSaved,
+    std::size_t& savedSignalCount,
     std::string& error) {
     candleSaved = false;
+    savedSignalCount = 0;
     error.clear();
     std::string utcDatetime;
     if (!formatUnixTimestampUtc(candle.timestampUtc, utcDatetime)) {
@@ -1749,29 +1751,83 @@ bool CandleHistoryClient::saveIbkrCandle(
         return false;
     }
     std::string responseBody;
+    DWORD responseStatus = 0;
     if (!sendApiRequest(
             ibkrCandleApiPath,
             requestBody,
             200,
             responseBody,
             error,
-            nullptr,
-            false,
+            &responseStatus,
+            true,
             true)) {
         return false;
     }
-    while (!responseBody.empty() &&
-           (responseBody.back() == '\n' || responseBody.back() == '\r')) {
-        responseBody.pop_back();
+
+    constexpr std::string_view partialResponseMarker = "SP500_PARTIAL\n";
+    std::string_view response(responseBody);
+    if (responseStatus == 503) {
+        if (response.substr(0, partialResponseMarker.size()) !=
+            partialResponseMarker) {
+            error = "Lokalne API zwróciło nieprawidłową odpowiedź HTTP 503.";
+            return false;
+        }
+        response.remove_prefix(partialResponseMarker.size());
     }
-    if (responseBody == "0") {
-        return true;
+
+    while (!response.empty() &&
+           (response.back() == '\n' || response.back() == '\r')) {
+        response.remove_suffix(1);
     }
-    if (responseBody != "1") {
-        error = "Lokalne API zwróciło nieprawidłowy status zapisu świecy IBKR.";
+    const std::size_t statusLineEnd = response.find('\n');
+    if (statusLineEnd == std::string_view::npos) {
+        error = "Lokalne API nie zwróciło statusu zapisu świecy IBKR.";
         return false;
     }
-    candleSaved = true;
+    std::string_view candleSavedText = response.substr(0, statusLineEnd);
+    std::string_view signalCountText = response.substr(statusLineEnd + 1);
+    if (!candleSavedText.empty() && candleSavedText.back() == '\r') {
+        candleSavedText.remove_suffix(1);
+    }
+    if (!signalCountText.empty() && signalCountText.back() == '\r') {
+        signalCountText.remove_suffix(1);
+    }
+    if (signalCountText.find('\n') != std::string_view::npos) {
+        error = "Lokalne API zwróciło nadmiarowe dane o sygnałach IBKR.";
+        return false;
+    }
+
+    auto parseCount = [](std::string_view text, std::size_t& count) {
+        if (text.empty()) {
+            return false;
+        }
+        for (const unsigned char character : text) {
+            if (character < '0' || character > '9') {
+                return false;
+            }
+        }
+        const auto result = std::from_chars(
+            text.data(), text.data() + text.size(), count);
+        return result.ec == std::errc{} &&
+            result.ptr == text.data() + text.size();
+    };
+    std::size_t savedStatus = 0;
+    if (!parseCount(candleSavedText, savedStatus) ||
+        savedStatus > 1 ||
+        !parseCount(signalCountText, savedSignalCount) ||
+        (savedStatus == 0 && savedSignalCount != 0)) {
+        error = "Lokalne API zwróciło nieprawidłowy status lub licznik sygnałów IBKR.";
+        return false;
+    }
+
+    candleSaved = savedStatus == 1;
+    if (responseStatus == 503) {
+        if (!candleSaved) {
+            error = "Lokalne API zwróciło błąd częściowy bez zapisu świecy IBKR.";
+            return false;
+        }
+        error = "Lokalne API zapisało świecę, ale strategia zgłosiła błąd (HTTP 503).";
+    }
     return true;
 }
 

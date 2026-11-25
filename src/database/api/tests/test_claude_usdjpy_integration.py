@@ -21,7 +21,9 @@ import app  # noqa: E402
 UTC = timezone.utc
 
 
-def _create_request(state: SimpleNamespace, path: str = "/api/candles") -> Request:
+def _create_request(
+    state: SimpleNamespace, path: str = "/api/candles/ibkr"
+) -> Request:
     """Tworzy żądanie API z testowym stanem aplikacji."""
     return Request(
         {
@@ -51,7 +53,7 @@ def _create_single_candle_state(opened: datetime) -> SimpleNamespace:
     """Przygotowuje atrapy repozytorium i strategii ChatGPT dla pojedynczej świecy."""
     repository = Mock()
     repository._is_market_open.return_value = True
-    repository.save_candle.return_value = (0, 1, "", 0)
+    repository.save_ibkr_candle.return_value = (True, 0)
     repository.has_algorithm_evaluation.return_value = False
     repository.fetch_recent_candle_history.return_value = [
         {
@@ -164,17 +166,17 @@ def test_batch_process_returns_one_result_per_candle():
 
 
 @pytest.mark.parametrize(
-    "claude_result,expected_response",
+    "claude_signal,sound_enabled,expected_signal_count",
     [
-        (("NONE", True), b"0\n0"),
-        (("LONG", True), b"0\n1"),
-        (("SHORT", False), b"0\n0"),
+        ("NONE", True, 0),
+        ("LONG", True, 1),
+        ("SHORT", False, 0),
     ],
 )
-def test_single_closed_candle_runs_both_strategies_and_counts_only_audio(
-    claude_result, expected_response
+def test_single_closed_ibkr_candle_runs_both_strategies(
+    claude_signal, sound_enabled, expected_signal_count
 ):
-    """Claude ocenia świecę obok ChatGPT, a NONE nie zwiększa licznika dźwięku."""
+    """Zamknięta świeca IBKR uruchamia obie strategie i zwraca status zapisu."""
     opened = (
         datetime.now(UTC).replace(second=0, microsecond=0)
         - timedelta(minutes=2)
@@ -183,12 +185,15 @@ def test_single_closed_candle_runs_both_strategies_and_counts_only_audio(
     request = _create_request(state)
 
     with patch("app.is_monitored_product", return_value=True), patch(
-        "app._run_claude_usdjpy_strategy", return_value=claude_result
+        "app._run_claude_usdjpy_strategy",
+        return_value=(claude_signal, sound_enabled),
     ) as claude:
-        response = app.save_candle(_create_usdjpy_candle(opened), request)
+        response = app._process_live_ibkr_candle(
+            _create_usdjpy_candle(opened), request
+        )
 
     assert response.status_code == 200
-    assert response.body == expected_response
+    assert response.body == f"1\n{expected_signal_count}\n".encode()
     claude.assert_called_once_with(opened)
     state.usdjpy_strategy.evaluate.assert_called_once()
     state.usdjpy_storage.save.assert_called_once()
@@ -207,16 +212,18 @@ def test_claude_failure_does_not_skip_chatgpt_evaluation(caplog):
         "app._run_claude_usdjpy_strategy",
         side_effect=app.ClaudeUSDJPYStrategyError("błąd testowy"),
     ):
-        response = app.save_candle(_create_usdjpy_candle(opened), request)
+        response = app._process_live_ibkr_candle(
+            _create_usdjpy_candle(opened), request
+        )
 
     assert response.status_code == 200
-    assert response.body == b"0\n0"
+    assert response.body == b"1\n0\n"
     assert response.headers["X-Claude-USDJPY-Strategy-Error"] == "1"
     state.usdjpy_strategy.evaluate.assert_called_once()
 
 
-def test_batch_runs_claude_for_closed_usdjpy_candles():
-    """Paczka ocenia USD/JPY przez Claude i zachowuje dotychczasową odpowiedź."""
+def test_legacy_batch_does_not_evaluate_usdjpy_strategy():
+    """Paczka legacy zapisuje świece bez ponownego uruchamiania strategii."""
     opened = (
         datetime.now(UTC).replace(second=0, microsecond=0)
         - timedelta(minutes=2)
@@ -238,15 +245,14 @@ def test_batch_runs_claude_for_closed_usdjpy_candles():
         ],
     ) as claude:
         response = app.save_candle_batch(batch, request)
-        app._process_candle_batch_strategies(request, batch)
 
     assert response.status_code == 200
     assert response.body == b"1\nostatnia"
-    assert response.headers["X-Strategy-Processing"] == "queued"
-    state.candle_strategy_batch_worker.enqueue.assert_called_once_with(batch)
+    assert "X-Strategy-Processing" not in response.headers
+    state.candle_strategy_batch_worker.enqueue.assert_not_called()
     state.repository.fetch_candle_history.assert_not_called()
-    claude.assert_called_once_with([opened])
-    state.usdjpy_strategy.evaluate.assert_called_once()
+    claude.assert_not_called()
+    state.usdjpy_strategy.evaluate.assert_not_called()
 
 
 def test_batch_worker_persists_payload_before_returning():

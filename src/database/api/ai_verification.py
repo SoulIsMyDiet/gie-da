@@ -46,8 +46,6 @@ WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MODE_NAMES = ("aggressive", "moderate")
 RESPONSE_FIELDS = {
     "transaction",
-    "spread",
-    "spread_confidence",
     "open_price",
     "take_profit",
     "stop_loss",
@@ -698,7 +696,7 @@ def validate_verifier_response(
         response_text: Tekst JSON zwrócony przez model.
 
     Returns:
-        Dwa warianty odpowiedzi z cenami i spreadem zamienionymi na Decimal.
+        Dwa warianty odpowiedzi z cenami zamienionymi na Decimal.
 
     Raises:
         AIVerificationError: Gdy odpowiedź nie spełnia ścisłego kontraktu.
@@ -838,7 +836,8 @@ class AIVerificationWorker:
                 cursor.execute(
                     """
                     SELECT j.id, j.signal_id, s.product, s.datetime, s.price,
-                           s.`signal`, s.algorithm_name, s.signal_parameters
+                           s.`signal`, s.algorithm_name, s.signal_parameters,
+                           s.source_timestamp
                     FROM ai_verification_jobs AS j
                     JOIN signals AS s ON s.id = j.signal_id
                     WHERE j.status = 'pending'
@@ -877,10 +876,18 @@ class AIVerificationWorker:
             signal_direction,
             algorithm_name,
             signal_parameters_value,
+            source_timestamp,
         ) = job
         full_prompt: str | None = None
         response_text: str | None = None
         try:
+            true_spread = self._repository.fetch_ibkr_spread(
+                product, source_timestamp
+            )
+            if true_spread is None:
+                raise AIVerificationError(
+                    "Brak świecy IBKR lub kwotowań bid/ask dla sygnału."
+                )
             prompt_template = self._get_active_prompt()
             if prompt_template is None:
                 self._mark_skipped(
@@ -944,6 +951,7 @@ class AIVerificationWorker:
                 signal_direction,
                 verifier_results,
                 full_prompt,
+                true_spread,
             )
         except (
             AIVerificationError,
@@ -1045,6 +1053,7 @@ class AIVerificationWorker:
         signal_direction: str,
         verifier_results: tuple[VerifierResult, ...],
         full_prompt: str,
+        true_spread: Decimal,
     ) -> None:
         """Zapisuje wyniki wszystkich modeli i oba profile atomowo.
 
@@ -1057,6 +1066,7 @@ class AIVerificationWorker:
             signal_direction: Kierunek sygnału zapisany w tabeli signals.
             verifier_results: Odpowiedzi modeli wraz z nazwami i identyfikatorami.
             full_prompt: Pełny prompt wysłany do dostawcy.
+            true_spread: Spread obliczony z kwotowań świecy IBKR sygnału.
 
         Raises:
             mysql.connector.Error: Gdy transakcja zapisu w MySQL nie powiedzie się.
@@ -1108,7 +1118,7 @@ class AIVerificationWorker:
                                 open_price,
                                 mode_response["stop_loss"],
                                 mode_response["take_profit"],
-                                mode_response["spread"],
+                                true_spread,
                                 0 if opened_immediately else None,
                                 (
                                     "in progress"
@@ -1253,15 +1263,14 @@ def _validate_mode_response(
         raise AIVerificationError(
             f"Wariant {mode_name} ma nieprawidłowy transaction."
         )
-    spread = _parse_decimal(response["spread"], "spread", mode_name)
     open_price = _parse_decimal(response["open_price"], "open_price", mode_name)
     take_profit = _parse_decimal(
         response["take_profit"], "take_profit", mode_name
     )
     stop_loss = _parse_decimal(response["stop_loss"], "stop_loss", mode_name)
-    if spread < 0 or min(open_price, take_profit, stop_loss) <= 0:
+    if min(open_price, take_profit, stop_loss) <= 0:
         raise AIVerificationError(
-            f"Wariant {mode_name} zawiera niedodatnią cenę lub spread."
+            f"Wariant {mode_name} zawiera niedodatnią cenę."
         )
     if direction == "LONG" and not stop_loss < open_price < take_profit:
         raise AIVerificationError(
@@ -1272,15 +1281,6 @@ def _validate_mode_response(
             f"Wariant {mode_name} ma niespójne ceny dla SHORT."
         )
 
-    confidence = response["spread_confidence"]
-    if not isinstance(confidence, str) or confidence not in {
-        "LOW",
-        "MEDIUM",
-        "HIGH",
-    }:
-        raise AIVerificationError(
-            f"Wariant {mode_name} ma nieprawidłowy spread_confidence."
-        )
     points = response["pts"]
     if (
         isinstance(points, bool)
@@ -1302,8 +1302,6 @@ def _validate_mode_response(
         )
     return {
         "transaction": direction,
-        "spread": spread,
-        "spread_confidence": confidence,
         "open_price": open_price,
         "take_profit": take_profit,
         "stop_loss": stop_loss,

@@ -17,7 +17,11 @@ os.environ.setdefault("MYSQL_PASSWORD", "test")
 os.environ.setdefault("MYSQL_DATABASE", "test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import CandleRecord, MarketDataRepository, save_candle  # noqa: E402
+from app import (  # noqa: E402
+    CandleRecord,
+    MarketDataRepository,
+    _process_live_ibkr_candle as save_candle,
+)
 from fastapi import Request  # noqa: E402
 
 
@@ -29,7 +33,7 @@ def create_request(api_state: SimpleNamespace) -> Request:
             "type": "http",
             "app": app,
             "method": "POST",
-            "path": "/api/candles",
+            "path": "/api/candles/ibkr",
             "headers": [],
         }
     )
@@ -69,7 +73,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         )
         repository = Mock()
         repository._is_market_open.return_value = True
-        repository.save_candle.return_value = (0, 1, "", False)
+        repository.save_ibkr_candle.return_value = (True, 0)
         history = [
             {
                 "timestamp_utc": candle_time,
@@ -117,8 +121,8 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
                 create_request(state),
             )
 
-        self.assertEqual(response.body, b"0\n2")
-        self.assertEqual(duplicate_response.body, b"0\n0")
+        self.assertEqual(response.body, b"1\n2\n")
+        self.assertEqual(duplicate_response.body, b"1\n0\n")
         dax_strategy.evaluate.assert_called_once()
         chat_strategy.evaluate.assert_called_once()
         dax_storage.save_signal.assert_called_once_with({"signal": "NONE"}, 1)
@@ -130,7 +134,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         )
         repository = Mock()
         repository._is_market_open.return_value = True
-        repository.save_candle.return_value = (0, 1, "", False)
+        repository.save_ibkr_candle.return_value = (True, 0)
         history = [
             {
                 "timestamp_utc": candle_time,
@@ -159,14 +163,14 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         )
 
         response = save_candle(create_candle(candle_time), create_request(state))
-        self.assertEqual(response.body, b"0\n1")
+        self.assertEqual(response.body, b"1\n1\n")
         duplicate_response = save_candle(
             create_candle(candle_time), create_request(state)
         )
         self.assertEqual(dax_strategy.evaluate.call_count, 1)
         self.assertEqual(dax_storage.save_signal.call_count, 1)
         dax_storage.save_signal.assert_any_call({"signal": "LONG"}, 1)
-        self.assertEqual(duplicate_response.body, b"0\n0")
+        self.assertEqual(duplicate_response.body, b"1\n0\n")
 
     def test_persisted_none_reports_new_database_insert_for_windows_sound(self) -> None:
         candle_time = (
@@ -175,7 +179,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         )
         repository = Mock()
         repository._is_market_open.return_value = True
-        repository.save_candle.return_value = (0, 1, "", False)
+        repository.save_ibkr_candle.return_value = (True, 0)
         storage = Mock()
         storage.load_context.return_value = (
             [
@@ -204,7 +208,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
 
         response = save_candle(create_candle(candle_time), create_request(state))
 
-        self.assertEqual(response.body, b"0\n1")
+        self.assertEqual(response.body, b"1\n1\n")
         storage.save_signal.assert_called_once_with({"signal": "NONE"}, 1)
 
     def test_forming_candle_does_not_invoke_dax_strategy(self) -> None:
@@ -214,7 +218,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         )
         repository = Mock()
         repository._is_market_open.return_value = True
-        repository.save_candle.return_value = (0, 1, "", False)
+        repository.save_ibkr_candle.return_value = (True, 0)
         dax_storage = Mock()
         state = SimpleNamespace(
             repository=repository,
@@ -229,7 +233,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
 
         dax_storage.load_context.assert_not_called()
         state.dax40_strategy.evaluate.assert_not_called()
-        self.assertEqual(response.body, b"0\n0")
+        self.assertEqual(response.body, b"1\n0\n")
 
     def test_signal_enum_migration_adds_none_to_existing_database(self) -> None:
         class FakeCursor:

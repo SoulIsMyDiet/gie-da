@@ -214,7 +214,7 @@ class SignalPotentialCalculator:
             cursor.execute(
                 """
                 SELECT high, low
-                FROM candles
+                FROM candles_IBKR
                 WHERE symbol = %s
                     AND datetime >= %s
                     AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE) >= %s

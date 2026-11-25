@@ -59,6 +59,49 @@ class CandleBackfillTimestampTests(unittest.TestCase):
 class IBKRCandlePersistenceTests(unittest.TestCase):
     """Weryfikuje zapis świec IBKR w osobnej tabeli i czasie warszawskim."""
 
+    def test_spread_uses_the_exact_ibkr_bar_for_the_signal_open_time(self) -> None:
+        """Oblicza ask-bid z dokładnego znacznika źródłowej świecy UTC."""
+        repository = app.MarketDataRepository()
+        opened_at_utc = datetime(
+            2026, 1, 15, 12, 34, tzinfo=timezone.utc
+        )
+        connection = Mock()
+        cursor = Mock()
+        connection.cursor.return_value = cursor
+        cursor.fetchall.return_value = [
+            (Decimal("1.10040"), Decimal("1.10060"))
+        ]
+
+        with patch(
+            "app.mysql.connector.connect", return_value=connection
+        ):
+            spread = repository.fetch_ibkr_spread(
+                "EUR/USD", int(opened_at_utc.timestamp())
+            )
+
+        self.assertEqual(spread, Decimal("0.00020"))
+        query, parameters = cursor.execute.call_args.args
+        self.assertIn("FROM candles_IBKR", query)
+        self.assertIn("DATE_SUB", query)
+        self.assertEqual(
+            parameters, ("EUR/USD", datetime(2026, 1, 15, 12, 34))
+        )
+
+    def test_spread_returns_none_when_source_quotes_are_missing(self) -> None:
+        """Brak świecy dokładnego czasu oznacza nieudane sprawdzenie sygnału."""
+        repository = app.MarketDataRepository()
+        connection = Mock()
+        cursor = Mock()
+        connection.cursor.return_value = cursor
+        cursor.fetchall.return_value = []
+
+        with patch(
+            "app.mysql.connector.connect", return_value=connection
+        ):
+            spread = repository.fetch_ibkr_spread("EUR/USD", 1_800_000_000)
+
+        self.assertIsNone(spread)
+
     def test_ibkr_candle_is_upserted_with_warsaw_timestamp_and_quotes(self) -> None:
         """Zapis obejmuje kwotowania i oba warianty czasu letniego w Polsce."""
         cases = (
@@ -95,11 +138,18 @@ class IBKRCandlePersistenceTests(unittest.TestCase):
                     app.mysql.connector, "connect", return_value=connection
                 ), patch.object(
                     repository, "_is_market_open", return_value=True
-                ):
-                    self.assertTrue(repository.save_ibkr_candle(candle))
+                ), patch.object(
+                    repository.signal_potential_calculator, "update_pending"
+                ), patch("app.TransactionTracker") as transaction_tracker:
+                    self.assertEqual(
+                        repository.save_ibkr_candle(candle), (True, 0)
+                    )
 
-                self.assertEqual(cursor.execute.call_count, 2)
-                insert_sql, insert_values = cursor.execute.call_args_list[1].args
+                insert_sql, insert_values = next(
+                    call.args
+                    for call in cursor.execute.call_args_list
+                    if "INSERT INTO candles_IBKR" in call.args[0]
+                )
                 self.assertIn("INSERT INTO candles_IBKR", insert_sql)
                 self.assertIn("bid = VALUES(bid)", insert_sql)
                 self.assertIn("ask = VALUES(ask)", insert_sql)
@@ -109,11 +159,14 @@ class IBKRCandlePersistenceTests(unittest.TestCase):
                     Decimal("1.10060"),
                 ))
                 self.assertEqual(insert_values[9], expected_offset)
+                transaction_tracker.return_value.process_candles.assert_called_once_with(
+                    cursor, [candle]
+                )
                 connection.commit.assert_called_once()
                 connection.close.assert_called_once()
 
-    def test_ibkr_endpoint_only_calls_the_preview_repository_method(self) -> None:
-        """Endpoint nie uruchamia algorytmów ani przetwarzania zwykłych świec."""
+    def test_ibkr_endpoint_runs_the_live_strategy_pipeline(self) -> None:
+        """Endpoint IBKR przekazuje zamkniętą świecę do logiki strategii."""
         candle = app.IBKRCandleRecord(
             symbol="EUR/USD",
             datetime=datetime(2026, 1, 15, 12, 34, tzinfo=timezone.utc),
@@ -123,14 +176,16 @@ class IBKRCandlePersistenceTests(unittest.TestCase):
             close=Decimal("1.10050"),
         )
         request = Mock()
-        request.app.state.repository.save_ibkr_candle.return_value = True
+        expected_response = app.Response(content="1\n0\n")
 
-        response = app.save_ibkr_candle(candle, request)
+        with patch(
+            "app._process_live_ibkr_candle",
+            return_value=expected_response,
+        ) as process_candle:
+            response = app.save_ibkr_candle(candle, request)
 
-        self.assertEqual(response.body, b"1\n")
-        request.app.state.repository.save_ibkr_candle.assert_called_once_with(
-            candle
-        )
+        self.assertEqual(response.body, b"1\n0\n")
+        process_candle.assert_called_once_with(candle, request)
 
     def test_ibkr_endpoint_accepts_other_monitored_products(self) -> None:
         """Endpoint IBKR pozwala zapisywać pozostałe aktywne instrumenty."""
@@ -143,14 +198,15 @@ class IBKRCandlePersistenceTests(unittest.TestCase):
             close=Decimal("250.50"),
         )
         request = Mock()
-        request.app.state.repository.save_ibkr_candle.return_value = True
 
-        response = app.save_ibkr_candle(candle, request)
+        with patch(
+            "app._process_live_ibkr_candle",
+            return_value=app.Response(content="1\n0\n"),
+        ) as process_candle:
+            response = app.save_ibkr_candle(candle, request)
 
-        self.assertEqual(response.body, b"1\n")
-        request.app.state.repository.save_ibkr_candle.assert_called_once_with(
-            candle
-        )
+        self.assertEqual(response.body, b"1\n0\n")
+        process_candle.assert_called_once_with(candle, request)
 
     def test_ibkr_batch_deduplicates_before_bulk_upsert(self) -> None:
         """Paczka zapisuje unikalne znaczniki czasu jednym zapytaniem."""
@@ -174,7 +230,9 @@ class IBKRCandlePersistenceTests(unittest.TestCase):
             app.mysql.connector, "connect", return_value=connection
         ), patch.object(
             repository, "_is_market_open", return_value=True
-        ):
+        ), patch.object(
+            repository.signal_potential_calculator, "update_pending"
+        ), patch("app.TransactionTracker"):
             saved_count = repository.save_ibkr_candles([candle, duplicate])
 
         self.assertEqual(saved_count, 1)

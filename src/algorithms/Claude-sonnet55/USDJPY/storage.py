@@ -169,7 +169,7 @@ class USDJPYStorage:
             cursor = connection.cursor(dictionary=True)
             cursor.execute(
                 """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
-                   FROM candles
+                   FROM candles_IBKR
                    WHERE symbol = %s
                      AND `datetime` <= %s
                      AND utc_offset_minutes BETWEEN %s AND %s
@@ -220,7 +220,7 @@ class USDJPYStorage:
         opened_utc = datetime.fromtimestamp(opened_epoch, UTC)
         opened_local = opened_utc.astimezone(WARSAW)
         row = self._fetchone(
-            """SELECT 1 FROM candles
+            """SELECT 1 FROM candles_IBKR
                WHERE symbol = %s
                  AND `datetime` = %s
                  AND utc_offset_minutes = %s

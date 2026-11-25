@@ -97,7 +97,7 @@ class TransactionTracker:
         cursor.execute(
             """
             SELECT datetime, utc_offset_minutes, high, low
-            FROM candles
+            FROM candles_IBKR
             WHERE symbol = %s
                 AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE) >= %s
             ORDER BY DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE)
@@ -437,7 +437,7 @@ class TransactionTracker:
         cursor.execute(
             """
             SELECT COUNT(*)
-            FROM candles
+            FROM candles_IBKR
             WHERE symbol = %s
                 AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE)
                     >= %s
@@ -464,7 +464,7 @@ class TransactionTracker:
         cursor.execute(
             """
             SELECT COUNT(*)
-            FROM candles
+            FROM candles_IBKR
             WHERE symbol = %s
                 AND DATE_SUB(datetime, INTERVAL utc_offset_minutes MINUTE)
                     >= %s

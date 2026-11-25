@@ -25,7 +25,7 @@ from app import (  # noqa: E402
     MarketDataRepository,
     _generate_grok45_v2_signal,
     _grok45_candles_from_history,
-    save_candle,
+    _process_live_ibkr_candle as save_candle,
 )
 from fastapi import Request  # noqa: E402
 from EURUSDStrategyV2 import Candle  # noqa: E402
@@ -157,7 +157,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
 
         repository = Mock()
         repository._is_market_open.return_value = True
-        repository.save_candle.return_value = (0, 1, "", True)
+        repository.save_ibkr_candle.return_value = (True, 1)
         chat_strategy = FakeChatStrategy()
         api_application = SimpleNamespace(
             state=SimpleNamespace(
@@ -172,7 +172,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
                 "type": "http",
                 "app": api_application,
                 "method": "POST",
-                "path": "/api/candles",
+                "path": "/api/candles/ibkr",
                 "headers": [],
             }
         )
@@ -189,19 +189,19 @@ class Grok45V2IntegrationTests(unittest.TestCase):
 
         response = save_candle(candle, request)
 
-        repository.save_candle.assert_called_once()
+        repository.save_ibkr_candle.assert_called_once()
         saved_candle, saved_chat_signal, saved_grok_signal = (
-            repository.save_candle.call_args.args
+            repository.save_ibkr_candle.call_args.args
         )
         self.assertIs(saved_candle, candle)
         self.assertIs(saved_chat_signal, chat_signal)
         self.assertIsInstance(saved_grok_signal, Grok45SignalRecord)
         self.assertEqual(saved_grok_signal.signal, "LONG")
-        self.assertEqual(response.body, b"0\n1")
+        self.assertEqual(response.body, b"1\n1\n")
 
         save_candle(candle, request)
 
-        repeated_grok_signal = repository.save_candle.call_args.args[2]
+        repeated_grok_signal = repository.save_ibkr_candle.call_args.args[2]
         self.assertIsNone(repeated_grok_signal)
 
 

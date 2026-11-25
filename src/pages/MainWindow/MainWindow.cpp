@@ -6,6 +6,7 @@
 #include "MainWindow.h"
 #include "MainWindowDisplay.h"
 #include <array>
+#include <cstddef>
 #include <exception>
 #include <iomanip>
 #include <limits>
@@ -82,6 +83,7 @@ MainWindow::MainWindow()
 MainWindow::~MainWindow() {
 #ifdef ENABLE_IBKR_TWS_API
     ibkrClient_.setStatusChangedCallback({});
+    ibkrClient_.setSignalSavedCallback({});
     ibkrClient_.disconnect();
 #endif
 }
@@ -337,6 +339,9 @@ bool MainWindow::onCreate() {
                 "Nie udało się odświeżyć statusu połączenia IBKR. Kod Win32: " +
                 std::to_string(GetLastError()) + ".");
         }
+    });
+    ibkrClient_.setSignalSavedCallback([this](std::size_t signalCount) {
+        return candleMonitor_.playSavedSignalSounds(signalCount);
     });
 #endif
     if (!createMainMenu()) {
@@ -728,11 +733,12 @@ void MainWindow::onPaint() {
  */
 void MainWindow::onDestroy() {
     todoScheduler_.stop();
-    candleMonitor_.stop();
 #ifdef ENABLE_IBKR_TWS_API
     ibkrClient_.setStatusChangedCallback({});
+    ibkrClient_.setSignalSavedCallback({});
     ibkrClient_.disconnect();
 #endif
+    candleMonitor_.stop();
     if (mainMenu_ != nullptr) {
         if (!SetMenu(handle_, nullptr)) {
             ErrorLogger::warning(

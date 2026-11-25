@@ -3,7 +3,7 @@
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
@@ -38,11 +38,15 @@ def test_chatgpt_eurusd_stores_the_signal_candle_close_time():
         candles_count=100,
     )
     cursor = Mock()
+    cursor.rowcount = 1
+    cursor.lastrowid = 42
 
     MarketDataRepository._insert_signal(cursor, signal)
 
-    _, values = cursor.execute.call_args_list[0].args
+    insert_query, values = cursor.execute.call_args_list[0].args
+    assert "source_timestamp" in insert_query
     assert values[0] == closed.astimezone(WARSAW_TIME_ZONE).replace(tzinfo=None)
+    assert values[7] == int((closed - timedelta(minutes=1)).timestamp())
     _, potential_values = cursor.execute.call_args_list[1].args
     assert potential_values[1] == Decimal("0.00030")
 

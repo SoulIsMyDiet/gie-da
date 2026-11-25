@@ -221,10 +221,10 @@ TransactionsPage::~TransactionsPage() {
 bool TransactionsPage::create(HINSTANCE instance, HWND parent) {
     parent_ = parent;
     filterButtons_.resize(filterButtonCount, nullptr);
-    filterLists_.resize(reportColumnCount, nullptr);
-    openFilterLists_.resize(reportColumnCount, false);
-    filterOptionValues_.resize(reportColumnCount);
-    selectedFilterValues_.resize(reportColumnCount);
+    filterLists_.resize(filterButtonCount, nullptr);
+    openFilterLists_.resize(filterButtonCount, false);
+    filterOptionValues_.resize(filterButtonCount);
+    selectedFilterValues_.resize(filterButtonCount);
     filterSelected_.resize(filterButtonCount, false);
 
     INITCOMMONCONTROLSEX commonControls{};
@@ -285,9 +285,8 @@ bool TransactionsPage::create(HINSTANCE instance, HWND parent) {
         const wchar_t* label = isLegacy
             ? L"Legacy"
             : reportColumns[index].label;
-        const DWORD buttonStyle = isLegacy
-            ? BS_PUSHBUTTON | BS_MULTILINE
-            : BS_AUTOCHECKBOX | BS_PUSHLIKE | BS_MULTILINE;
+        const DWORD buttonStyle =
+            BS_AUTOCHECKBOX | BS_PUSHLIKE | BS_MULTILINE;
         filterButtons_[index] = CreateWindowExW(
             0, L"BUTTON", label,
             WS_CHILD | WS_TABSTOP | buttonStyle,
@@ -300,16 +299,18 @@ bool TransactionsPage::create(HINSTANCE instance, HWND parent) {
         }
 
         if (isLegacy) {
-            EnableWindow(filterButtons_[index], FALSE);
-            continue;
+            filterSelected_[index] = false;
+            SendMessageW(
+                filterButtons_[index], BM_SETCHECK, BST_UNCHECKED, 0);
+        } else {
+            filterSelected_[index] =
+                reportColumns[index].selectedByDefault;
+            SendMessageW(
+                filterButtons_[index], BM_SETCHECK,
+                filterSelected_[index] ? BST_CHECKED : BST_UNCHECKED, 0);
         }
 
-        filterSelected_[index] =
-            reportColumns[index].selectedByDefault;
-        SendMessageW(
-            filterButtons_[index], BM_SETCHECK,
-            filterSelected_[index] ? BST_CHECKED : BST_UNCHECKED, 0);
-        if (!reportColumns[index].hasMultiselect) {
+        if (!isLegacy && !reportColumns[index].hasMultiselect) {
             continue;
         }
 
@@ -388,7 +389,7 @@ bool TransactionsPage::handleCommand(
     if (notificationCode == LBN_SELCHANGE) {
         const int filterIndex = controlId - firstFilterListId;
         if (filterIndex >= 0 &&
-            static_cast<std::size_t>(filterIndex) < reportColumnCount) {
+            static_cast<std::size_t>(filterIndex) < filterButtonCount) {
             storeFilterSelection(static_cast<std::size_t>(filterIndex));
             return true;
         }
@@ -416,6 +417,28 @@ bool TransactionsPage::handleCommand(
         const std::size_t filterIndex =
             static_cast<std::size_t>(controlId - firstFilterButtonId);
         if (filterIndex == legacyButtonIndex) {
+            const bool isChecked =
+                SendMessageW(filterButtons_[filterIndex], BM_GETCHECK, 0, 0) ==
+                BST_CHECKED;
+            if (
+                filterSelected_[filterIndex] &&
+                !openFilterLists_[filterIndex] && !isChecked) {
+                SendMessageW(
+                    filterButtons_[filterIndex], BM_SETCHECK,
+                    BST_CHECKED, 0);
+                showFilterOptions(filterIndex);
+            } else if (isChecked && !filterSelected_[filterIndex]) {
+                filterSelected_[filterIndex] = true;
+                showFilterOptions(filterIndex);
+            } else if (!isChecked && filterSelected_[filterIndex]) {
+                storeFilterSelection(filterIndex);
+                filterSelected_[filterIndex] = false;
+                openFilterLists_[filterIndex] = false;
+                positionControls();
+                status_.clear();
+                updateControls();
+                InvalidateRect(parent_, nullptr, TRUE);
+            }
             return true;
         }
 
@@ -921,8 +944,9 @@ void TransactionsPage::generateReport() {
  * @throws std::bad_alloc Gdy nie można przydzielić pamięci na opcje.
  */
 bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
-    if (filterIndex >= reportColumnCount ||
-        !reportColumns[filterIndex].hasMultiselect ||
+    if (filterIndex >= filterButtonCount ||
+        (filterIndex != legacyButtonIndex &&
+         !reportColumns[filterIndex].hasMultiselect) ||
         filterLists_[filterIndex] == nullptr) {
         return false;
     }
@@ -943,8 +967,10 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
         filterOptionsLoaded_ = true;
     }
 
-    const auto foundOptions =
-        filterOptions_.find(reportColumns[filterIndex].key);
+    const std::string filterKey = filterIndex == legacyButtonIndex
+        ? "signal_era"
+        : reportColumns[filterIndex].key;
+    const auto foundOptions = filterOptions_.find(filterKey);
     const std::vector<TransactionReportFilterOption> emptyOptions;
     const std::vector<TransactionReportFilterOption>& filterOptions =
         foundOptions == filterOptions_.end()
@@ -1005,8 +1031,9 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
  * Zapisuje zaznaczone wartości aktualnie widocznej listy.
  */
 void TransactionsPage::storeFilterSelection(std::size_t filterIndex) {
-    if (filterIndex >= reportColumnCount ||
-        !reportColumns[filterIndex].hasMultiselect ||
+    if (filterIndex >= filterButtonCount ||
+        (filterIndex != legacyButtonIndex &&
+         !reportColumns[filterIndex].hasMultiselect) ||
         filterLists_[filterIndex] == nullptr) {
         return;
     }
@@ -1074,6 +1101,12 @@ TransactionsPage::selectedFilterValues() const {
             filters.emplace(
                 reportColumns[index].key, selectedFilterValues_[index]);
         }
+    }
+    if (
+        filterSelected_[legacyButtonIndex] &&
+        !selectedFilterValues_[legacyButtonIndex].empty()) {
+        filters.emplace(
+            "signal_era", selectedFilterValues_[legacyButtonIndex]);
     }
     return filters;
 }

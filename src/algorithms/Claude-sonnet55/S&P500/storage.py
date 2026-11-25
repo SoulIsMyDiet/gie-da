@@ -87,13 +87,13 @@ class SP500Storage:
             if last_key is None:
                 cursor.execute(
                     """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
-                       FROM candles WHERE symbol = %s AND `datetime` <= %s
+                       FROM candles_IBKR WHERE symbol = %s AND `datetime` <= %s
                        ORDER BY `datetime` DESC, utc_offset_minutes DESC LIMIT %s""",
                     (config.DB_SYMBOL, upper, _CANDLE_PAGE_SIZE))
             else:
                 cursor.execute(
                     """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
-                       FROM candles WHERE symbol = %s AND `datetime` <= %s
+                       FROM candles_IBKR WHERE symbol = %s AND `datetime` <= %s
                        AND (`datetime` < %s OR (`datetime` = %s AND utc_offset_minutes < %s))
                        ORDER BY `datetime` DESC, utc_offset_minutes DESC LIMIT %s""",
                     (config.DB_SYMBOL, upper, last_key[0], last_key[0], last_key[1], _CANDLE_PAGE_SIZE))

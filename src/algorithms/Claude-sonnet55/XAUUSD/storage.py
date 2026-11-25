@@ -111,7 +111,7 @@ class XAUUSDStorage:
             cursor = connection.cursor(dictionary=True)
             cursor.execute(
                 """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
-                   FROM candles
+                   FROM candles_IBKR
                    WHERE symbol = %s
                      AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) <= %s
                    ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC
@@ -147,7 +147,7 @@ class XAUUSDStorage:
         """Sprawdza istnienie świecy o otwarciu opened_epoch UTC."""
         opened = datetime.fromtimestamp(opened_epoch, UTC)
         row = self._fetchone(
-            """SELECT 1 FROM candles
+            """SELECT 1 FROM candles_IBKR
                WHERE symbol = %s
                  AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) = %s
                LIMIT 1""",
@@ -158,7 +158,7 @@ class XAUUSDStorage:
     def latest_candle_open_epoch(self) -> int | None:
         """Zwraca otwarcie najnowszej świecy XAU/USD jako epokę UTC."""
         row = self._fetchone(
-            """SELECT `datetime`, utc_offset_minutes FROM candles
+            """SELECT `datetime`, utc_offset_minutes FROM candles_IBKR
                WHERE symbol = %s
                ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC
                LIMIT 1""",

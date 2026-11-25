@@ -386,6 +386,14 @@ void IBGatewayClient::setStatusChangedCallback(
 }
 
 /**
+ * Podmienia funkcję odtwarzającą dźwięk dla nowych sygnałów.
+ */
+void IBGatewayClient::setSignalSavedCallback(SignalSavedCallback callback) {
+    const std::lock_guard<std::mutex> lock(statusMutex_);
+    signalSavedCallback_ = std::move(callback);
+}
+
+/**
  * Oznacza połączenie jako gotowe po zakończeniu uzgadniania protokołu.
  */
 void IBGatewayClient::nextValidId(int orderId) {
@@ -1243,9 +1251,10 @@ void IBGatewayClient::persistNextCompletedCandle() {
     }
 
     bool candleSaved = false;
+    std::size_t savedSignalCount = 0;
     std::string saveError;
     if (!CandleHistoryClient::saveIbkrCandle(
-            candleToSave, candleSaved, saveError)) {
+            candleToSave, candleSaved, savedSignalCount, saveError)) {
         {
             const std::lock_guard<std::mutex> lock(statusMutex_);
             completedCandleSaveInProgress_ = false;
@@ -1264,10 +1273,29 @@ void IBGatewayClient::persistNextCompletedCandle() {
         return;
     }
 
+    if (!saveError.empty()) {
+        ErrorLogger::warning(
+            "Lokalne API zapisało świecę IBKR z błędem strategii: " +
+            saveError);
+    }
     if (!candleSaved) {
         ErrorLogger::warning(
             "Pominięto zamkniętą świecę IBKR dla " +
             candleToSave.symbol + ", ponieważ rynek był zamknięty.");
+    }
+    if (candleSaved && savedSignalCount > 0) {
+        SignalSavedCallback signalSavedCallback;
+        {
+            const std::lock_guard<std::mutex> lock(statusMutex_);
+            signalSavedCallback = signalSavedCallback_;
+        }
+        if (!signalSavedCallback) {
+            ErrorLogger::warning(
+                "Nie ustawiono obsługi dźwięku dla nowych sygnałów IBKR.");
+        } else if (!signalSavedCallback(savedSignalCount)) {
+            ErrorLogger::error(
+                "Nie udało się odtworzyć dźwięku dla sygnałów IBKR.");
+        }
     }
     {
         const std::lock_guard<std::mutex> lock(statusMutex_);

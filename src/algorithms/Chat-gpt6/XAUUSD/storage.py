@@ -137,7 +137,7 @@ class XAUUSDStorage:
             cursor = connection.cursor(dictionary=True)
             cursor.execute(
                 """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
-                   FROM candles
+                   FROM candles_IBKR
                    WHERE symbol = %s AND utc_offset_minutes BETWEEN 60 AND 120
                      AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) <= %s
                    ORDER BY DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) DESC

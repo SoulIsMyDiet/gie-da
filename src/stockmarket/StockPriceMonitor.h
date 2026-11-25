@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <cstddef>
 #include <chrono>
 #include <string>
 #include <unordered_map>
@@ -48,6 +49,13 @@ public:
      * Zwraca kopię ostatniej świecy i statusu, bezpieczną do odczytu w innym wątku.
      */
     StockPriceSnapshot snapshot() const;
+
+    /**
+     * Odtwarza dźwięk dla podanej liczby nowych sygnałów.
+     * @param signalCount Liczba sygnałów zapisanych przez API.
+     * @return true, jeśli wszystkie dźwięki odtworzono poprawnie.
+     */
+    bool playSavedSignalSounds(std::size_t signalCount);
 
 private:
     /**

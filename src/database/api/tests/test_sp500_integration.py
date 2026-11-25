@@ -25,7 +25,7 @@ from app import (  # noqa: E402
     SP500StrategyError,
     GrokSP500Worker,
     _run_sp500_strategy,
-    save_candle,
+    _process_live_ibkr_candle as save_candle,
 )
 from fastapi import Request  # noqa: E402
 
@@ -40,7 +40,7 @@ def _request() -> tuple[Request, Mock]:
     """Tworzy żądanie z atrapą repozytorium i działającym stanem API."""
     repository = Mock()
     repository._is_market_open.return_value = True
-    repository.save_candle.return_value = (0, 1, "", 0)
+    repository.save_ibkr_candle.return_value = (True, 0)
     state = SimpleNamespace(
         repository=repository,
         strategy_ready=True,
@@ -52,7 +52,7 @@ def _request() -> tuple[Request, Mock]:
             "type": "http",
             "app": SimpleNamespace(state=state),
             "method": "POST",
-            "path": "/api/candles",
+            "path": "/api/candles/ibkr",
             "headers": [],
         }
     )
@@ -78,9 +78,9 @@ def test_closed_es_candle_triggers_only_claude_after_save() -> None:
     request, repository = _request()
     with patch("app._run_sp500_strategy", return_value=True) as strategy:
         response = save_candle(_candle(open_time), request)
-    repository.save_candle.assert_called_once()
+    repository.save_ibkr_candle.assert_called_once()
     strategy.assert_called_once_with(open_time)
-    assert response.body == b"0\n1"
+    assert response.body == b"1\n1\n"
 
 
 def test_forming_candle_and_other_symbol_do_not_trigger_es() -> None:
@@ -97,11 +97,11 @@ def test_unsaved_candle_does_not_trigger_es() -> None:
     """Analiza nie jest uruchamiana, gdy API nie zapisało świecy."""
     open_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=2)
     request, repository = _request()
-    repository.save_candle.return_value = (0, 0, "", 0)
+    repository.save_ibkr_candle.return_value = (False, 0)
     with patch("app._run_sp500_strategy") as strategy:
         response = save_candle(_candle(open_time), request)
     strategy.assert_not_called()
-    assert response.body == b"0\n0"
+    assert response.body == b"0\n0\n"
 
 
 @pytest.mark.parametrize(("exit_code", "should_beep"), [(0, True), (3, False), (4, False)])
@@ -124,8 +124,8 @@ def test_process_failure_is_not_reported_as_success() -> None:
     with patch("app.subprocess.run", side_effect=subprocess.TimeoutExpired("python", 30)):
         response = save_candle(_candle(open_time), request)
     assert response.status_code == 503
-    assert response.body == b"SP500_PARTIAL\n0\n0"
-    repository.save_candle.assert_called_once()
+    assert response.body == b"SP500_PARTIAL\n1\n0"
+    repository.save_ibkr_candle.assert_called_once()
 
 
 def test_unexpected_process_exit_is_error() -> None:
@@ -145,9 +145,9 @@ def test_partial_error_does_not_consume_grok_notifications() -> None:
     with patch("app._run_sp500_strategy", side_effect=SP500StrategyError("błąd")):
         response = save_candle(_candle(open_time), request)
     assert response.status_code == 503
-    assert response.body == b"SP500_PARTIAL\n0\n0"
+    assert response.body == b"SP500_PARTIAL\n1\n0"
     repository.grok_sp500_notification_ids.assert_not_called()
-    repository.save_candle.assert_called_once()
+    repository.save_ibkr_candle.assert_called_once()
 
 
 def test_worker_restarts_after_process_exit() -> None:
@@ -230,27 +230,27 @@ def test_notification_endpoints_with_http_validation() -> None:
 
 
 def test_lifespan_starts_and_stops_worker() -> None:
-    """Start i zakończenie API obejmują oba workery strategii."""
+    """Start i zakończenie API obejmują aktywne workery strategii i AI."""
     import app as module
     worker = Mock()
-    batch_worker = Mock()
+    ai_verification_worker = Mock()
 
     async def exercise():
         """Przechodzi pełny cykl życia API z atrapą repozytorium."""
         async with module.lifespan(module.app):
             worker.start.assert_called_once()
             worker.stop.assert_not_called()
-            batch_worker.start.assert_called_once()
-            batch_worker.stop.assert_not_called()
+            ai_verification_worker.start.assert_called_once()
+            ai_verification_worker.stop.assert_not_called()
         worker.stop.assert_called_once()
-        batch_worker.stop.assert_called_once()
+        ai_verification_worker.stop.assert_called_once()
 
     with patch.object(module, "configure_error_file_logging"), \
             patch.object(module, "GrokSP500Worker", return_value=worker), \
             patch.object(
                 module,
-                "CandleStrategyBatchWorker",
-                return_value=batch_worker,
+                "AIVerificationWorker",
+                return_value=ai_verification_worker,
             ), \
             patch.object(module.repository, "initialize"), \
             patch.object(module, "get_monitored_symbols", return_value=()), \

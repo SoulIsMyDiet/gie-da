@@ -65,6 +65,7 @@ struct IBGatewayQuoteSnapshot {
 class IBGatewayClient final : public DefaultEWrapper {
 public:
     using StatusChangedCallback = std::function<void()>;
+    using SignalSavedCallback = std::function<bool(std::size_t)>;
 
     /**
      * Zatrzymuje wątek klienta i zwalnia zasoby sygnału czytelnika.
@@ -129,6 +130,12 @@ public:
      * @param callback Funkcja powiadamiająca, może być pusta.
      */
     void setStatusChangedCallback(StatusChangedCallback callback);
+
+    /**
+     * Ustawia funkcję odtwarzającą dźwięk dla nowych sygnałów z API.
+     * @param callback Funkcja otrzymująca liczbę zapisanych sygnałów.
+     */
+    void setSignalSavedCallback(SignalSavedCallback callback);
 
     /**
      * Potwierdza gotowość API po otrzymaniu odpowiedzi nextValidId.
@@ -273,5 +280,6 @@ private:
     std::string historySyncSymbol_;
     std::vector<IBKRCandleData> historySyncCandles_;
     StatusChangedCallback statusChangedCallback_;
+    SignalSavedCallback signalSavedCallback_;
     std::thread connectionThread_;
 };

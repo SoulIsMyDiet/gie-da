@@ -33,7 +33,7 @@ class Cursor:
     def execute(self, query, params):
         """Wykonuje symulowany zakres klucza albo zwraca pusty stan sygnałów."""
         self.queries.append((query, params))
-        if "FROM candles" not in query:
+        if "FROM candles_IBKR" not in query:
             self.result = []
             return
         assert "DATE_SUB" not in query
@@ -110,7 +110,7 @@ def test_dst_cutoff_limit_and_subminute(monkeypatch):
     actual, connection = read(rows, cutoff, 2)
     assert [r["timestamp_utc"] for r in actual] == [
         datetime(2026, 10, 25, 1, 29, 59, tzinfo=UTC), cutoff]
-    assert len([q for q, _ in connection.candle_cursor.queries if "FROM candles" in q]) >= 2
+    assert len([q for q, _ in connection.candle_cursor.queries if "FROM candles_IBKR" in q]) >= 2
     with patch.object(storage.SP500Storage, "_connect", return_value=Connection(rows)):
         assert storage.SP500Storage({}).latest_closed_open(cutoff + timedelta(seconds=60)) == cutoff
 
@@ -168,7 +168,7 @@ def test_range_stops_before_old_history(monkeypatch):
     rows += [candle(wall - timedelta(days=100 + index), 0) for index in range(50)]
     actual, connection = read(rows, cutoff, 1)
     assert actual[0]["timestamp_utc"] == cutoff
-    assert len([q for q, _ in connection.candle_cursor.queries if "FROM candles" in q]) == 1
+    assert len([q for q, _ in connection.candle_cursor.queries if "FROM candles_IBKR" in q]) == 1
 
 
 def test_equal_utc_ties_are_stable_across_pages(monkeypatch):

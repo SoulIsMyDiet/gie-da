@@ -206,16 +206,18 @@ public:
         bool* candleSavedDespiteError = nullptr);
 
     /**
-     * Zapisuje świecę IBKR do odrębnej tabeli podglądowej.
+     * Zapisuje świecę IBKR i uruchamia w API strategie dla zamkniętej świecy.
      * @param candle Świeca instrumentu z czasem UTC i opcjonalnymi kwotowaniami.
      * @param candleSaved Otrzymuje true, jeśli rynek był otwarty i zapisano świecę.
-     * @param error Otrzymuje opis błędu walidacji lub żądania do lokalnego API.
-     * @return true, jeśli API poprawnie obsłużyło żądanie.
+     * @param savedSignalCount Otrzymuje liczbę nowych sygnałów do powiadomienia.
+     * @param error Otrzymuje opis błędu żądania lub częściowej awarii strategii.
+     * @return true, gdy odpowiedź API zawiera poprawny status i liczniki.
      * @throws std::bad_alloc, jeśli nie można przygotować żądania.
      */
     static bool saveIbkrCandle(
         const IBKRCandleData& candle,
         bool& candleSaved,
+        std::size_t& savedSignalCount,
         std::string& error);
 
     /**

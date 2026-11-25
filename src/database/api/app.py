@@ -169,6 +169,7 @@ TRANSACTION_REPORT_COLUMNS = {
 }
 
 TRANSACTION_REPORT_STATIC_OPTIONS = {
+    "signal_era": [("new", "Nowe"), ("legacy", "Legacy")],
     "signal_status": [("long", "Long"), ("short", "Short")],
     "saldo_20_aggr_candles": [
         ("positive", "Dodatnie (w tym 0)"),
@@ -239,6 +240,9 @@ TRANSACTION_REPORT_STATIC_OPTIONS = {
         ("canceled", "Canceled"),
     ],
 }
+
+# Backend: identyfikatory do tej granicy włącznie oznaczają sygnały legacy.
+LEGACY_SIGNAL_MAX_ID = 5230
 
 
 class TransactionReportRequest(BaseModel):
@@ -2051,22 +2055,25 @@ class MarketDataRepository:
     def save_candle(
         self,
         candle: CandleRecord,
+    ) -> tuple[int, int, str, int]:
+        """Zapisuje świecę legacy i zwraca liczbę wykrytych luk."""
+        return self.save_candles([candle], detect_gaps=True)
+
+    def save_ibkr_candle(
+        self,
+        candle: IBKRCandleRecord,
         signal: Signal | None = None,
         grok45_v2_signal: Grok45SignalRecord | None = None,
-    ) -> tuple[int, int, str, int]:
-        """Zapisuje świecę i zwraca liczbę nowo wykrytych luk."""
-        return self.save_candles(
-            [candle], signal, grok45_v2_signal, detect_gaps=True
-        )
-
-    def save_ibkr_candle(self, candle: IBKRCandleRecord) -> bool:
-        """Zapisuje lub aktualizuje świecę IBKR wyłącznie w tabeli podglądowej.
+    ) -> tuple[bool, int]:
+        """Zapisuje świecę IBKR i przetwarza sygnały powstałe na jej podstawie.
 
         Args:
             candle: Zweryfikowana świeca z czasem i kwotowaniami bid/ask.
+            signal: Opcjonalny sygnał podstawowej strategii EUR/USD.
+            grok45_v2_signal: Opcjonalny sygnał strategii Grok EUR/USD.
 
         Returns:
-            True po zapisie; False, gdy rynek jest zamknięty.
+            Informację o zapisie świecy i liczbę zapisanych sygnałów.
 
         Raises:
             mysql.connector.Error: Gdy zapis do bazy danych się nie powiedzie.
@@ -2075,7 +2082,7 @@ class MarketDataRepository:
         if not self._is_market_open(
             candle.symbol, candle.datetime.astimezone(timezone.utc)
         ):
-            return False
+            return False, 0
 
         candle_datetime_local = candle.datetime.astimezone(WARSAW_TIME_ZONE)
         local_datetime = candle_datetime_local.replace(tzinfo=None)
@@ -2121,8 +2128,19 @@ class MarketDataRepository:
                     offset_minutes,
                 ),
             )
+            signal_save_count = 0
+            if signal is not None and self._insert_signal(cursor, signal):
+                signal_save_count += 1
+            if grok45_v2_signal is not None and self._insert_grok45_signal(
+                cursor, grok45_v2_signal
+            ):
+                signal_save_count += 1
+            self.signal_potential_calculator.update_pending(
+                cursor, {candle.symbol}
+            )
+            TransactionTracker().process_candles(cursor, [candle])
             connection.commit()
-            return True
+            return True, signal_save_count
         except (mysql.connector.Error, ValueError):
             connection.rollback()
             raise
@@ -2211,6 +2229,10 @@ class MarketDataRepository:
                 """,
                 candle_values,
             )
+            self.signal_potential_calculator.update_pending(
+                cursor, product_symbols
+            )
+            TransactionTracker().process_candles(cursor, open_candles)
             connection.commit()
             return len(candle_values)
         except (mysql.connector.Error, ValueError):
@@ -2224,11 +2246,9 @@ class MarketDataRepository:
     def save_candles(
         self,
         candles: list[CandleRecord],
-        signal: Signal | None = None,
-        grok45_v2_signal: Grok45SignalRecord | None = None,
         detect_gaps: bool = False,
     ) -> tuple[int, int, str, int]:
-        """Zapisuje tylko świece z godzin otwarcia rynku i zwraca ich najnowszy czas."""
+        """Zapisuje świece legacy bez używania ich do obliczeń strategii."""
         candle_values = []
         product_symbols = set()
         newly_detected_gap_count = 0
@@ -2309,62 +2329,6 @@ class MarketDataRepository:
                     for candle in open_market_candles
                 ],
             )
-            filled_gap_candles = []
-            if cursor.rowcount > 0:
-                for symbol in product_symbols:
-                    symbol_candles = [
-                        candle
-                        for candle in open_market_candles
-                        if candle.symbol == symbol
-                    ]
-                    candle_times_utc = [
-                        candle.datetime.astimezone(timezone.utc).replace(
-                            tzinfo=None
-                        )
-                        for candle in symbol_candles
-                    ]
-                    cursor.execute(
-                        """
-                        SELECT candle_datetime_utc
-                        FROM candle_gaps
-                        WHERE symbol = %s AND status = 'filled'
-                            AND filled_at_utc = %s
-                            AND candle_datetime_utc >= %s
-                            AND candle_datetime_utc <= %s
-                        """,
-                        (
-                            symbol,
-                            current_utc,
-                            min(candle_times_utc),
-                            max(candle_times_utc),
-                        ),
-                    )
-                    filled_times_utc = {
-                        row[0] for row in cursor.fetchall()
-                    }
-                    filled_gap_candles.extend(
-                        candle
-                        for candle, candle_time_utc in zip(
-                            symbol_candles, candle_times_utc
-                        )
-                        if candle_time_utc in filled_times_utc
-                    )
-            if signal is not None:
-                self._insert_signal(cursor, signal)
-            grok45_v2_signal_saved = False
-            if grok45_v2_signal is not None:
-                grok45_v2_signal_saved = self._insert_grok45_signal(
-                    cursor, grok45_v2_signal
-                )
-            self.signal_potential_calculator.update_pending(
-                cursor, product_symbols
-            )
-            transaction_tracker = TransactionTracker()
-            transaction_tracker.process_candles(cursor, open_market_candles)
-            if filled_gap_candles:
-                transaction_tracker.recalculate_transactions(
-                    cursor, filled_gap_candles
-                )
             connection.commit()
         except (mysql.connector.Error, ValueError):
             connection.rollback()
@@ -2384,7 +2348,7 @@ class MarketDataRepository:
             newly_detected_gap_count,
             len(open_market_candles),
             latest_saved_time,
-            int(signal is not None) + int(grok45_v2_signal_saved),
+            0,
         )
 
     def _detect_gaps_before_candle(
@@ -2472,7 +2436,7 @@ class MarketDataRepository:
                 cursor.execute(
                     """
                     SELECT datetime, utc_offset_minutes, open, high, low, close, volume
-                    FROM candles
+                    FROM candles_IBKR
                     WHERE symbol = %s
                     ORDER BY DATE_SUB(
                         datetime, INTERVAL utc_offset_minutes MINUTE
@@ -2523,7 +2487,7 @@ class MarketDataRepository:
                 cursor.execute(
                     """
                     SELECT datetime, utc_offset_minutes, open, high, low, close, volume
-                    FROM candles
+                    FROM candles_IBKR
                     WHERE symbol = %s
                         AND DATE_SUB(
                             datetime, INTERVAL utc_offset_minutes MINUTE
@@ -2598,7 +2562,7 @@ class MarketDataRepository:
                 cursor.execute(
                     """
                     SELECT datetime, utc_offset_minutes, open, high, low, close
-                    FROM candles
+                    FROM candles_IBKR
                     WHERE symbol = %s
                         AND DATE_SUB(
                             datetime, INTERVAL utc_offset_minutes MINUTE
@@ -2649,6 +2613,77 @@ class MarketDataRepository:
             )
             previous_timestamp = timestamp_utc
         return candles
+
+    def fetch_ibkr_spread(
+        self, symbol: str, source_timestamp: int | None
+    ) -> Decimal | None:
+        """Pobiera spread ask-bid dokładnie ze świecy źródłowej sygnału.
+
+        Args:
+            symbol: Symbol instrumentu zapisany przy sygnale.
+            source_timestamp: Epoka UTC otwarcia świecy M1.
+
+        Returns:
+            Spread jako Decimal lub None, gdy świecy albo kwotowań brak.
+
+        Raises:
+            ValueError: Gdy czas jest nieprawidłowy albo świeca nie jest unikalna.
+            mysql.connector.Error: Gdy odczyt bazy danych się nie powiedzie.
+        """
+        if source_timestamp is None:
+            return None
+        if (
+            isinstance(source_timestamp, bool)
+            or not isinstance(source_timestamp, int)
+            or source_timestamp < 0
+        ):
+            raise ValueError("Czas źródłowej świecy IBKR jest nieprawidłowy.")
+
+        try:
+            source_datetime_utc = datetime.fromtimestamp(
+                source_timestamp, timezone.utc
+            ).replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError) as error:
+            raise ValueError(
+                "Czas źródłowej świecy IBKR jest poza obsługiwanym zakresem."
+            ) from error
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT bid, ask
+                    FROM candles_IBKR
+                    WHERE symbol = %s
+                        AND DATE_SUB(
+                            datetime, INTERVAL utc_offset_minutes MINUTE
+                        ) = %s
+                    LIMIT 2
+                    """,
+                    (symbol, source_datetime_utc),
+                )
+                rows = cursor.fetchall()
+                if not rows:
+                    return None
+                if len(rows) != 1:
+                    raise ValueError(
+                        "Świeca źródłowa IBKR nie jest unikalna."
+                    )
+                bid, ask = rows[0]
+                if bid is None or ask is None:
+                    return None
+
+                spread = Decimal(str(ask)) - Decimal(str(bid))
+                if not spread.is_finite() or spread < 0:
+                    raise ValueError(
+                        "Kwotowania bid/ask świecy IBKR są nieprawidłowe."
+                    )
+                return spread
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
 
     def has_algorithm_evaluation(
         self, product: str, algorithm_name: str, source_timestamp: int
@@ -2764,18 +2799,34 @@ class MarketDataRepository:
             connection.close()
 
     @staticmethod
-    def _insert_signal(cursor: mysql.connector.cursor.MySQLCursor, signal: Signal) -> None:
-        """Zapisuje sygnał z czasem zamknięcia świecy i jego pakietem JSON."""
+    def _insert_signal(
+        cursor: mysql.connector.cursor.MySQLCursor, signal: Signal
+    ) -> bool:
+        """Zapisuje sygnał wraz z czasem otwarcia świecy źródłowej.
+
+        Args:
+            cursor: Kursor aktywnej transakcji MySQL.
+            signal: Sygnał podstawowej strategii EUR/USD.
+
+        Returns:
+            True, jeśli zapisano nowy sygnał; w przeciwnym razie False.
+        """
         signal_payload = signal.to_payload()
         local_signal_time = signal.timestamp.astimezone(
             WARSAW_TIME_ZONE
         ).replace(tzinfo=None)
+        source_timestamp = int(
+            (signal.timestamp.astimezone(timezone.utc) - timedelta(minutes=1))
+            .timestamp()
+        )
         cursor.execute(
             """
             INSERT INTO signals
                 (`datetime`, product, price, `signal`, algorithm_name,
-                 ai_decision, transaction_id, candles_count, signal_parameters)
-            VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s)
+                 ai_decision, transaction_id, candles_count, signal_parameters,
+                 source_timestamp)
+            VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE id = id
             """,
             (
                 local_signal_time,
@@ -2787,8 +2838,11 @@ class MarketDataRepository:
                 json.dumps(
                     signal_payload, allow_nan=False, separators=(",", ":")
                 ),
+                source_timestamp,
             ),
         )
+        if cursor.rowcount != 1:
+            return False
         cursor.execute(
             """
             INSERT INTO signal_potention (signal_id, average_spread)
@@ -2799,6 +2853,7 @@ class MarketDataRepository:
                 SignalPotentialCalculator.spread_for_product("EUR/USD"),
             ),
         )
+        return True
 
     def _insert_grok45_signal(
         self,
@@ -2835,7 +2890,7 @@ class MarketDataRepository:
             SELECT COUNT(*)
             FROM (
                 SELECT 1
-                FROM candles
+                FROM candles_IBKR
                 WHERE symbol = %s
                     AND DATE_SUB(
                         datetime, INTERVAL utc_offset_minutes MINUTE
@@ -3642,6 +3697,19 @@ class MarketDataRepository:
         for column_name, selected_values in filters.items():
             if not selected_values:
                 continue
+            if column_name == "signal_era":
+                selected_eras = set(selected_values)
+                if selected_eras == {"new"}:
+                    conditions.append("s.id > %s")
+                    query_values.append(LEGACY_SIGNAL_MAX_ID)
+                elif selected_eras == {"legacy"}:
+                    conditions.append("s.id <= %s")
+                    query_values.append(LEGACY_SIGNAL_MAX_ID)
+                elif selected_eras != {"new", "legacy"}:
+                    raise ValueError(
+                        "Nieprawidłowa wartość filtra: signal_era."
+                    )
+                continue
             definition = TRANSACTION_REPORT_COLUMNS[column_name]
             expression = definition["expression"]
             filter_type = definition["filter"]
@@ -3806,7 +3874,7 @@ class MarketDataRepository:
                         CAST(low AS CHAR),
                         CAST(close AS CHAR),
                         CAST(volume AS CHAR)
-                    FROM candles
+                    FROM candles_IBKR
                     WHERE symbol = 'EUR/USD'
                     ORDER BY DATE_SUB(
                         datetime, INTERVAL utc_offset_minutes MINUTE
@@ -4154,18 +4222,9 @@ async def lifespan(application: FastAPI):
     ai_verification_worker = AIVerificationWorker(repository)
     ai_verification_worker.start()
     application.state.ai_verification_worker = ai_verification_worker
-    candle_strategy_batch_worker = CandleStrategyBatchWorker(
-        repository,
-        application,
-    )
-    candle_strategy_batch_worker.start()
-    application.state.candle_strategy_batch_worker = (
-        candle_strategy_batch_worker
-    )
     try:
         yield
     finally:
-        candle_strategy_batch_worker.stop()
         if worker is not None:
             worker.stop()
         ai_verification_worker.stop()
@@ -5093,14 +5152,15 @@ def _process_closed_strategy_candle(
 
 @app.post("/api/candles/ibkr", response_class=Response)
 def save_ibkr_candle(candle: IBKRCandleRecord, request: Request) -> Response:
-    """Zapisuje świecę IBKR bez uruchamiania algorytmów ani obliczeń.
+    """Zapisuje świecę IBKR i uruchamia strategie dla zamkniętej świecy.
 
     Args:
         candle: Zweryfikowana świeca aktywnego instrumentu przesłana przez IBKR.
         request: Żądanie udostępniające repozytorium bazy danych aplikacji.
 
     Returns:
-        Tekstowy status zapisu: 1 dla zapisu albo 0 dla zamkniętego rynku.
+        Dwie linie tekstu: status zapisu świecy (1 albo 0) i liczba nowych
+        sygnałów do powiadomienia.
 
     Raises:
         HTTPException: Gdy żądanie dotyczy nieobsługiwanego instrumentu.
@@ -5110,11 +5170,7 @@ def save_ibkr_candle(candle: IBKRCandleRecord, request: Request) -> Response:
             status_code=422,
             detail=f"Instrument {candle.symbol} nie jest skonfigurowany.",
         )
-    saved = request.app.state.repository.save_ibkr_candle(candle)
-    return Response(
-        content="1\n" if saved else "0\n",
-        media_type="text/plain; charset=utf-8",
-    )
+    return _process_live_ibkr_candle(candle, request)
 
 
 @app.post("/api/candles/ibkr/batch", response_class=Response)
@@ -5158,9 +5214,10 @@ def save_ibkr_candle_batch(
     )
 
 
-@app.post("/api/candles", response_class=Response)
-def save_candle(candle: CandleRecord, request: Request) -> Response:
-    """Zapisuje świecę i zwraca liczbę nowo wykrytych brakujących minut."""
+def _process_live_ibkr_candle(
+    candle: IBKRCandleRecord, request: Request
+) -> Response:
+    """Zapisuje świecę IBKR i przetwarza istniejące strategie dla niej."""
     if not is_monitored_product(candle.symbol):
         raise HTTPException(
             status_code=422,
@@ -5170,7 +5227,7 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
         candle.symbol,
         candle.datetime.astimezone(timezone.utc)
     ):
-        return Response(content="0\n0", media_type="text/plain; charset=utf-8")
+        return Response(content="0\n0\n", media_type="text/plain; charset=utf-8")
 
     xauusd_error = False
     claude_xauusd_error = False
@@ -5244,11 +5301,13 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
                     grok45_v2_signal = _generate_grok45_v2_signal(
                         updated_grok45_v2_candles
                     )
-            new_gap_count, saved_candle_count, _, signal_save_count = (
-                request.app.state.repository.save_candle(
+            saved_candle, signal_save_count = (
+                request.app.state.repository.save_ibkr_candle(
                     candle, signal, grok45_v2_signal
                 )
             )
+            new_gap_count = 0
+            saved_candle_count = int(saved_candle)
             signal_save_count = int(signal_save_count)
             if (
                 candle.symbol == USDJPY_DATABASE_SYMBOL
@@ -5426,12 +5485,14 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
         logger.error("Błąd strategii S&P 500 po zapisaniu świecy: %s", error)
         return Response(
             status_code=503,
-            content=f"SP500_PARTIAL\n{new_gap_count}\n{signal_save_count}",
+            content=(
+                f"SP500_PARTIAL\n{saved_candle_count}\n{signal_save_count}"
+            ),
             media_type="text/plain; charset=utf-8",
         )
     
     return Response(
-        content=f"{new_gap_count}\n{signal_save_count}",
+        content=f"{saved_candle_count}\n{signal_save_count}\n",
         media_type="text/plain; charset=utf-8",
         headers={
             name: "1"
@@ -5442,6 +5503,51 @@ def save_candle(candle: CandleRecord, request: Request) -> Response:
             )
             if enabled
         } or None,
+    )
+
+
+@app.post("/api/candles", response_class=Response)
+def save_candle(candle: CandleRecord, request: Request) -> Response:
+    """Zapisuje świecę Twelve Data wyłącznie w tabeli legacy.
+
+    Args:
+        candle: Zweryfikowana świeca odebrana ze starszego źródła danych.
+        request: Żądanie udostępniające repozytorium MySQL.
+
+    Returns:
+        Liczbę wykrytych luk oraz zero sygnałów, ponieważ źródłem strategii
+        jest wyłącznie strumień świec IBKR.
+
+    Raises:
+        HTTPException: Gdy symbol nie jest obsługiwany lub zapis się nie uda.
+    """
+    if not is_monitored_product(candle.symbol):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Instrument {candle.symbol} nie jest skonfigurowany.",
+        )
+    if not request.app.state.repository._is_market_open(
+        candle.symbol,
+        candle.datetime.astimezone(timezone.utc),
+    ):
+        return Response(content="0\n0", media_type="text/plain; charset=utf-8")
+    try:
+        new_gap_count, _saved_count, _latest_time, _signal_count = (
+            request.app.state.repository.save_candle(candle)
+        )
+    except mysql.connector.Error as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Nie udało się zapisać świecy legacy w bazie MySQL.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Świeca legacy jest nieprawidłowa.",
+        ) from error
+    return Response(
+        content=f"{new_gap_count}\n0",
+        media_type="text/plain; charset=utf-8",
     )
 
 
@@ -5906,18 +6012,17 @@ class CandleStrategyBatchWorker:
 
 @app.post("/api/candles/batch", response_class=Response)
 def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
-    """Zapisuje paczkę świec i trwale zleca ewaluacje strategii w tle.
+    """Zapisuje paczkę świec legacy bez odtwarzania strategii.
 
     Args:
         batch: Zweryfikowana paczka świec z klienta.
         request: Żądanie udostępniające repozytorium i stan aplikacji.
 
     Returns:
-        Odpowiedź tekstową zgodną z dotychczasowym formatem klienta C++.
+        Liczbę zapisanych świec i ich najnowszy czas.
 
     Raises:
-        HTTPException: Gdy instrument jest nieobsługiwany lub zapis albo
-            trwałe zlecenie oceny strategii się nie powiedzie.
+        HTTPException: Gdy instrument jest nieobsługiwany lub zapis się nie powiedzie.
     """
     unsupported_symbols = sorted(
         {
@@ -5934,34 +6039,10 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                 + ", ".join(unsupported_symbols)
             ),
         )
-    updates_eurusd_history = any(
-        candle.symbol == "EUR/USD" for candle in batch.candles
-    )
     try:
-        if updates_eurusd_history:
-            with strategy_lock:
-                request.app.state.strategy_ready = False
-                _, saved_candle_count, latest_saved_time, _ = (
-                    request.app.state.repository.save_candles(batch.candles)
-                )
-                updated_strategy = copy.deepcopy(
-                    request.app.state.eurusd_strategy
-                )
-                candle_history = (
-                    request.app.state.repository.fetch_candle_history(
-                        "EUR/USD"
-                    )
-                )
-                updated_strategy.warm_up(candle_history)
-                request.app.state.eurusd_strategy = updated_strategy
-                request.app.state.grok45_v2_candles = (
-                    _grok45_candles_from_history(candle_history)
-                )
-                request.app.state.strategy_ready = True
-        else:
-            _, saved_candle_count, latest_saved_time, _ = (
-                request.app.state.repository.save_candles(batch.candles)
-            )
+        _, saved_candle_count, latest_saved_time, _ = (
+            request.app.state.repository.save_candles(batch.candles)
+        )
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
@@ -5972,28 +6053,9 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
             status_code=409,
             detail="Świeca jest nieprawidłowa lub nie zachowuje kolejności czasu.",
         ) from error
-    except RuntimeError as error:
-        raise HTTPException(
-            status_code=503,
-            detail="Nie udało się przygotować strategii dla paczki świec.",
-        ) from error
-
-    try:
-        request.app.state.candle_strategy_batch_worker.enqueue(batch)
-    except mysql.connector.Error as error:
-        logger.exception("Nie udało się dodać paczki do kolejki ocen strategii.")
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Świece zapisano, ale nie udało się trwale zlecić "
-                "oceny strategii dla paczki."
-            ),
-        ) from error
-
     return Response(
         content=f"{saved_candle_count}\n{latest_saved_time}",
         media_type="text/plain; charset=utf-8",
-        headers={"X-Strategy-Processing": "queued"},
     )
 
 
@@ -6158,7 +6220,10 @@ def transaction_report_options(request: Request) -> Response:
         column_name: list(
             TRANSACTION_REPORT_STATIC_OPTIONS.get(column_name, [])
         )
-        for column_name in TRANSACTION_REPORT_COLUMNS
+        for column_name in (
+            *TRANSACTION_REPORT_COLUMNS,
+            "signal_era",
+        )
     }
     for column_name, values in dynamic_options.items():
         all_options[column_name] = [
@@ -6167,7 +6232,7 @@ def transaction_report_options(request: Request) -> Response:
         ]
 
     report_lines = []
-    for column_name in TRANSACTION_REPORT_COLUMNS:
+    for column_name in (*TRANSACTION_REPORT_COLUMNS, "signal_era"):
         for value, label in all_options[column_name]:
             report_lines.append(
                 "\t".join(
@@ -6226,7 +6291,10 @@ def filtered_transaction_report(
         )
 
     for column_name, selected_values in report.filters.items():
-        if column_name not in report.columns:
+        if (
+            column_name not in report.columns
+            and column_name != "signal_era"
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="Filtry można ustawiać tylko dla wybranych kolumn.",
