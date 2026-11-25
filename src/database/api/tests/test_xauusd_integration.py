@@ -26,7 +26,9 @@ def request_and_candle(opened, symbol="XAU/USD", saved=1):
     repository._is_market_open.return_value = True
     repository.save_candle.return_value = (2, saved, "", 3)
     state = SimpleNamespace(
-        repository=repository, strategy_ready=True,
+        repository=repository,
+        candle_strategy_batch_worker=Mock(),
+        strategy_ready=True,
         eurusd_strategy=object(), grok45_v2_candles=[],
     )
     request = Request({"type": "http", "app": SimpleNamespace(state=state),
@@ -109,6 +111,7 @@ def test_batch_evaluates_both_xauusd_strategies_without_sound():
     repository.fetch_candle_history.return_value = []
     state = SimpleNamespace(
         repository=repository,
+        candle_strategy_batch_worker=Mock(),
         strategy_ready=True,
         eurusd_strategy=Mock(),
         grok45_v2_candles=[],
@@ -122,6 +125,7 @@ def test_batch_evaluates_both_xauusd_strategies_without_sound():
             "headers": [],
         }
     )
+    batch = app.CandleBatch(candles=candles)
     with patch.object(app, "is_monitored_product", return_value=True), \
             patch.object(
                 app, "_run_xauusd_strategy", return_value=("NONE", True)
@@ -130,10 +134,12 @@ def test_batch_evaluates_both_xauusd_strategies_without_sound():
                     app, "_run_claude_xauusd_strategy", return_value=("NONE", True)
                 ) as claude, \
             patch.object(app, "Thread") as thread:
-        response = app.save_candle_batch(app.CandleBatch(candles=candles), request)
+        response = app.save_candle_batch(batch, request)
+        app._process_candle_batch_strategies(request, batch)
 
     assert response.status_code == 200
     assert response.body == b"2\nczas"
+    state.candle_strategy_batch_worker.enqueue.assert_called_once_with(batch)
     expected_times = [candle.datetime for candle in candles]
     assert [call.args[0] for call in chat.call_args_list] == expected_times
     assert [call.args[0] for call in claude.call_args_list] == expected_times
@@ -285,6 +291,10 @@ def test_initialize_creates_and_seeds_active_prompt():
 
     calls = [call.args for call in cursor.execute.call_args_list]
     assert any("CREATE TABLE IF NOT EXISTS prompts" in call[0] for call in calls)
+    assert any(
+        "CREATE TABLE IF NOT EXISTS candle_strategy_batch_jobs" in call[0]
+        for call in calls
+    )
     seed_call = next(
         call for call in calls if "INSERT IGNORE INTO prompts" in call[0]
     )

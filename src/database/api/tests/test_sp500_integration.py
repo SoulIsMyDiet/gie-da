@@ -230,19 +230,28 @@ def test_notification_endpoints_with_http_validation() -> None:
 
 
 def test_lifespan_starts_and_stops_worker() -> None:
-    """Start i zakończenie API obejmują uruchomienie i zamknięcie procesu pętli."""
+    """Start i zakończenie API obejmują oba workery strategii."""
     import app as module
     worker = Mock()
+    batch_worker = Mock()
 
     async def exercise():
         """Przechodzi pełny cykl życia API z atrapą repozytorium."""
         async with module.lifespan(module.app):
             worker.start.assert_called_once()
             worker.stop.assert_not_called()
+            batch_worker.start.assert_called_once()
+            batch_worker.stop.assert_not_called()
         worker.stop.assert_called_once()
+        batch_worker.stop.assert_called_once()
 
     with patch.object(module, "configure_error_file_logging"), \
             patch.object(module, "GrokSP500Worker", return_value=worker), \
+            patch.object(
+                module,
+                "CandleStrategyBatchWorker",
+                return_value=batch_worker,
+            ), \
             patch.object(module.repository, "initialize"), \
             patch.object(module, "get_monitored_symbols", return_value=()), \
             patch.object(module, "is_monitored_product", return_value=True), \
@@ -263,6 +272,11 @@ def test_lifespan_skips_worker_when_sp500_is_not_monitored() -> None:
 
     with patch.object(module, "configure_error_file_logging"), \
             patch.object(module, "GrokSP500Worker") as worker_factory, \
+            patch.object(
+                module,
+                "CandleStrategyBatchWorker",
+                return_value=Mock(),
+            ), \
             patch.object(module.repository, "initialize"), \
             patch.object(module, "get_monitored_symbols", return_value=()), \
             patch.object(module, "is_monitored_product", return_value=False), \

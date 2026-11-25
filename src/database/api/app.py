@@ -476,6 +476,7 @@ WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
 GROK45_ANALYSIS_WINDOW = 100
 SP500_PROCESS_TIMEOUT_SECONDS = 30
+CANDLE_STRATEGY_POLL_INTERVAL_SECONDS = 1
 logger = logging.getLogger(__name__)
 
 
@@ -1198,6 +1199,7 @@ class MarketDataRepository:
                 self._migrate_signal_enum(cursor)
                 self._migrate_signal_source_timestamp(cursor)
                 self._initialize_ai_verification_schema(cursor)
+                self._initialize_candle_strategy_batch_schema(cursor)
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS algorithm_evaluations (
@@ -1466,6 +1468,57 @@ class MarketDataRepository:
                     (product, algorithm_name, source_timestamp)
                 """
             )
+
+    @staticmethod
+    def _initialize_candle_strategy_batch_schema(
+        cursor: mysql.connector.cursor.MySQLCursor,
+    ) -> None:
+        """Tworzy kolejkę ocen paczek i odzyskuje porzucone zadania.
+
+        Args:
+            cursor: Kursor aktywnego połączenia z bazą MySQL.
+
+        Returns:
+            None.
+
+        Raises:
+            mysql.connector.Error: Gdy utworzenie kolejki w MySQL zawiedzie.
+        """
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS candle_strategy_batch_jobs (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                batch_payload JSON NULL,
+                status ENUM(
+                    'pending', 'processing', 'completed', 'failed'
+                ) NOT NULL DEFAULT 'pending',
+                attempts INT UNSIGNED NOT NULL DEFAULT 0,
+                last_error TEXT NULL,
+                created_at_utc DATETIME(6) NOT NULL
+                    DEFAULT CURRENT_TIMESTAMP(6),
+                updated_at_utc DATETIME(6) NOT NULL
+                    DEFAULT CURRENT_TIMESTAMP(6)
+                    ON UPDATE CURRENT_TIMESTAMP(6),
+                INDEX idx_candle_strategy_batch_status
+                    (status, created_at_utc)
+            ) ENGINE=InnoDB
+            DEFAULT CHARACTER SET utf8mb4
+            COLLATE utf8mb4_unicode_ci
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE candle_strategy_batch_jobs
+            SET status = 'pending',
+                last_error = CONCAT(
+                    'Odzyskano zadanie po nieoczekiwanym zatrzymaniu API. ',
+                    COALESCE(last_error, '')
+                )
+            WHERE status = 'processing'
+                AND updated_at_utc <
+                    UTC_TIMESTAMP(6) - INTERVAL 10 MINUTE
+            """,
+        )
 
     @staticmethod
     def _initialize_ai_verification_schema(
@@ -4088,9 +4141,18 @@ async def lifespan(application: FastAPI):
     ai_verification_worker = AIVerificationWorker(repository)
     ai_verification_worker.start()
     application.state.ai_verification_worker = ai_verification_worker
+    candle_strategy_batch_worker = CandleStrategyBatchWorker(
+        repository,
+        application,
+    )
+    candle_strategy_batch_worker.start()
+    application.state.candle_strategy_batch_worker = (
+        candle_strategy_batch_worker
+    )
     try:
         yield
     finally:
+        candle_strategy_batch_worker.stop()
         if worker is not None:
             worker.stop()
         ai_verification_worker.stop()
@@ -5451,42 +5513,26 @@ def save_grok45_signal(
     )
 
 
-@app.post("/api/candles/batch", response_class=Response)
-def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
-    """Zapisuje paczkę świec i ocenia zamknięte świece obsługiwanych strategii."""
-    unsupported_symbols = sorted(
-        {
-            candle.symbol
-            for candle in batch.candles
-            if not is_monitored_product(candle.symbol)
-        }
-    )
-    if unsupported_symbols:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Nie skonfigurowano instrumentów: "
-                + ", ".join(unsupported_symbols)
-            ),
-        )
+def _process_candle_batch_strategies(
+    request: Request,
+    batch: CandleBatch,
+) -> None:
+    """Ocenia świece z zapisanej paczki poza obsługą żądania HTTP.
+
+    Args:
+        request: Żądanie udostępniające stan i repozytorium aplikacji.
+        batch: Zapisana paczka świec do oceny w kolejności czasu.
+
+    Returns:
+        None.
+
+    Raises:
+        mysql.connector.Error: Gdy sprawdzenie rynku lub zapis sygnału zawiedzie.
+        ValueError: Gdy dane świecy nie mogą zostać wykorzystane przez strategię.
+        RuntimeError: Gdy strategia nie może ocenić zapisanej świecy.
+    """
     try:
         with strategy_lock:
-            request.app.state.strategy_ready = False
-            _, saved_candle_count, latest_saved_time, _ = (
-                request.app.state.repository.save_candles(
-                    batch.candles
-                )
-            )
-            updated_strategy = copy.deepcopy(request.app.state.eurusd_strategy)
-            candle_history = (
-                request.app.state.repository.fetch_candle_history("EUR/USD")
-            )
-            updated_strategy.warm_up(candle_history)
-            request.app.state.eurusd_strategy = updated_strategy
-            request.app.state.grok45_v2_candles = (
-                _grok45_candles_from_history(candle_history)
-            )
-            request.app.state.strategy_ready = True
             batch_claude_usdjpy_candles = sorted(
                 (
                     candle
@@ -5514,6 +5560,7 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                     logger.exception(
                         "Nie udało się ocenić paczki świec USD/JPY przez Claude."
                     )
+
             batch_strategy_candles = sorted(
                 (
                     candle
@@ -5537,6 +5584,7 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                     datetime.now(timezone.utc),
                     enqueue_notifications=False,
                 )
+
             batch_xauusd_candles = sorted(
                 (
                     candle
@@ -5570,6 +5618,337 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
                             candle_open_time.isoformat(),
                             strategy_name,
                         )
+    except mysql.connector.Error:
+        logger.exception(
+            "Błąd bazy danych podczas oceny strategii dla paczki świec."
+        )
+        raise
+    except ValueError:
+        logger.exception(
+            "Nieprawidłowe dane podczas oceny strategii dla paczki świec."
+        )
+        raise
+    except RuntimeError:
+        logger.exception(
+            "Nie udało się ocenić jednej lub więcej strategii dla paczki świec."
+        )
+        raise
+
+
+class CandleStrategyBatchWorker:
+    """Trwale kolejkuje paczki i ocenia je kolejno w tle.
+
+    Oczekujące zadania pozostają w MySQL po restarcie API. Po udanej ocenie
+    usuwany jest duży JSON paczki, a błędne zadania pozostają do diagnostyki.
+    """
+
+    def __init__(
+        self,
+        repository: MarketDataRepository,
+        application: FastAPI,
+    ) -> None:
+        """Przygotowuje worker korzystający z bazy i stanu API.
+
+        Args:
+            repository: Repozytorium udostępniające ustawienia MySQL.
+            application: Aplikacja zawierająca strategie i ich stan.
+
+        Returns:
+            None.
+        """
+        self._database_settings = repository.database_settings
+        self._application = application
+        self._stop_event = Event()
+        self._thread = Thread(
+            target=self._run,
+            name="candle-strategy-batch",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        """Uruchamia wątek pobierający oczekujące paczki z MySQL.
+
+        Returns:
+            None.
+
+        Raises:
+            RuntimeError: Gdy wątek roboczy był już wcześniej uruchomiony.
+        """
+        self._thread.start()
+
+    def enqueue(self, batch: CandleBatch) -> None:
+        """Zapisuje paczkę jako trwałe zadanie oczekujące w MySQL.
+
+        Args:
+            batch: Zapisana paczka świec do późniejszej oceny.
+
+        Returns:
+            None.
+
+        Raises:
+            mysql.connector.Error: Gdy zapis zadania do MySQL się nie powiedzie.
+        """
+        connection = mysql.connector.connect(**self._database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO candle_strategy_batch_jobs (batch_payload)
+                    VALUES (%s)
+                    """,
+                    (batch.model_dump_json(),),
+                )
+                connection.commit()
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def stop(self) -> None:
+        """Zatrzymuje odpytywanie MySQL i czeka do 35 sekund na bieżącą ocenę.
+
+        Returns:
+            None.
+        """
+        self._stop_event.set()
+        self._thread.join(timeout=SP500_PROCESS_TIMEOUT_SECONDS + 5)
+        if self._thread.is_alive():
+            logger.error(
+                "Wątek ocen strategii nie zakończył pracy; "
+                "zadanie zostanie odzyskane po upływie czasu dzierżawy."
+            )
+
+    def process_next_job(self) -> bool:
+        """Przetwarza jedno zadanie i zwraca, czy kolejka miała wpis.
+
+        Returns:
+            ``True`` dla pobranego zadania albo ``False`` dla pustej kolejki.
+
+        Raises:
+            mysql.connector.Error: Gdy odczyt lub aktualizacja kolejki zawiedzie.
+        """
+        job = self._claim_next_job()
+        if job is None:
+            return False
+        job_id, batch_payload = job
+        try:
+            batch = CandleBatch.model_validate_json(batch_payload)
+            request = Request(
+                {
+                    "type": "http",
+                    "app": self._application,
+                    "method": "POST",
+                    "path": "/api/candles/batch",
+                    "headers": [],
+                }
+            )
+            _process_candle_batch_strategies(request, batch)
+        except Exception as error:
+            logger.exception(
+                "Nie udało się ocenić paczki świec z zadania %s.", job_id
+            )
+            self._mark_job_failed(job_id, str(error))
+        else:
+            self._mark_job_completed(job_id)
+        return True
+
+    def _claim_next_job(self) -> tuple[int, str] | None:
+        """Atomowo przejmuje najstarszą paczkę oczekującą.
+
+        Returns:
+            Identyfikator i JSON zadania albo ``None``, gdy kolejka jest pusta.
+
+        Raises:
+            mysql.connector.Error: Gdy nie można przejąć zadania w MySQL.
+        """
+        connection = mysql.connector.connect(**self._database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                connection.start_transaction()
+                cursor.execute(
+                    """
+                    SELECT id, batch_payload
+                    FROM candle_strategy_batch_jobs
+                    WHERE status = 'pending'
+                    ORDER BY created_at_utc, id
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    """
+                )
+                job = cursor.fetchone()
+                if job is None:
+                    connection.rollback()
+                    return None
+                cursor.execute(
+                    """
+                    UPDATE candle_strategy_batch_jobs
+                    SET status = 'processing',
+                        attempts = attempts + 1,
+                        updated_at_utc = UTC_TIMESTAMP(6)
+                    WHERE id = %s AND status = 'pending'
+                    """,
+                    (job[0],),
+                )
+                connection.commit()
+                payload = job[1]
+                if isinstance(payload, bytes):
+                    payload = payload.decode("utf-8")
+                if isinstance(payload, dict):
+                    payload = json.dumps(payload, ensure_ascii=False)
+                return int(job[0]), str(payload)
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def _mark_job_completed(self, job_id: int) -> None:
+        """Oznacza ocenioną paczkę jako zakończoną i usuwa jej duży payload.
+
+        Args:
+            job_id: Identyfikator przetworzonego zadania.
+
+        Returns:
+            None.
+
+        Raises:
+            mysql.connector.Error: Gdy aktualizacja statusu w MySQL zawiedzie.
+        """
+        self._update_job_status(job_id, "completed", None)
+
+    def _mark_job_failed(self, job_id: int, error_message: str) -> None:
+        """Zachowuje błąd oceny paczki, aby nie ukryć utraconego wyniku.
+
+        Args:
+            job_id: Identyfikator zadania, którego ocena się nie powiodła.
+            error_message: Szczegóły błędu przeznaczone do diagnostyki.
+
+        Returns:
+            None.
+
+        Raises:
+            mysql.connector.Error: Gdy zapis błędu w MySQL się nie powiedzie.
+        """
+        self._update_job_status(job_id, "failed", error_message[:4000])
+
+    def _update_job_status(
+        self,
+        job_id: int,
+        status: str,
+        error_message: str | None,
+    ) -> None:
+        """Zapisuje końcowy status zadania i zwalnia połączenie z bazą.
+
+        Args:
+            job_id: Identyfikator zadania.
+            status: Końcowy status zadania.
+            error_message: Opis błędu albo ``None`` po poprawnej ocenie.
+
+        Returns:
+            None.
+
+        Raises:
+            mysql.connector.Error: Gdy aktualizacja statusu w MySQL zawiedzie.
+        """
+        connection = mysql.connector.connect(**self._database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE candle_strategy_batch_jobs
+                    SET status = %s,
+                        last_error = %s,
+                        batch_payload = IF(
+                            %s = 'completed', NULL, batch_payload
+                        ),
+                        updated_at_utc = UTC_TIMESTAMP(6)
+                    WHERE id = %s AND status = 'processing'
+                    """,
+                    (status, error_message, status, job_id),
+                )
+                connection.commit()
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def _run(self) -> None:
+        """Odpytuje trwałą kolejkę i jawnie loguje błędy infrastruktury.
+
+        Returns:
+            None.
+        """
+        while not self._stop_event.is_set():
+            try:
+                processed_job = self.process_next_job()
+            except mysql.connector.Error:
+                logger.exception("Błąd bazy danych w kolejce ocen strategii.")
+                processed_job = False
+            self._stop_event.wait(
+                0 if processed_job else CANDLE_STRATEGY_POLL_INTERVAL_SECONDS
+            )
+
+
+@app.post("/api/candles/batch", response_class=Response)
+def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
+    """Zapisuje paczkę świec i trwale zleca ewaluacje strategii w tle.
+
+    Args:
+        batch: Zweryfikowana paczka świec z klienta.
+        request: Żądanie udostępniające repozytorium i stan aplikacji.
+
+    Returns:
+        Odpowiedź tekstową zgodną z dotychczasowym formatem klienta C++.
+
+    Raises:
+        HTTPException: Gdy instrument jest nieobsługiwany lub zapis albo
+            trwałe zlecenie oceny strategii się nie powiedzie.
+    """
+    unsupported_symbols = sorted(
+        {
+            candle.symbol
+            for candle in batch.candles
+            if not is_monitored_product(candle.symbol)
+        }
+    )
+    if unsupported_symbols:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Nie skonfigurowano instrumentów: "
+                + ", ".join(unsupported_symbols)
+            ),
+        )
+    updates_eurusd_history = any(
+        candle.symbol == "EUR/USD" for candle in batch.candles
+    )
+    try:
+        if updates_eurusd_history:
+            with strategy_lock:
+                request.app.state.strategy_ready = False
+                _, saved_candle_count, latest_saved_time, _ = (
+                    request.app.state.repository.save_candles(batch.candles)
+                )
+                updated_strategy = copy.deepcopy(
+                    request.app.state.eurusd_strategy
+                )
+                candle_history = (
+                    request.app.state.repository.fetch_candle_history(
+                        "EUR/USD"
+                    )
+                )
+                updated_strategy.warm_up(candle_history)
+                request.app.state.eurusd_strategy = updated_strategy
+                request.app.state.grok45_v2_candles = (
+                    _grok45_candles_from_history(candle_history)
+                )
+                request.app.state.strategy_ready = True
+        else:
+            _, saved_candle_count, latest_saved_time, _ = (
+                request.app.state.repository.save_candles(batch.candles)
+            )
     except mysql.connector.Error as error:
         raise HTTPException(
             status_code=503,
@@ -5583,11 +5962,25 @@ def save_candle_batch(batch: CandleBatch, request: Request) -> Response:
     except RuntimeError as error:
         raise HTTPException(
             status_code=503,
-            detail="Nie udało się ocenić strategii dla świecy z paczki.",
+            detail="Nie udało się przygotować strategii dla paczki świec.",
         ) from error
+
+    try:
+        request.app.state.candle_strategy_batch_worker.enqueue(batch)
+    except mysql.connector.Error as error:
+        logger.exception("Nie udało się dodać paczki do kolejki ocen strategii.")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Świece zapisano, ale nie udało się trwale zlecić "
+                "oceny strategii dla paczki."
+            ),
+        ) from error
+
     return Response(
         content=f"{saved_candle_count}\n{latest_saved_time}",
         media_type="text/plain; charset=utf-8",
+        headers={"X-Strategy-Processing": "queued"},
     )
 
 

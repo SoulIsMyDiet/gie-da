@@ -26,6 +26,7 @@ from app import (  # noqa: E402
     GROK45_USDMXN_STRATEGY_NAME,
     MarketDataRepository,
     SignalPotentialCalculator,
+    _process_candle_batch_strategies,
     acknowledge_usdmxn_notification,
     save_candle,
     save_candle_batch,
@@ -97,6 +98,7 @@ def new_state(opened: datetime, saved: bool = True) -> SimpleNamespace:
     grok_storage.save.return_value = saved
     return SimpleNamespace(
         repository=repository,
+        candle_strategy_batch_worker=Mock(),
         strategy_ready=True,
         eurusd_strategy=Mock(),
         grok45_v2_candles=[],
@@ -233,8 +235,10 @@ class USDMXNIntegrationTests(unittest.TestCase):
             ],
         ) as claude_usdjpy:
             response = save_candle_batch(batch, request)
+            _process_candle_batch_strategies(request, batch)
 
         self.assertEqual(response.status_code, 200)
+        state.candle_strategy_batch_worker.enqueue.assert_called_once_with(batch)
         claude_usdjpy.assert_called_once_with([opened])
         state.usdmxn_strategy.evaluate.assert_called_once()
         state.grok45_usdmxn_strategy.evaluate.assert_called_once()

@@ -71,6 +71,7 @@ def _create_single_candle_state(opened: datetime) -> SimpleNamespace:
     }
     return SimpleNamespace(
         repository=repository,
+        candle_strategy_batch_worker=Mock(),
         strategy_ready=True,
         eurusd_strategy=Mock(),
         grok45_v2_candles=[],
@@ -237,8 +238,95 @@ def test_batch_runs_claude_for_closed_usdjpy_candles():
         ],
     ) as claude:
         response = app.save_candle_batch(batch, request)
+        app._process_candle_batch_strategies(request, batch)
 
     assert response.status_code == 200
     assert response.body == b"1\nostatnia"
+    assert response.headers["X-Strategy-Processing"] == "queued"
+    state.candle_strategy_batch_worker.enqueue.assert_called_once_with(batch)
+    state.repository.fetch_candle_history.assert_not_called()
     claude.assert_called_once_with([opened])
     state.usdjpy_strategy.evaluate.assert_called_once()
+
+
+def test_batch_worker_persists_payload_before_returning():
+    """Worker zapisuje JSON paczki do MySQL przed potwierdzeniem zlecenia."""
+    opened = datetime.now(UTC).replace(second=0, microsecond=0)
+    batch = app.CandleBatch(candles=[_create_usdjpy_candle(opened)])
+    repository = SimpleNamespace(database_settings={"database": "test"})
+    application = SimpleNamespace(state=SimpleNamespace())
+    worker = app.CandleStrategyBatchWorker(repository, application)
+    connection = Mock()
+    cursor = Mock()
+    connection.cursor.return_value = cursor
+
+    with patch("app.mysql.connector.connect", return_value=connection) as connect:
+        worker.enqueue(batch)
+
+    connect.assert_called_once_with(database="test")
+    query, parameters = cursor.execute.call_args.args
+    assert "INSERT INTO candle_strategy_batch_jobs" in query
+    assert app.CandleBatch.model_validate_json(parameters[0]) == batch
+    connection.commit.assert_called_once()
+    cursor.close.assert_called_once()
+    connection.close.assert_called_once()
+
+
+def test_batch_worker_marks_claimed_job_completed():
+    """Worker deserializuje trwale zapisane zadanie i oznacza je jako wykonane."""
+    opened = datetime.now(UTC).replace(second=0, microsecond=0)
+    batch = app.CandleBatch(candles=[_create_usdjpy_candle(opened)])
+    application = SimpleNamespace(state=SimpleNamespace())
+    worker = app.CandleStrategyBatchWorker(
+        SimpleNamespace(database_settings={}),
+        application,
+    )
+    worker._claim_next_job = Mock(return_value=(12, batch.model_dump_json()))
+    worker._mark_job_completed = Mock()
+
+    with patch("app._process_candle_batch_strategies") as process:
+        assert worker.process_next_job() is True
+
+    worker._mark_job_completed.assert_called_once_with(12)
+    processed_request, processed_batch = process.call_args.args
+    assert processed_request.app is application
+    assert processed_batch == batch
+
+
+def test_batch_worker_removes_payload_after_success():
+    """Udana ocena zwalnia miejsce, zachowując niewielki wpis końcowy."""
+    worker = app.CandleStrategyBatchWorker(
+        SimpleNamespace(database_settings={"database": "test"}),
+        SimpleNamespace(state=SimpleNamespace()),
+    )
+    connection = Mock()
+    cursor = Mock()
+    connection.cursor.return_value = cursor
+
+    with patch("app.mysql.connector.connect", return_value=connection):
+        worker._mark_job_completed(14)
+
+    query, parameters = cursor.execute.call_args.args
+    assert "batch_payload = IF" in query
+    assert parameters == ("completed", None, "completed", 14)
+    connection.commit.assert_called_once()
+
+
+def test_batch_worker_keeps_failed_job_error():
+    """Błąd ewaluacji pozostaje zapisany przy zadaniu zamiast ginąć w tle."""
+    opened = datetime.now(UTC).replace(second=0, microsecond=0)
+    batch = app.CandleBatch(candles=[_create_usdjpy_candle(opened)])
+    worker = app.CandleStrategyBatchWorker(
+        SimpleNamespace(database_settings={}),
+        SimpleNamespace(state=SimpleNamespace()),
+    )
+    worker._claim_next_job = Mock(return_value=(13, batch.model_dump_json()))
+    worker._mark_job_failed = Mock()
+
+    with patch(
+        "app._process_candle_batch_strategies",
+        side_effect=RuntimeError("błąd ewaluacji"),
+    ):
+        assert worker.process_next_job() is True
+
+    worker._mark_job_failed.assert_called_once_with(13, "błąd ewaluacji")
