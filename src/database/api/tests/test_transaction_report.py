@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +19,37 @@ os.environ.setdefault("MYSQL_DATABASE", "test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app  # noqa: E402
+
+
+def test_repository_returns_signal_datetime_as_a_report_column() -> None:
+    """Udostępnia czas utworzenia sygnału jako pierwszą kolumnę raportu."""
+    repository = app.MarketDataRepository.__new__(app.MarketDataRepository)
+    repository.database_settings = {}
+    connection = Mock()
+    cursor = Mock()
+    connection.cursor.return_value = cursor
+    cursor.fetchall.return_value = [
+        (datetime(2026, 11, 1, 8, 30), "EUR/USD")
+    ]
+
+    with patch("app.mysql.connector.connect", return_value=connection):
+        rows, summary, has_next_page = (
+            repository.fetch_transaction_report_page(
+                date(2026, 11, 1),
+                date(2026, 11, 2),
+                0,
+                ["signal_datetime", "product"],
+                {},
+            )
+        )
+
+    query, values = cursor.execute.call_args.args
+    assert "SELECT s.`datetime`, s.product" in query
+    assert rows == [["2026-11-01 08:30:00.000000", "EUR/USD"]]
+    assert summary == ["", ""]
+    assert not has_next_page
+    assert values == (date(2026, 11, 1), date(2026, 11, 3), 11, 0)
+    connection.close.assert_called_once()
 
 
 def test_repository_filters_transactions_and_summarizes_all_matches() -> None:

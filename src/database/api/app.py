@@ -28,6 +28,12 @@ from todo_repository import TodoRepository  # noqa: E402
 
 # Backend
 TRANSACTION_REPORT_COLUMNS = {
+    "signal_datetime": {
+        "expression": "s.`datetime`",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
     "product": {
         "expression": "s.product",
         "summary": None,

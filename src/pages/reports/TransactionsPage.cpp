@@ -18,17 +18,21 @@ namespace {
 
 constexpr int fromDateLabelId = 1501;
 constexpr int toDateLabelId = 1502;
-constexpr int previousPageButtonId = 1503;
-constexpr int nextPageButtonId = 1504;
+constexpr int previousPageButtonId = 1701;
+constexpr int nextPageButtonId = 1702;
 constexpr int generateButtonId = 1505;
 constexpr int firstFilterButtonId = 1510;
 constexpr int firstFilterListId = 1600;
+constexpr char signalDatetimeColumnKey[] = "signal_datetime";
+constexpr wchar_t signalDatetimeColumnLabel[] =
+    L"Data utworzenia sygnału";
 constexpr int filterButtonColumns = 12;
 constexpr int referenceFilterButtonColumns = 6;
 constexpr int filterButtonWidthDivisor = 2;
 constexpr int filterButtonFontHeight = 7;
 constexpr int datePickerSizeDivisor = 3;
 constexpr int filterListHeightDivisor = 2;
+constexpr int maximumSelectedFilterWeight = 7;
 constexpr int formTop = 12;
 constexpr int formMargin = 12;
 constexpr int formGap = 6;
@@ -423,11 +427,14 @@ bool TransactionsPage::handleCommand(
                     selectedWeight += reportColumns[index].widthWeight;
                 }
             }
-            if (selectedWeight + reportColumns[filterIndex].widthWeight > 8) {
+            if (selectedWeight + reportColumns[filterIndex].widthWeight >
+                maximumSelectedFilterWeight) {
                 SendMessageW(
                     filterButtons_[filterIndex], BM_SETCHECK,
                     BST_UNCHECKED, 0);
-                status_ = "Można wybrać najwyżej 8 jednostek kolumn.";
+                status_ =
+                    "Można wybrać najwyżej 7 jednostek kolumn; "
+                    "data sygnału jest zawsze uwzględniona.";
                 InvalidateRect(parent_, nullptr, TRUE);
                 return true;
             }
@@ -755,6 +762,9 @@ void TransactionsPage::draw(HDC deviceContext, RECT& clientArea) const {
         std::wstring title;
         if (definition != reportColumns.end()) {
             title = definition->label;
+        } else if (appliedColumns_[columnIndex] ==
+                   signalDatetimeColumnKey) {
+            title = signalDatetimeColumnLabel;
         }
         RECT cell{
             columnLeft + padding, rowTop,
@@ -877,16 +887,12 @@ void TransactionsPage::generateReport() {
             status_ = "Data „do” nie może być wcześniejsza niż data „od”.";
         } else {
             appliedColumns_ = selectedColumnKeys();
-            if (appliedColumns_.empty()) {
-                status_ = "Wybierz przynajmniej jedną kolumnę raportu.";
-            } else {
-                appliedFilters_ = selectedFilterValues();
-                generated_ = true;
-                std::fill(
-                    openFilterLists_.begin(), openFilterLists_.end(), false);
-                positionControls();
-                loadCurrentPage();
-            }
+            appliedFilters_ = selectedFilterValues();
+            generated_ = true;
+            std::fill(
+                openFilterLists_.begin(), openFilterLists_.end(), false);
+            positionControls();
+            loadCurrentPage();
         }
     }
 
@@ -1025,10 +1031,11 @@ void TransactionsPage::storeFilterSelection(std::size_t filterIndex) {
 }
 
 /**
- * Zwraca klucze wybranych kolumn w kolejności widocznej w formularzu.
+ * Zwraca datę sygnału, a następnie zaznaczone kolumny formularza.
  */
 std::vector<std::string> TransactionsPage::selectedColumnKeys() const {
     std::vector<std::string> columns;
+    columns.emplace_back(signalDatetimeColumnKey);
     for (std::size_t index = 0; index < reportColumnCount; ++index) {
         if (filterSelected_[index]) {
             columns.emplace_back(reportColumns[index].key);
