@@ -104,6 +104,42 @@ def test_repository_filters_transactions_and_summarizes_all_matches() -> None:
     connection.close.assert_called_once()
 
 
+def test_report_returns_both_spreads_and_averages_only_true_spread() -> None:
+    """Nie podsumowuje stałego spreadu, ale liczy średnią spreadu transakcji."""
+    repository = app.MarketDataRepository.__new__(app.MarketDataRepository)
+    repository.database_settings = {}
+    connection = Mock()
+    cursor = Mock()
+    connection.cursor.return_value = cursor
+    cursor.fetchall.return_value = [
+        (Decimal("0.00100"), Decimal("0.00200"))
+    ]
+    cursor.fetchone.return_value = (Decimal("0.00300"),)
+
+    with patch("app.mysql.connector.connect", return_value=connection):
+        rows, summary, has_next_page = (
+            repository.fetch_transaction_report_page(
+                date(2026, 11, 1),
+                date(2026, 11, 2),
+                0,
+                ["average_spread", "true_spread"],
+                {},
+            )
+        )
+
+    data_query, data_values = cursor.execute.call_args_list[0].args
+    summary_query, summary_values = cursor.execute.call_args_list[1].args
+    assert "SELECT p.average_spread, t.true_spread" in data_query
+    assert "AVG(t.true_spread)" in summary_query
+    assert "AVG(p.average_spread)" not in summary_query
+    assert data_values == (date(2026, 11, 1), date(2026, 11, 3), 11, 0)
+    assert summary_values == data_values[:-2]
+    assert rows == [["0.00100", "0.00200"]]
+    assert summary == ["", "Średnia: 0.00300"]
+    assert not has_next_page
+    connection.close.assert_called_once()
+
+
 def test_repository_uses_minute_and_ai_point_ranges_as_filters() -> None:
     """Zamienia przedziały czasu i punktów AI na granice SQL."""
     repository = app.MarketDataRepository.__new__(app.MarketDataRepository)

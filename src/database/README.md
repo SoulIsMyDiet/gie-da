@@ -76,7 +76,9 @@ Wyniki łączą `signals`, `signal_potention`, `transactions` i najnowszą wersj
 podsumowania obliczony dla wszystkich rekordów spełniających filtry. Wartości
 „Dodatnie” obejmują zero; kolumny oznaczone jako średnia używają `AVG`, a
 kolumny wyniku dla 100 zł używają `SUM`. Można wybrać najwyżej 8 jednostek
-szerokości kolumn; argumenty AI zajmują 2 jednostki.
+szerokości kolumn; argumenty AI zajmują 2 jednostki. Kolumna
+`signal_potention.average_spread` nie jest podsumowywana, a
+`transactions.true_spread` ma wiersz podsumowania ze średnią.
 
 ## Struktura danych
 

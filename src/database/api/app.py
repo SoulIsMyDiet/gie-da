@@ -166,6 +166,18 @@ TRANSACTION_REPORT_COLUMNS = {
         "weight": 1,
         "filter": "exact",
     },
+    "average_spread": {
+        "expression": "p.average_spread",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "true_spread": {
+        "expression": "t.true_spread",
+        "summary": "AVG",
+        "weight": 1,
+        "filter": "exact",
+    },
 }
 
 TRANSACTION_REPORT_STATIC_OPTIONS = {

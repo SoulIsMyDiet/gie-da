@@ -26,9 +26,7 @@ constexpr int firstFilterListId = 1600;
 constexpr char signalDatetimeColumnKey[] = "signal_datetime";
 constexpr wchar_t signalDatetimeColumnLabel[] =
     L"Data utworzenia sygnału";
-constexpr int filterButtonColumns = 12;
-constexpr int referenceFilterButtonColumns = 6;
-constexpr int filterButtonWidthDivisor = 2;
+constexpr int filterButtonColumns = 14;
 constexpr int filterButtonFontHeight = 7;
 constexpr int datePickerSizeDivisor = 3;
 constexpr int filterListHeightDivisor = 2;
@@ -38,8 +36,7 @@ constexpr int formMargin = 12;
 constexpr int formGap = 6;
 constexpr int labelHeight = 16;
 constexpr int pickerHeight = 24;
-constexpr int filterButtonHeight = 15;
-constexpr int referenceFilterButtonGap = 4;
+constexpr int filterButtonHeight = 14;
 constexpr int filterButtonGap = 2;
 constexpr int filterListHeight = 78;
 constexpr int tableGap = 8;
@@ -58,7 +55,7 @@ struct ReportColumnDefinition {
 };
 
 // Front
-const std::array<ReportColumnDefinition, 22> reportColumns{{
+const std::array<ReportColumnDefinition, 24> reportColumns{{
     {"product", L"Instrument", 1, true},
     {"algorithm_name", L"Algorytm", 1, false},
     {"signal_status", L"Status sygnału", 1, true},
@@ -81,6 +78,8 @@ const std::array<ReportColumnDefinition, 22> reportColumns{{
     {"transaction_status", L"Status transakcji", 1, false},
     {"signal_id", L"ID sygnału", 1, false, false},
     {"transaction_id", L"ID transakcji", 1, false, false},
+    {"average_spread", L"Spread stały", 1, false, false},
+    {"true_spread", L"Spread rzeczywisty", 1, false, false},
 }};
 
 constexpr std::size_t reportColumnCount = reportColumns.size();
@@ -547,14 +546,10 @@ void TransactionsPage::positionControls() {
             parent_, filterListHeight / filterListHeightDivisor);
     const int contentWidth =
         std::max(1, clientWidth - scaledMargin * 2);
-    const int referenceButtonGap =
-        WindowScale::size(parent_, referenceFilterButtonGap);
-    const int referenceButtonWidth = std::max(
-        1, (contentWidth -
-            referenceButtonGap * (referenceFilterButtonColumns - 1)) /
-               referenceFilterButtonColumns);
     const int buttonWidth = std::max(
-        1, referenceButtonWidth / filterButtonWidthDivisor);
+        1, (contentWidth -
+            buttonGap * (filterButtonColumns - 1)) /
+               filterButtonColumns);
     const int buttonRowCount = static_cast<int>(
         (filterButtonCount + filterButtonColumns - 1) /
         filterButtonColumns);
