@@ -27,7 +27,7 @@ Projekt używa MySQL uruchomionego w Dockerze. Pobrane świece rynkowe są przec
    ```
 
    Oczekiwany wynik to `status: ok`.
-6. Uruchom aplikację giełdy w CLion. Przy starcie aplikacja wyszukuje luki dla otwartych, monitorowanych instrumentów i uzupełnia maksymalnie 1000 najnowszych brakujących świec. Jedno żądanie Twelve Data może pobrać do 5000 świec, więc wiele bliskich luk jest pobieranych razem. Następnie monitor pobiera nowe świece 1-minutowe po zamknięciu minuty.
+6. Uruchom aplikację giełdy w CLion. Aplikacja desktopowa nie pobiera już świec z Twelve Data. Istniejące rekordy w tabeli `candles` pozostają bez zmian. Nowe świece są odbierane przez IBKR po połączeniu z TWS lub IB Gateway i zapisywane w tabeli `candles_IBKR`.
 
 ## Testy API
 
@@ -80,7 +80,7 @@ szerokości kolumn; argumenty AI zajmują 2 jednostki.
 
 ## Struktura danych
 
-- `products`: unikalne symbole wewnętrzne produktów (np. `EUR/USD`). Przed wysłaniem żądania symbol `EUR/USD` jest uzywany zarowno w lokalnej bazie, jak i w zadaniach Twelve Data.
+- `products`: unikalne symbole wewnętrzne produktów (np. `EUR/USD`), mapowane na kontrakty używane przez IBKR.
 - `candles`: kolumny `symbol`, `datetime`, `open`, `high`, `low`, `close`, `volume` oraz `utc_offset_minutes`. `datetime` jest zapisywany w czasie lokalnym `Europe/Warsaw`; offset rozróżnia powtarzającą się godzinę przy zmianie czasu. Klucz główny `(symbol, datetime, utc_offset_minutes)` zapobiega duplikatom, a ponowne pobranie świecy aktualizuje wpis. `volume` jest `NULL`, jeśli dostawca go nie podał.
 - `candle_gaps`: osobny wiersz dla każdej wykrytej brakującej świecy. `candle_datetime_utc` oznacza oczekiwany początek świecy w UTC, `status` ma wartość `missing` albo `filled`, a pola `detected_at_utc` i `filled_at_utc` zapisują moment wykrycia i uzupełnienia. Klucz `(symbol, candle_datetime_utc)` zapobiega duplikatom.
 - `daily_sentences`: `id`, `sentence` i `created_at_utc`; unikalny indeks treści zapobiega duplikatom. Aplikacja losuje sentencję po stronie C++ i nie odpytuje modelu przy każdym uruchomieniu.
@@ -187,11 +187,11 @@ Strategia inicjalizuje EMA wartością pierwszego `Close`, a kolejne wartości o
 
 Pojedyncza brakująca świeca M1 nie resetuje wskaźników. Brakujące minuty są liczone tylko w godzinach otwarcia Forex; zamknięcie od piątku 17:00 do niedzieli 17:00 czasu nowojorskiego jest pomijane. Więcej niż jedna brakująca minuta handlowa z rzędu resetuje wskaźniki i stan ponawiania sygnałów. Niedokończona agregacja M5 jest odrzucana przy każdej luce, aby nie łączyć świec z przerwą.
 
-API odrzuca zapis świec, których czas przypada na zamknięcie weekendowe. Dotyczy to zarówno pojedynczych świec z bieżącego monitorowania, jak i świec przesyłanych paczkami przy uzupełnianiu historii. Reguła jest sprawdzana po stronie API, więc działa także dla danych pobranych z Twelve Data.
+API odrzuca zapis świec legacy, których czas przypada na zamknięcie weekendowe. Reguła dotyczy danych przekazanych do endpointów `/api/candles` i `/api/candles/batch`.
 
-Uzupełnianie luk działa od najnowszych wpisów wstecz, pomija weekendowe zamknięcie rynku Forex i obejmuje maksymalnie 1000 świec przy jednym starcie aplikacji. Jeśli baza nie ma jeszcze świec, aplikacja pobiera do 1000 najnowszych świec. Na stronie głównej wyświetlana jest liczba zapisanych świec oraz łączny czas sprawdzenia, pobrania i zapisu. Każde żądanie `/time_series` kosztuje kredyty zgodnie z planem Twelve Data; odległe luki mogą wymagać osobnych żądań.
+Automatyczne uzupełnianie tabeli `candles` z Twelve Data jest wyłączone. Zmiana nie usuwa ani nie modyfikuje zapisanych tam świec. Nowa historia pobierana przez IBKR trafia do osobnej tabeli `candles_IBKR`.
 
-Lukę zapisujemy od razu przy jej pierwszym wykryciu: podczas skanowania bazy przy starcie aplikacji albo po otrzymaniu świecy, której czas wskazuje na brak wcześniejszych minut. Każda minuta ma osobny, unikalny wpis, więc powtórne wykrycie nie tworzy duplikatu. Po zapisaniu brakującej świecy jej status zmienia się na `filled`, ale rekord pozostaje w tabeli jako historia. Zwykłe zamknięcie rynku od piątku 17:00 do niedzieli 17:00 czasu nowojorskiego nie jest rejestrowane jako luka. Wykrycie luki nie odtwarza dźwięku; aplikacja nadal pokazuje komunikat i zapisuje informację w tabeli `candle_gaps`. Przy starcie komunikat może pojawić się także wtedy, gdy automatyczne uzupełnianie zaraz potem wypełni świecę.
+Endpointy legacy mogą nadal zapisywać wykryte luki w tabeli `candle_gaps`; aplikacja desktopowa nie skanuje już tabeli `candles` przy starcie ani nie uzupełnia jej z Twelve Data. Istniejące wpisy luk pozostają w bazie, a zwykłe zamknięcie rynku Forex od piątku 17:00 do niedzieli 17:00 czasu nowojorskiego nie jest rejestrowane jako luka.
 
 Przykład ręcznego sprawdzenia aktywnych luk:
 

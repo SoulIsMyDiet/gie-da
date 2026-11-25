@@ -21,12 +21,12 @@ struct StockPriceSnapshot {
 class StockPriceMonitor {
 public:
     /**
-     * Przygotowuje monitor do pobierania świec 1-minutowych.
+     * Przygotowuje monitor powiadomień o nowych sygnałach.
      */
     StockPriceMonitor();
 
     /**
-     * Zatrzymuje pobieranie w tle i zwalnia uchwyty Windows.
+     * Zatrzymuje powiadomienia w tle i zwalnia uchwyty Windows.
      */
     ~StockPriceMonitor();
 
@@ -34,14 +34,16 @@ public:
     StockPriceMonitor& operator=(const StockPriceMonitor&) = delete;
 
     /**
-     * Uruchamia niezależne wątki świec i powiadomień dźwiękowych.
+     * Uruchamia wątek powiadomień o nowych sygnałach.
+     * Pobieranie świec jest obsługiwane przez IBKR, a istniejące świece
+     * Twelve Data pozostają w bazie bez zmian.
      * @param notificationWindow Okno, które ma otrzymywać komunikaty o zmianach.
-     * @return true, jeśli uruchomiono oba wątki; w przeciwnym razie false.
+     * @return true, jeśli uruchomiono wątek powiadomień.
      */
     bool start(HWND notificationWindow);
 
     /**
-     * Zatrzymuje oba wątki, czeka na ich zakończenie i zamyka uchwyty.
+     * Zatrzymuje wątek powiadomień, czeka na jego zakończenie i zamyka uchwyty.
      */
     void stop();
 
@@ -59,11 +61,6 @@ public:
 
 private:
     /**
-     * Uruchamia pętlę dla obiektu monitora przekazanego przez Windows.
-     */
-    static DWORD WINAPI threadEntryPoint(LPVOID parameter);
-
-    /**
      * Uruchamia niezależną pętlę powiadomień dla wskazanego monitora.
      * @param parameter Wskaźnik na monitor.
      * @return Kod zakończenia wątku Windows.
@@ -71,7 +68,7 @@ private:
     static DWORD WINAPI notificationThreadEntryPoint(LPVOID parameter);
 
     /**
-     * Pobiera nową świecę 1-minutową co minutę.
+     * Pozostała pętla legacy Twelve Data; start() nie uruchamia jej.
      */
     void run();
 
@@ -93,18 +90,17 @@ private:
     bool playSignalSavedAudio();
 
     /**
-     * Pobiera świecę EURUSD i uruchamia przypisane jej algorytmy sygnałów.
+     * Obsługuje świecę EUR/USD w nieuruchamianej pętli legacy Twelve Data.
      */
     bool updateCandle();
 
     /**
-     * Pobiera i zapisuje świece aktywnych produktów innych niż EURUSD.
+     * Obsługuje inne instrumenty w nieuruchamianej pętli legacy Twelve Data.
      */
     void updateAdditionalProducts();
 
     HWND notificationWindow_ = nullptr;
     HANDLE stopEvent_ = nullptr;
-    HANDLE workerThread_ = nullptr;
     HANDLE notificationThread_ = nullptr;
     mutable SRWLOCK statusLock_ = SRWLOCK_INIT;
     SRWLOCK audioLock_ = SRWLOCK_INIT;

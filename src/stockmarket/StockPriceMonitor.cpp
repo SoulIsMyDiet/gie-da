@@ -248,24 +248,25 @@ bool waitForNextCandleClose(HANDLE stopEvent) {
 } // namespace
 
 /**
- * Przygotowuje monitor do pobierania świec 1-minutowych.
+ * Przygotowuje obsługę powiadomień o nowych sygnałach.
  */
 StockPriceMonitor::StockPriceMonitor() = default;
 
 /**
- * Zatrzymuje wątek pobierania przed zniszczeniem monitora.
+ * Zatrzymuje wątek powiadomień przed zniszczeniem monitora.
  */
 StockPriceMonitor::~StockPriceMonitor() {
     stop();
 }
 
 /**
- * Tworzy zdarzenie zatrzymania oraz wątki świec i powiadomień.
+ * Tworzy zdarzenie zatrzymania i uruchamia wątek powiadomień.
+ * Nie uruchamia pobierania świec z Twelve Data; źródłem nowych świec jest IBKR.
  * @param notificationWindow Okno otrzymujące komunikaty o zmianach.
- * @return true, jeśli oba wątki zostały uruchomione.
+ * @return true, jeśli wątek powiadomień został uruchomiony.
  */
 bool StockPriceMonitor::start(HWND notificationWindow) {
-    if (notificationWindow == nullptr || workerThread_ != nullptr) {
+    if (notificationWindow == nullptr || notificationThread_ != nullptr) {
         return false;
     }
 
@@ -283,33 +284,15 @@ bool StockPriceMonitor::start(HWND notificationWindow) {
         notificationWindow_ = nullptr;
         return false;
     }
-
-    workerThread_ = CreateThread(
-        nullptr, 0, threadEntryPoint, this, 0, nullptr);
-    if (workerThread_ == nullptr) {
-        SetEvent(stopEvent_);
-        WaitForSingleObject(notificationThread_, INFINITE);
-        CloseHandle(notificationThread_);
-        notificationThread_ = nullptr;
-        CloseHandle(stopEvent_);
-        stopEvent_ = nullptr;
-        notificationWindow_ = nullptr;
-        return false;
-    }
     return true;
 }
 
 /**
- * Zatrzymuje oba wątki, czeka na ich zakończenie i zwalnia uchwyty.
+ * Zatrzymuje wątek powiadomień, czeka na jego zakończenie i zwalnia uchwyty.
  */
 void StockPriceMonitor::stop() {
     if (stopEvent_ != nullptr) {
         SetEvent(stopEvent_);
-    }
-    if (workerThread_ != nullptr) {
-        WaitForSingleObject(workerThread_, INFINITE);
-        CloseHandle(workerThread_);
-        workerThread_ = nullptr;
     }
     if (notificationThread_ != nullptr) {
         WaitForSingleObject(notificationThread_, INFINITE);
@@ -348,18 +331,6 @@ bool StockPriceMonitor::playSavedSignalSounds(std::size_t signalCount) {
         }
     }
     return true;
-}
-
-/**
- * Uruchamia pętlę świec i zatrzymuje powiadomienia po jej zakończeniu.
- * @param parameter Wskaźnik na monitor.
- * @return Kod zakończenia wątku Windows.
- */
-DWORD WINAPI StockPriceMonitor::threadEntryPoint(LPVOID parameter) {
-    auto* monitor = static_cast<StockPriceMonitor*>(parameter);
-    monitor->run();
-    SetEvent(monitor->stopEvent_);
-    return 0;
 }
 
 // Backend

@@ -395,7 +395,7 @@ bool MainWindow::onCreate() {
 
     if (!candleMonitor_.start(handle_)) {
         showErrorMessage(
-            handle_, L"Nie udało się uruchomić pobierania świecy.");
+            handle_, L"Nie udało się uruchomić powiadomień sygnałów.");
         return false;
     }
 
