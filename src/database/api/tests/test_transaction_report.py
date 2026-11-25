@@ -21,15 +21,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app  # noqa: E402
 
 
-def test_repository_returns_signal_datetime_as_a_report_column() -> None:
-    """Udostępnia czas utworzenia sygnału jako pierwszą kolumnę raportu."""
+def test_repository_returns_signal_datetime_and_ids_as_report_columns() -> None:
+    """Udostępnia czas sygnału oraz identyfikatory obu rekordów."""
     repository = app.MarketDataRepository.__new__(app.MarketDataRepository)
     repository.database_settings = {}
     connection = Mock()
     cursor = Mock()
     connection.cursor.return_value = cursor
     cursor.fetchall.return_value = [
-        (datetime(2026, 11, 1, 8, 30), "EUR/USD")
+        (datetime(2026, 11, 1, 8, 30), 5184, 992, "EUR/USD")
     ]
 
     with patch("app.mysql.connector.connect", return_value=connection):
@@ -38,15 +38,20 @@ def test_repository_returns_signal_datetime_as_a_report_column() -> None:
                 date(2026, 11, 1),
                 date(2026, 11, 2),
                 0,
-                ["signal_datetime", "product"],
+                [
+                    "signal_datetime",
+                    "signal_id",
+                    "transaction_id",
+                    "product",
+                ],
                 {},
             )
         )
 
     query, values = cursor.execute.call_args.args
-    assert "SELECT s.`datetime`, s.product" in query
-    assert rows == [["2026-11-01 08:30:00.000000", "EUR/USD"]]
-    assert summary == ["", ""]
+    assert "SELECT s.`datetime`, s.id, t.id, s.product" in query
+    assert rows == [["2026-11-01 08:30:00.000000", "5184", "992", "EUR/USD"]]
+    assert summary == ["", "", "", ""]
     assert not has_next_page
     assert values == (date(2026, 11, 1), date(2026, 11, 3), 11, 0)
     connection.close.assert_called_once()
@@ -146,7 +151,7 @@ def test_repository_uses_minute_and_ai_point_ranges_as_filters() -> None:
 
 
 def test_repository_refreshes_dynamic_filter_values_from_database() -> None:
-    """Pobiera aktualne nazwy z bazy zamiast utrzymywać listę w kliencie."""
+    """Pobiera tylko opcje używane przez listy wielokrotnego wyboru."""
     repository = app.MarketDataRepository.__new__(app.MarketDataRepository)
     repository.database_settings = {}
     connection = Mock()
@@ -156,7 +161,6 @@ def test_repository_refreshes_dynamic_filter_values_from_database() -> None:
         [("EUR/USD",)],
         [("Grok 45",)],
         [("Verifier",)],
-        [("Powód weryfikacji",)],
     ]
 
     with patch("app.mysql.connector.connect", return_value=connection):
@@ -166,11 +170,14 @@ def test_repository_refreshes_dynamic_filter_values_from_database() -> None:
         "product": ["EUR/USD"],
         "algorithm_name": ["Grok 45"],
         "ai_name": ["Verifier"],
-        "ai_decision_reason_msg": ["Powód weryfikacji"],
     }
-    assert len(cursor.execute.call_args_list) == 4
+    assert len(cursor.execute.call_args_list) == 3
     assert all(
         "SELECT DISTINCT" in call.args[0]
+        for call in cursor.execute.call_args_list
+    )
+    assert all(
+        "ai_decision_reason_msg" not in call.args[0]
         for call in cursor.execute.call_args_list
     )
     connection.close.assert_called_once()
@@ -242,9 +249,8 @@ def test_options_endpoint_returns_current_values_with_encoded_text() -> None:
     repository = Mock()
     repository.fetch_transaction_report_options.return_value = {
         "product": ["EUR/USD"],
-        "algorithm_name": ["Grok 45"],
+        "algorithm_name": ["Grok\t45\nv2"],
         "ai_name": ["Verifier"],
-        "ai_decision_reason_msg": ["Powód\tz nową linią\ntekstu"],
     }
     request = SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(repository=repository))
@@ -254,9 +260,10 @@ def test_options_endpoint_returns_current_values_with_encoded_text() -> None:
     response_text = response.body.decode()
 
     assert "product\tEUR%2FUSD\tEUR%2FUSD" in response_text
-    assert "algorithm_name\tGrok%2045\tGrok%2045" in response_text
     assert (
-        "ai_decision_reason_msg\tPow%C3%B3d%09z%20now%C4%85%20lini%C4%85"
-        "%0Atekstu\tPow%C3%B3d%09z%20now%C4%85%20lini%C4%85%0Atekstu"
+        "algorithm_name\tGrok%09"
+        "45%0Av2\tGrok%09"
+        "45%0Av2"
     ) in response_text
+    assert "ai_decision_reason_msg" not in response_text
     repository.fetch_transaction_report_options.assert_called_once_with()

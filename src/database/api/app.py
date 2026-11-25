@@ -34,6 +34,18 @@ TRANSACTION_REPORT_COLUMNS = {
         "weight": 1,
         "filter": "exact",
     },
+    "signal_id": {
+        "expression": "s.id",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
+    "transaction_id": {
+        "expression": "t.id",
+        "summary": None,
+        "weight": 1,
+        "filter": "exact",
+    },
     "product": {
         "expression": "s.product",
         "summary": None,
@@ -3558,7 +3570,7 @@ class MarketDataRepository:
             connection.close()
 
     def fetch_transaction_report_options(self) -> dict[str, list[str]]:
-        """Pobiera aktualne instrumenty, algorytmy i teksty weryfikacji AI.
+        """Pobiera aktualne instrumenty, algorytmy i nazwy modeli AI.
 
         :return: Wartości dynamiczne zgrupowane według klucza kolumny.
         :raises mysql.connector.Error: Gdy MySQL nie udostępni opcji.
@@ -3584,11 +3596,6 @@ class MarketDataRepository:
                         SELECT DISTINCT ad.ai_name
                         FROM ai_decisions AS ad
                         ORDER BY ad.ai_name
-                    """,
-                    "ai_decision_reason_msg": """
-                        SELECT DISTINCT ad.ai_decision_reason_msg
-                        FROM ai_decisions AS ad
-                        ORDER BY ad.ai_decision_reason_msg
                     """,
                 }
                 options: dict[str, list[str]] = {}

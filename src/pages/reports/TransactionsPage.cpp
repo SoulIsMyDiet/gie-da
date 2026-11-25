@@ -54,10 +54,11 @@ struct ReportColumnDefinition {
     const wchar_t* label;
     int widthWeight;
     bool selectedByDefault;
+    bool hasMultiselect = true;
 };
 
 // Front
-const std::array<ReportColumnDefinition, 20> reportColumns{{
+const std::array<ReportColumnDefinition, 22> reportColumns{{
     {"product", L"Instrument", 1, true},
     {"algorithm_name", L"Algorytm", 1, false},
     {"signal_status", L"Status sygnału", 1, true},
@@ -72,12 +73,14 @@ const std::array<ReportColumnDefinition, 20> reportColumns{{
     {"ai_decision_status", L"Status wg AI", 1, false},
     {"ai_pts", L"Punkty AI", 1, false},
     {"ai_decision", L"Decyzja AI", 1, true},
-    {"ai_decision_reason_msg", L"Argumenty AI", 2, false},
+    {"ai_decision_reason_msg", L"Argumenty AI", 2, false, false},
     {"transaction_saldo", L"Saldo transakcji", 1, false},
     {"transaction_100zl_deal", L"Wartość transakcji - 100 zł", 1, true},
     {"time_to_open", L"Czas do otwarcia", 1, false},
     {"time_from_open_to_close", L"Czas od otwarcia do zam", 1, false},
     {"transaction_status", L"Status transakcji", 1, false},
+    {"signal_id", L"ID sygnału", 1, false, false},
+    {"transaction_id", L"ID transakcji", 1, false, false},
 }};
 
 constexpr std::size_t reportColumnCount = reportColumns.size();
@@ -306,6 +309,10 @@ bool TransactionsPage::create(HINSTANCE instance, HWND parent) {
         SendMessageW(
             filterButtons_[index], BM_SETCHECK,
             filterSelected_[index] ? BST_CHECKED : BST_UNCHECKED, 0);
+        if (!reportColumns[index].hasMultiselect) {
+            continue;
+        }
+
         filterLists_[index] = CreateWindowExW(
             0, L"LISTBOX", L"",
             WS_CHILD | WS_VSCROLL | WS_HSCROLL | WS_BORDER | LBS_MULTIPLESEL |
@@ -344,7 +351,9 @@ void TransactionsPage::open() {
     positionControls();
     updateControls();
     for (std::size_t index = 0; index < reportColumnCount; ++index) {
-        if (filterSelected_[index] && !showFilterOptions(index)) {
+        if (filterSelected_[index] &&
+            reportColumns[index].hasMultiselect &&
+            !showFilterOptions(index)) {
             break;
         }
     }
@@ -413,7 +422,8 @@ bool TransactionsPage::handleCommand(
         const bool isChecked =
             SendMessageW(filterButtons_[filterIndex], BM_GETCHECK, 0, 0) ==
             BST_CHECKED;
-        if (filterSelected_[filterIndex] &&
+        if (reportColumns[filterIndex].hasMultiselect &&
+            filterSelected_[filterIndex] &&
             !openFilterLists_[filterIndex] && !isChecked) {
             SendMessageW(
                 filterButtons_[filterIndex], BM_SETCHECK, BST_CHECKED, 0);
@@ -440,14 +450,17 @@ bool TransactionsPage::handleCommand(
             }
             filterSelected_[filterIndex] = true;
         } else if (!isChecked && filterSelected_[filterIndex]) {
-            storeFilterSelection(filterIndex);
+            if (reportColumns[filterIndex].hasMultiselect) {
+                storeFilterSelection(filterIndex);
+            }
             filterSelected_[filterIndex] = false;
             openFilterLists_[filterIndex] = false;
             positionControls();
         }
 
         status_.clear();
-        if (filterSelected_[filterIndex]) {
+        if (filterSelected_[filterIndex] &&
+            reportColumns[filterIndex].hasMultiselect) {
             showFilterOptions(filterIndex);
         } else {
             updateControls();
@@ -600,7 +613,8 @@ void TransactionsPage::positionControls() {
             expandedRowsBefore[static_cast<std::size_t>(row)] *
                 (filterListHeightScaled + buttonGap);
         MoveWindow(filterButtons_[index], x, y, buttonWidth, buttonHeight, TRUE);
-        if (index < filterLists_.size() && openFilterLists_[index]) {
+        if (index < filterLists_.size() &&
+            filterLists_[index] != nullptr && openFilterLists_[index]) {
             const int listY = y + buttonHeight + buttonGap;
             MoveWindow(
                 filterLists_[index], x, listY, buttonWidth,
@@ -907,7 +921,9 @@ void TransactionsPage::generateReport() {
  * @throws std::bad_alloc Gdy nie można przydzielić pamięci na opcje.
  */
 bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
-    if (filterIndex >= reportColumnCount) {
+    if (filterIndex >= reportColumnCount ||
+        !reportColumns[filterIndex].hasMultiselect ||
+        filterLists_[filterIndex] == nullptr) {
         return false;
     }
 
@@ -989,7 +1005,9 @@ bool TransactionsPage::showFilterOptions(std::size_t filterIndex) {
  * Zapisuje zaznaczone wartości aktualnie widocznej listy.
  */
 void TransactionsPage::storeFilterSelection(std::size_t filterIndex) {
-    if (filterIndex >= reportColumnCount) {
+    if (filterIndex >= reportColumnCount ||
+        !reportColumns[filterIndex].hasMultiselect ||
+        filterLists_[filterIndex] == nullptr) {
         return;
     }
 
@@ -1078,8 +1096,10 @@ void TransactionsPage::updateControls() {
         }
     }
     for (std::size_t index = 0; index < filterLists_.size(); ++index) {
-        const bool showList = visible_ && openFilterLists_[index];
-        ShowWindow(filterLists_[index], showList ? SW_SHOW : SW_HIDE);
+        if (filterLists_[index] != nullptr) {
+            const bool showList = visible_ && openFilterLists_[index];
+            ShowWindow(filterLists_[index], showList ? SW_SHOW : SW_HIDE);
+        }
     }
 
     const int paginationVisibility =
