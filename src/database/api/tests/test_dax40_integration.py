@@ -305,7 +305,12 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
             "signal_parameters": {"reason": "no_breakout"},
         }
 
-        with patch("app.mysql.connector.connect", return_value=connection) as connect:
+        with patch("app.mysql.connector.connect", return_value=connection) as connect, \
+                patch.object(
+                    repository,
+                    "_fetch_ibkr_spread_from_cursor",
+                    return_value=Decimal("1.50000"),
+                ):
             inserted = repository.save_algorithm_signal(
                 "GER30",
                 "Chat-gpt6/DAX40StrategyV1",

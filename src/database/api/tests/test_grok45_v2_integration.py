@@ -6,6 +6,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -22,6 +23,7 @@ from app import (  # noqa: E402
     GROK45_V2_STRATEGY_NAME,
     CandleRecord,
     Grok45SignalRecord,
+    IBKRCandleRecord,
     MarketDataRepository,
     _generate_grok45_v2_signal,
     _grok45_candles_from_history,
@@ -129,6 +131,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
                 cursor,
                 signal,
                 algorithm_name=expected_name,
+                spread_price=Decimal("0.00045"),
             )
 
             signal_insert = next(
@@ -176,7 +179,7 @@ class Grok45V2IntegrationTests(unittest.TestCase):
                 "headers": [],
             }
         )
-        candle = CandleRecord(
+        candle = IBKRCandleRecord(
             symbol="EUR/USD",
             datetime=datetime.fromtimestamp(
                 candles[-1].timestamp, timezone.utc
@@ -185,6 +188,8 @@ class Grok45V2IntegrationTests(unittest.TestCase):
             high=str(candles[-1].high),
             low=str(candles[-1].low),
             close=str(candles[-1].close),
+            bid="1.08000",
+            ask="1.08045",
         )
 
         response = save_candle(candle, request)

@@ -51,6 +51,8 @@ def _mock_storage(monkeypatch, connections=1):
     for _ in range(connections):
         connection, cursor = Mock(), Mock()
         connection.cursor.return_value = cursor
+        cursor.rowcount = 1
+        cursor.lastrowid = 123
         connection_rows.append((connection, cursor))
     monkeypatch.setattr(
         storage_module.mysql.connector,
@@ -100,7 +102,9 @@ def test_save_commits_warsaw_close_and_reads_json_with_polish_text(monkeypatch):
     assert stored["reason"] == "Zablokowano: trwa przerwa."
     potential_query, potential_values = cursor.execute.call_args_list[1].args
     assert "INSERT INTO signal_potention" in potential_query
-    assert potential_values[1] == Decimal("0.03")
+    assert "source_candle.ask - source_candle.bid" in potential_query
+    assert "signals.source_timestamp" in potential_query
+    assert potential_values == (cursor.lastrowid,)
     connection.commit.assert_called_once()
 
     read_connection, read_cursor = connections[1]

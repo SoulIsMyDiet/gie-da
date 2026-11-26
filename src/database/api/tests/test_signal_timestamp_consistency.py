@@ -41,14 +41,16 @@ def test_chatgpt_eurusd_stores_the_signal_candle_close_time():
     cursor.rowcount = 1
     cursor.lastrowid = 42
 
-    MarketDataRepository._insert_signal(cursor, signal)
+    MarketDataRepository._insert_signal(
+        cursor, signal, Decimal("0.00045")
+    )
 
     insert_query, values = cursor.execute.call_args_list[0].args
     assert "source_timestamp" in insert_query
     assert values[0] == closed.astimezone(WARSAW_TIME_ZONE).replace(tzinfo=None)
     assert values[7] == int((closed - timedelta(minutes=1)).timestamp())
     _, potential_values = cursor.execute.call_args_list[1].args
-    assert potential_values[1] == Decimal("0.00030")
+    assert potential_values[1] == Decimal("0.00045")
 
 
 def test_grok_eurusd_stores_close_time_and_keeps_open_epoch_as_deduplication_key():
@@ -67,7 +69,9 @@ def test_grok_eurusd_stores_close_time_and_keeps_open_epoch_as_deduplication_key
     cursor.fetchone.return_value = (1,)
     cursor.rowcount = 1
 
-    repository._insert_grok45_signal(cursor, signal)
+    repository._insert_grok45_signal(
+        cursor, signal, spread_price=Decimal("0.00045")
+    )
 
     insert_query, values = next(
         call.args
@@ -79,4 +83,4 @@ def test_grok_eurusd_stores_close_time_and_keeps_open_epoch_as_deduplication_key
     assert json.loads(values[6])["timestamp"] == opened_epoch + 60
     assert values[7] == opened_epoch
     _, potential_values = cursor.execute.call_args_list[-1].args
-    assert potential_values[1] == Decimal("0.00030")
+    assert potential_values[1] == Decimal("0.00045")

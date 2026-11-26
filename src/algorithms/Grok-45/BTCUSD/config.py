@@ -1,7 +1,6 @@
 """Parametry i ustawienia strategii BTC/USD."""
 
 from datetime import timedelta
-from decimal import Decimal
 
 INSTRUMENT = "BTCUSD"
 DATABASE_SYMBOL = "BTC/USD"
@@ -24,9 +23,6 @@ LONG_RSI_MINIMUM = 52.0
 LONG_RSI_MAXIMUM = 72.0
 SHORT_RSI_MINIMUM = 28.0
 SHORT_RSI_MAXIMUM = 48.0
-
-# Stały, hipotetyczny spread BTC/USD wyrażony w jednostkach ceny.
-BTC_SPREAD_PRICE = Decimal("190")
 
 # Sygnały NONE są pomijane w tabeli signals; ewaluacja świecy nadal jest zapisywana.
 SAVE_NONE_SIGNALS = False

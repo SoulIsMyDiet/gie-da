@@ -177,12 +177,19 @@ def test_save_transaction_and_duplicate():
     import mysql.connector
     rows = history()
     result = generate_signal(rows, now=rows[-1]["timestamp_utc"] + timedelta(minutes=1))
+    result["signal"] = "LONG"
     cursor, connection = Mock(), Mock()
+    cursor.rowcount = 1
     connection.cursor.return_value = cursor
     with patch.object(SP500Storage, "_connect", return_value=connection):
         store = SP500Storage({})
         assert store.save_signal(result, len(rows))
-        arguments = cursor.execute.call_args.args[1]
+        signal_insert = next(
+            call
+            for call in cursor.execute.call_args_list
+            if "INSERT INTO signals" in call.args[0]
+        )
+        arguments = signal_insert.args[1]
         assert arguments[1] == "ES"
         assert arguments[-1] == int(rows[-1]["timestamp_utc"].timestamp())
         assert arguments[0] == datetime.fromisoformat(result["timestamp"]).astimezone(config.WARSAW).replace(tzinfo=None)
@@ -197,12 +204,13 @@ def test_save_transaction_and_duplicate():
 
 @pytest.mark.parametrize("direction", ["LONG", "SHORT"])
 def test_save_direction_creates_potential_with_cost_and_aware_timestamp(direction):
-    """LONG i SHORT zapisują koszt ES i zgodny z kalkulatorem czas w jednej transakcji."""
+    """LONG i SHORT zapisują spread ask-bid źródłowej świecy IBKR."""
     rows = history()
     result = generate_signal(rows, now=rows[-1]["timestamp_utc"] + timedelta(minutes=1))
     result["signal"] = direction
     result["timestamp"] = datetime.fromisoformat(result["timestamp"]).astimezone(config.WARSAW).isoformat()
     cursor, connection = Mock(), Mock()
+    cursor.rowcount = 1
     cursor.lastrowid = 123
     connection.cursor.return_value = cursor
     calls = Mock()
@@ -214,7 +222,9 @@ def test_save_direction_creates_potential_with_cost_and_aware_timestamp(directio
     first, second = cursor.execute.call_args_list
     assert "INSERT INTO signals" in first.args[0]
     assert "INSERT INTO signal_potention" in second.args[0]
-    assert second.args[1] == (123, Decimal("0.6"))
+    assert "source_candle.ask - source_candle.bid" in second.args[0]
+    assert "signals.source_timestamp" in second.args[0]
+    assert second.args[1] == (123,)
     assert [call[0] for call in calls.mock_calls] == ["execute", "execute", "commit"]
     payload = first.args[1][-2]
     timestamp = json.loads(payload)["timestamp"]
@@ -233,8 +243,10 @@ def test_none_does_not_create_potential():
     result = generate_signal(history(), now=history()[-1]["timestamp_utc"] + timedelta(minutes=1))
     assert result["signal"] == "NONE"
     cursor, connection = Mock(), Mock()
+    cursor.rowcount = 1
     connection.cursor.return_value = cursor
-    with patch.object(SP500Storage, "_connect", return_value=connection):
+    with patch.object(config, "SAVE_NONE_SIGNALS", True), \
+            patch.object(SP500Storage, "_connect", return_value=connection):
         assert SP500Storage({}).save_signal(result, 120)
     assert cursor.execute.call_count == 1
     connection.commit.assert_called_once()
@@ -284,13 +296,16 @@ def test_potential_calculator_uses_saved_es_cost(direction, expected):
     result = generate_signal(history(), now=history()[-1]["timestamp_utc"] + timedelta(minutes=1))
     result["signal"] = direction
     insert_cursor, connection = Mock(), Mock()
+    insert_cursor.rowcount = 1
     insert_cursor.lastrowid = 123
     connection.cursor.return_value = insert_cursor
     with patch.object(SP500Storage, "_connect", return_value=connection):
         assert SP500Storage({}).save_signal(result, 120)
     insert_calls = insert_cursor.execute.call_args_list
     payload = insert_calls[0].args[1][-2]
-    signal_id, spread = insert_calls[1].args[1]
+    signal_id = insert_calls[1].args[1][0]
+    spread = Decimal("0.6")
+    assert "source_candle.ask - source_candle.bid" in insert_calls[1].args[0]
     calculator_path = Path(__file__).resolve().parents[4] / "database" / "api" / "signal_potential_calculator.py"
     spec = importlib.util.spec_from_file_location("es_test_potential_calculator", calculator_path)
     module = importlib.util.module_from_spec(spec)
@@ -298,7 +313,7 @@ def test_potential_calculator_uses_saved_es_cost(direction, expected):
     calculation_cursor = Mock()
     calculation_cursor.fetchall.side_effect = [
         [(signal_id, "ES", Decimal("6000"), direction.lower(), spread, payload)],
-        [(datetime(2025, 1, 1), Decimal("6002"), Decimal("5999"))],
+        [(Decimal("6002"), Decimal("5999"))],
     ]
     module.SignalPotentialCalculator().update_pending(calculation_cursor, {"ES"})
     assert calculation_cursor.execute.call_args_list[-1].args[1][0] == expected

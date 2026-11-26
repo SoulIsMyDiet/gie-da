@@ -50,13 +50,14 @@ def connection_for(storage, monkeypatch):
     """Podstawia atrapę połączenia storage i zwraca (połączenie, kursor); bez wyjątków."""
     connection, cursor = Mock(), Mock()
     connection.cursor.return_value = cursor
+    cursor.rowcount = 1
     monkeypatch.setattr(storage, "_connect", lambda: connection)
     return connection, cursor
 
 
 @pytest.mark.parametrize("direction", ["LONG", "SHORT"])
 def test_save_atomic_potential_and_full_json(modules, monkeypatch, sample, direction):
-    """LONG/SHORT zapisuje płaski JSON i koszt 0,6 w jednej transakcji."""
+    """LONG/SHORT zapisuje płaski JSON i spread źródłowej świecy."""
     storage = modules.storage.SP500Storage({})
     connection, cursor = connection_for(storage, monkeypatch)
     cursor.lastrowid = 42
@@ -74,7 +75,9 @@ def test_save_atomic_potential_and_full_json(modules, monkeypatch, sample, direc
     assert payload["timestamp"] == sample["timestamp"]
     assert "signal_parameters" not in payload
     assert values[7] == sample["candle_open_epoch"]
-    assert second.args[1] == (42, Decimal("0.6"))
+    assert "source_candle.ask - source_candle.bid" in second.args[0]
+    assert "signals.source_timestamp" in second.args[0]
+    assert second.args[1] == (42,)
     connection.commit.assert_called_once()
     connection.rollback.assert_not_called()
     connection.close.assert_called_once()

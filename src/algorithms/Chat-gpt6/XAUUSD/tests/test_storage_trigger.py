@@ -73,13 +73,14 @@ def connection_for(module):
     """Tworzy atrapę połączenia i magazyn używający wyłącznie tej atrapy."""
     connection, cursor = Mock(), Mock()
     connection.cursor.return_value = cursor
+    cursor.rowcount = 1
     storage = module.XAUUSDStorage({})
     storage._connect = Mock(return_value=connection)
     return storage, connection, cursor
 
 
-def test_storage_writes_compact_json_and_configured_potential_spread(modules):
-    """Zapisuje krótki JSON oraz spread przyjęty dla XAU/USD."""
+def test_storage_writes_compact_json_and_source_candle_spread(modules):
+    """Zapisuje krótki JSON i wylicza spread z kwotowań świecy źródłowej."""
     module, _, _, _ = modules
     storage, connection, cursor = connection_for(module)
     assert storage.save_signal(result(), 31)
@@ -87,7 +88,9 @@ def test_storage_writes_compact_json_and_configured_potential_spread(modules):
     assert "INSERT INTO signals" in sql
     potential_sql, potential_values = cursor.execute.call_args_list[1].args
     assert "INSERT INTO signal_potention" in potential_sql
-    assert potential_values[1] == Decimal("0.3")
+    assert "source_candle.ask - source_candle.bid" in potential_sql
+    assert "signals.source_timestamp" in potential_sql
+    assert potential_values == (cursor.lastrowid,)
     assert values[:6] == (
         datetime(2026, 1, 5, 11, 1), "XAU/USD", Decimal("2500.5"),
         "long", "Chat-gpt6/XAUUSDStrategyV1", 31,
@@ -152,6 +155,7 @@ def test_storage_rolls_back_duplicate_and_errors(modules, errno, duplicate):
 def test_storage_rolls_back_failed_commit(modules):
     """Nieudany commit nie jest przedstawiany jako zapisany wynik."""
     storage, connection, _ = connection_for(modules[0])
+    connection.cursor.return_value.rowcount = 1
     connection.commit.side_effect = MySQLError(msg="commit", errno=1205)
     with pytest.raises(MySQLError):
         storage.save_signal(result(), 1)

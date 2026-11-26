@@ -25,7 +25,6 @@ from app import (  # noqa: E402
     CandleRecord,
     GROK45_USDMXN_STRATEGY_NAME,
     MarketDataRepository,
-    SignalPotentialCalculator,
     acknowledge_usdmxn_notification,
     save_candle_batch,
     usdmxn_notifications,
@@ -411,7 +410,11 @@ class USDMXNIntegrationTests(unittest.TestCase):
         connection = FakeConnection()
         repository = MarketDataRepository.__new__(MarketDataRepository)
         repository.database_settings = {}
-        with patch("app.mysql.connector.connect", return_value=connection):
+        with patch("app.mysql.connector.connect", return_value=connection), patch.object(
+            repository,
+            "_fetch_ibkr_spread_from_cursor",
+            return_value=Decimal("0.01000"),
+        ):
             with self.assertRaises(mysql.connector.Error):
                 repository.save_algorithm_signal(
                     "USD/MXN",
@@ -467,7 +470,11 @@ class USDMXNIntegrationTests(unittest.TestCase):
         connection = FakeConnection()
         repository = MarketDataRepository.__new__(MarketDataRepository)
         repository.database_settings = {}
-        with patch("app.mysql.connector.connect", return_value=connection):
+        with patch("app.mysql.connector.connect", return_value=connection), patch.object(
+            repository,
+            "_fetch_ibkr_spread_from_cursor",
+            return_value=Decimal("0.01000"),
+        ):
             self.assertTrue(
                 repository.save_algorithm_signal(
                     "USD/MXN",
@@ -632,7 +639,11 @@ class USDMXNIntegrationTests(unittest.TestCase):
             "signal_parameters": {"reason": "warmup"},
         }
 
-        with patch("app.mysql.connector.connect", return_value=connection):
+        with patch("app.mysql.connector.connect", return_value=connection), patch.object(
+            repository,
+            "_fetch_ibkr_spread_from_cursor",
+            return_value=Decimal("0.01000"),
+        ):
             inserted = repository.save_algorithm_signal(
                 "USD/MXN",
                 "Chat-gpt6/USDMXNStrategyV1",
@@ -703,7 +714,11 @@ class USDMXNIntegrationTests(unittest.TestCase):
         connection = FakeConnection()
         repository = MarketDataRepository.__new__(MarketDataRepository)
         repository.database_settings = {}
-        with patch("app.mysql.connector.connect", return_value=connection):
+        with patch("app.mysql.connector.connect", return_value=connection), patch.object(
+            repository,
+            "_fetch_ibkr_spread_from_cursor",
+            return_value=Decimal("0.01000"),
+        ):
             inserted = repository.save_algorithm_signal(
                 "USD/MXN",
                 "Chat-gpt6/USDMXNStrategyV1",
@@ -727,7 +742,7 @@ class USDMXNIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(
             connection.cursor_value.calls[2][1][1],
-            SignalPotentialCalculator.spread_for_product("USD/MXN"),
+            Decimal("0.01000"),
         )
         self.assertIn(
             "UPDATE algorithm_evaluations",

@@ -226,11 +226,12 @@ def test_repository_persists_none_signal_when_requested() -> None:
     assert saved_payload == payload
 
 
-def test_repository_saves_btc_signal_with_strategy_spread() -> None:
-    """Repozytorium zapisuje hipotetyczny spread przekazany przez strategię."""
+def test_repository_saves_btc_signal_with_ibkr_candle_spread() -> None:
+    """Repozytorium zapisuje spread pobrany z kwotowań świecy IBKR."""
     cursor = Mock()
     cursor.rowcount = 1
     cursor.lastrowid = 42
+    cursor.fetchall.return_value = [(Decimal("67000"), Decimal("67190"))]
     connection = Mock()
     connection.cursor.return_value = cursor
     repository = MarketDataRepository.__new__(MarketDataRepository)
@@ -267,14 +268,14 @@ def test_repository_saves_btc_signal_with_strategy_spread() -> None:
             save_signal=True,
             save_signal_potential=True,
             enqueue_notification=False,
-            spread_price=Decimal("190"),
         )
 
     assert inserted
     spread_lookup.assert_not_called()
-    assert cursor.execute.call_count == 3
-    assert "INSERT INTO signal_potention" in cursor.execute.call_args_list[2].args[0]
-    assert cursor.execute.call_args_list[2].args[1] == (42, Decimal("190"))
+    assert cursor.execute.call_count == 4
+    assert "FROM candles_IBKR" in cursor.execute.call_args_list[2].args[0]
+    assert "INSERT INTO signal_potention" in cursor.execute.call_args_list[3].args[0]
+    assert cursor.execute.call_args_list[3].args[1] == (42, Decimal("190"))
 
 
 def test_repository_queries_only_recent_directional_signals() -> None:

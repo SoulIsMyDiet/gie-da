@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from .config import (
-    BTC_SPREAD_PRICE,
     DATABASE_SYMBOL,
     SAVE_NONE_SIGNALS,
     STRATEGY_NAME,
@@ -29,7 +27,6 @@ class SignalRepository(Protocol):
         save_none_signal: bool,
         save_signal_potential: bool,
         enqueue_notification: bool,
-        spread_price: Decimal | None = None,
     ) -> bool:
         """Zapisuje wynik strategii i opcjonalnie kolejkuje powiadomienie."""
 
@@ -84,18 +81,6 @@ class BTCUSDSignalStorage:
                 result.get("signal_parameters")
             ),
         }
-        spread_price = None
-        if direction in {"LONG", "SHORT"}:
-            try:
-                entry_price = Decimal(str(result.get("price")))
-            except (InvalidOperation, TypeError, ValueError) as error:
-                raise ValueError(
-                    "Cena sygnału BTC/USD jest nieprawidłowa."
-                ) from error
-            if not entry_price.is_finite() or entry_price <= 0:
-                raise ValueError("Cena sygnału BTC/USD musi być dodatnia.")
-            spread_price = BTC_SPREAD_PRICE
-
         return self.repository.save_algorithm_signal(
             DATABASE_SYMBOL,
             STRATEGY_NAME,
@@ -112,7 +97,6 @@ class BTCUSDSignalStorage:
             enqueue_notification=(
                 enqueue_notification and direction in {"LONG", "SHORT"}
             ),
-            spread_price=spread_price,
         )
 
     @staticmethod

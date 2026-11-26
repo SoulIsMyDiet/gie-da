@@ -17,7 +17,6 @@ from config import (
     UTC_TIMEZONE,
     STRATEGY_NAME,
     SAVE_NONE_SIGNALS,
-    SIGNAL_POTENTIAL_SPREAD,
 )
 
 logger = logging.getLogger(__name__)
@@ -186,35 +185,46 @@ class CandleDatabase:
                 ),
             )
 
-            if signal_type.lower() in ("long", "short"):
+            signal_was_inserted = cursor.rowcount == 1
+            if signal_was_inserted and signal_type.lower() in ("long", "short"):
                 cursor.execute(
                     """
                     INSERT INTO signal_potention (signal_id, average_spread)
-                    SELECT id, %s
+                    SELECT signals.id, source_candle.ask - source_candle.bid
                     FROM signals
-                    WHERE product = %s
-                        AND algorithm_name = %s
-                        AND source_timestamp = %s
-                    ON DUPLICATE KEY UPDATE
-                        average_spread = VALUES(average_spread)
+                    JOIN candles_IBKR AS source_candle
+                        ON source_candle.symbol = signals.product
+                        AND DATE_SUB(
+                            source_candle.datetime,
+                            INTERVAL source_candle.utc_offset_minutes MINUTE
+                        ) = TIMESTAMPADD(
+                            SECOND, signals.source_timestamp,
+                            '1970-01-01 00:00:00'
+                        )
+                    WHERE signals.product = %s
+                        AND signals.algorithm_name = %s
+                        AND signals.source_timestamp = %s
+                        AND source_candle.bid IS NOT NULL
+                        AND source_candle.ask IS NOT NULL
                     """,
                     (
-                        Decimal(str(SIGNAL_POTENTIAL_SPREAD)),
                         INSTRUMENT,
                         STRATEGY_NAME,
                         int(timestamp_utc.timestamp()),
                     ),
                 )
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        "Nie można zapisać potencjału bez spreadu ask-bid "
+                        "świecy źródłowej IBKR."
+                    )
 
             connection.commit()
-
-            # Sprawdź czy to był INSERT (nowy sygnał)
-            was_inserted = cursor.rowcount > 0
 
             cursor.close()
             connection.close()
 
-            if was_inserted:
+            if signal_was_inserted:
                 logger.info(
                     f"Sygnał {signal_type} zapisany dla {INSTRUMENT} "
                     f"o {timestamp_local} UTC{offset_minutes:+d}"
@@ -222,7 +232,7 @@ class CandleDatabase:
             else:
                 logger.debug(f"Sygnał {signal_type} (duplikat) nie zapisany")
 
-            return was_inserted
+            return signal_was_inserted
 
         except mysql.connector.Error as error:
             logger.error(f"Błąd MySQL przy zapisie sygnału: {error}")

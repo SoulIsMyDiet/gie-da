@@ -49,6 +49,8 @@ def _mock_storage(monkeypatch):
     """Podstawia połączenie MySQL i zwraca obiekty testowe."""
     connection, cursor = Mock(), Mock()
     connection.cursor.return_value = cursor
+    cursor.rowcount = 1
+    cursor.lastrowid = 123
     monkeypatch.setattr(
         storage_module.mysql.connector, "connect", Mock(return_value=connection)
     )
@@ -68,8 +70,8 @@ def test_payload_order_rounding_and_polish_utf8():
     assert json.loads(encoded) == payload
 
 
-def test_save_commits_naive_warsaw_close_and_reads_json_back(monkeypatch):
-    """Zapisuje sygnał transakcyjnie i odczytuje JSON z polskimi znakami."""
+def test_save_commits_warsaw_close_and_reads_json_back(monkeypatch):
+    """Zapisuje sygnał ze spreadem źródłowej świecy i odczytuje JSON."""
     storage, connection, cursor = _mock_storage(monkeypatch)
     result = _result("LONG")
     assert storage.save_signal(result, 120)
@@ -88,7 +90,9 @@ def test_save_commits_naive_warsaw_close_and_reads_json_back(monkeypatch):
     ]
     potential_query, potential_values = cursor.execute.call_args_list[1].args
     assert "INSERT INTO signal_potention" in potential_query
-    assert potential_values[1] == Decimal("0.3")
+    assert "source_candle.ask - source_candle.bid" in potential_query
+    assert "signals.source_timestamp" in potential_query
+    assert potential_values == (cursor.lastrowid,)
     cursor.fetchone.return_value = (serialized,)
     assert storage.get_processed_signal(result["timestamp"]) == stored
     connection.commit.assert_called_once()

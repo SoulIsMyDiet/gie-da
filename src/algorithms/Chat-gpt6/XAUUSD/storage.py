@@ -166,7 +166,7 @@ class XAUUSDStorage:
         """Zapisuje wynik i zwraca True tylko dla nowego rekordu.
 
         Błędne dane zgłaszają ValueError; błędy bazy są cofane i propagowane.
-        Dla nowego sygnału LONG/SHORT zapisuje także założony spread XAU/USD.
+        Dla nowego sygnału LONG/SHORT zapisuje spread ask-bid świecy źródłowej.
         """
         signal = result.get("signal")
         if not isinstance(signal, str) or signal.upper() not in ("LONG", "SHORT", "NONE"):
@@ -216,13 +216,28 @@ class XAUUSDStorage:
                 cursor.execute(
                     """
                     INSERT INTO signal_potention (signal_id, average_spread)
-                    VALUES (%s, %s)
+                    SELECT signals.id, source_candle.ask - source_candle.bid
+                    FROM signals
+                    JOIN candles_IBKR AS source_candle
+                        ON source_candle.symbol = signals.product
+                        AND DATE_SUB(
+                            source_candle.datetime,
+                            INTERVAL source_candle.utc_offset_minutes MINUTE
+                        ) = TIMESTAMPADD(
+                            SECOND, signals.source_timestamp,
+                            '1970-01-01 00:00:00'
+                        )
+                    WHERE signals.id = %s
+                        AND source_candle.bid IS NOT NULL
+                        AND source_candle.ask IS NOT NULL
                     """,
-                    (
-                        cursor.lastrowid,
-                        Decimal(str(config.SIGNAL_POTENTIAL_SPREAD)),
-                    ),
+                    (cursor.lastrowid,),
                 )
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        "Nie można zapisać potencjału bez spreadu ask-bid "
+                        "świecy źródłowej IBKR."
+                    )
             connection.commit()
             return True
         except Exception:

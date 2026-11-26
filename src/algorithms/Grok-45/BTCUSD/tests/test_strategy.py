@@ -6,7 +6,6 @@ import importlib.util
 import json
 import sys
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -270,12 +269,11 @@ def test_storage_skips_none_and_keeps_signal_json_compact() -> None:
         save_none_signal=False,
         save_signal_potential=True,
         enqueue_notification=False,
-        spread_price=None,
     )
 
 
-def test_storage_uses_hypothetical_spread_for_directional_signals() -> None:
-    """Zapis potencjału używa stałego spreadu 190 dla BTC/USD."""
+def test_storage_leaves_spread_lookup_to_the_api_for_directional_signals() -> None:
+    """Pozostawia API pobranie rzeczywistego spreadu świecy IBKR."""
     repository = Mock()
     storage = BTCUSDSignalStorage(repository)
     result = {
@@ -297,9 +295,7 @@ def test_storage_uses_hypothetical_spread_for_directional_signals() -> None:
     assert repository.save_algorithm_signal.call_args.kwargs[
         "save_signal_potential"
     ] is True
-    assert repository.save_algorithm_signal.call_args.kwargs[
-        "spread_price"
-    ] == Decimal("190")
+    assert "spread_price" not in repository.save_algorithm_signal.call_args.kwargs
 
 
 def test_none_signals_are_not_saved_by_default() -> None:

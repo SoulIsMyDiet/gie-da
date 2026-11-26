@@ -442,6 +442,7 @@ from ai_verification import AIVerificationWorker  # noqa: E402
 from sound_alert import play_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
 from signal_potential_calculator import (  # noqa: E402
+    LEGACY_CANDLE_SOURCE_MAX_SIGNAL_ID,
     SINGLE_CANDLE_BALANCE_COLUMNS,
     SignalPotentialCalculator,
 )
@@ -2057,7 +2058,7 @@ class MarketDataRepository:
     def _sync_signal_potention_spreads(
         self, cursor: mysql.connector.cursor.MySQLCursor
     ) -> None:
-        """Uzupełnia brakujące wiersze potencjału i aktualizuje spread instrumentu."""
+        """Uzupełnia brakujące potencjały bez zmieniania istniejących spreadów."""
         configured_spreads = (
             self.signal_potential_calculator.SPREADS_BY_PRODUCT
         )
@@ -2076,20 +2077,30 @@ class MarketDataRepository:
         cursor.execute(
             f"""
             INSERT IGNORE INTO signal_potention (signal_id, average_spread)
-            SELECT s.id, {case_expression}
+            SELECT s.id,
+                CASE
+                    WHEN s.id <= {LEGACY_CANDLE_SOURCE_MAX_SIGNAL_ID}
+                        THEN {case_expression}
+                    ELSE source_candle.ask - source_candle.bid
+                END
             FROM signals AS s
+            LEFT JOIN candles_IBKR AS source_candle
+                ON source_candle.symbol = s.product
+                AND DATE_SUB(
+                    source_candle.datetime,
+                    INTERVAL source_candle.utc_offset_minutes MINUTE
+                ) = TIMESTAMPADD(
+                    SECOND, s.source_timestamp, '1970-01-01 00:00:00'
+                )
             WHERE s.`signal` IN ('short', 'long')
                 AND s.product IN ({product_placeholders})
-            """,
-            product_parameters,
-        )
-        cursor.execute(
-            f"""
-            UPDATE signal_potention AS p
-            JOIN signals AS s ON s.id = p.signal_id
-            SET p.average_spread = {case_expression}
-            WHERE s.`signal` IN ('short', 'long')
-                AND s.product IN ({product_placeholders})
+                AND (
+                    s.id <= {LEGACY_CANDLE_SOURCE_MAX_SIGNAL_ID}
+                    OR (
+                        source_candle.bid IS NOT NULL
+                        AND source_candle.ask IS NOT NULL
+                    )
+                )
             """,
             product_parameters,
         )
@@ -2219,10 +2230,19 @@ class MarketDataRepository:
                 ),
             )
             signal_save_count = 0
-            if signal is not None and self._insert_signal(cursor, signal):
+            candle_spread = None
+            if candle.bid is not None and candle.ask is not None:
+                candle_spread = candle.ask - candle.bid
+            if signal is not None and candle_spread is None:
+                raise ValueError(
+                    "Nie można zapisać sygnału bez spreadu ask-bid świecy IBKR."
+                )
+            if signal is not None and self._insert_signal(
+                cursor, signal, candle_spread
+            ):
                 signal_save_count += 1
             if grok45_v2_signal is not None and self._insert_grok45_signal(
-                cursor, grok45_v2_signal
+                cursor, grok45_v2_signal, candle_spread
             ):
                 signal_save_count += 1
             self.signal_potential_calculator.update_pending(
@@ -2722,6 +2742,27 @@ class MarketDataRepository:
         """
         if source_timestamp is None:
             return None
+        connection = mysql.connector.connect(**self.database_settings)
+        try:
+            cursor = connection.cursor()
+            try:
+                return self._fetch_ibkr_spread_from_cursor(
+                    cursor, symbol, source_timestamp
+                )
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _fetch_ibkr_spread_from_cursor(
+        cursor: mysql.connector.cursor.MySQLCursor,
+        symbol: str,
+        source_timestamp: int | None,
+    ) -> Decimal | None:
+        """Pobiera ask-bid dokładnie z zamkniętej świecy wskazanej przez epokę."""
+        if source_timestamp is None:
+            return None
         if (
             isinstance(source_timestamp, bool)
             or not isinstance(source_timestamp, int)
@@ -2737,43 +2778,31 @@ class MarketDataRepository:
             raise ValueError(
                 "Czas źródłowej świecy IBKR jest poza obsługiwanym zakresem."
             ) from error
-        connection = mysql.connector.connect(**self.database_settings)
-        try:
-            cursor = connection.cursor()
-            try:
-                cursor.execute(
-                    """
-                    SELECT bid, ask
-                    FROM candles_IBKR
-                    WHERE symbol = %s
-                        AND DATE_SUB(
-                            datetime, INTERVAL utc_offset_minutes MINUTE
-                        ) = %s
-                    LIMIT 2
-                    """,
-                    (symbol, source_datetime_utc),
-                )
-                rows = cursor.fetchall()
-                if not rows:
-                    return None
-                if len(rows) != 1:
-                    raise ValueError(
-                        "Świeca źródłowa IBKR nie jest unikalna."
-                    )
-                bid, ask = rows[0]
-                if bid is None or ask is None:
-                    return None
+        cursor.execute(
+            """
+            SELECT bid, ask
+            FROM candles_IBKR
+            WHERE symbol = %s
+                AND DATE_SUB(
+                    datetime, INTERVAL utc_offset_minutes MINUTE
+                ) = %s
+            LIMIT 2
+            """,
+            (symbol, source_datetime_utc),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise ValueError("Świeca źródłowa IBKR nie jest unikalna.")
+        bid, ask = rows[0]
+        if bid is None or ask is None:
+            return None
 
-                spread = Decimal(str(ask)) - Decimal(str(bid))
-                if not spread.is_finite() or spread < 0:
-                    raise ValueError(
-                        "Kwotowania bid/ask świecy IBKR są nieprawidłowe."
-                    )
-                return spread
-            finally:
-                cursor.close()
-        finally:
-            connection.close()
+        spread = Decimal(str(ask)) - Decimal(str(bid))
+        if not spread.is_finite() or spread < 0:
+            raise ValueError("Kwotowania bid/ask świecy IBKR są nieprawidłowe.")
+        return spread
 
     def has_algorithm_evaluation(
         self, product: str, algorithm_name: str, source_timestamp: int
@@ -2890,13 +2919,16 @@ class MarketDataRepository:
 
     @staticmethod
     def _insert_signal(
-        cursor: mysql.connector.cursor.MySQLCursor, signal: Signal
+        cursor: mysql.connector.cursor.MySQLCursor,
+        signal: Signal,
+        spread_price: Decimal,
     ) -> bool:
         """Zapisuje sygnał wraz z czasem otwarcia świecy źródłowej.
 
         Args:
             cursor: Kursor aktywnej transakcji MySQL.
             signal: Sygnał podstawowej strategii EUR/USD.
+            spread_price: Spread ask-bid zamkniętej świecy źródłowej.
 
         Returns:
             True, jeśli zapisano nowy sygnał; w przeciwnym razie False.
@@ -2940,7 +2972,7 @@ class MarketDataRepository:
             """,
             (
                 cursor.lastrowid,
-                SignalPotentialCalculator.spread_for_product("EUR/USD"),
+                spread_price,
             ),
         )
         return True
@@ -2950,6 +2982,7 @@ class MarketDataRepository:
         cursor: mysql.connector.cursor.MySQLCursor,
         signal: Grok45SignalRecord,
         algorithm_name: str = GROK45_V2_STRATEGY_NAME,
+        spread_price: Decimal | None = None,
     ) -> bool:
         """Dodaje nowy sygnał Grok do bieżącej transakcji, pomijając duplikaty."""
         signal_timestamp = datetime.fromtimestamp(
@@ -3016,6 +3049,15 @@ class MarketDataRepository:
         )
         signal_was_inserted = cursor.rowcount == 1
         if signal_was_inserted:
+            if spread_price is None:
+                spread_price = self._fetch_ibkr_spread_from_cursor(
+                    cursor,
+                    signal.instrument, signal.timestamp
+                )
+            if spread_price is None:
+                raise ValueError(
+                    "Nie można zapisać sygnału bez spreadu ask-bid świecy IBKR."
+                )
             cursor.execute(
                 """
                 INSERT INTO signal_potention (signal_id, average_spread)
@@ -3023,9 +3065,7 @@ class MarketDataRepository:
                 """,
                 (
                     cursor.lastrowid,
-                    SignalPotentialCalculator.spread_for_product(
-                        signal.instrument
-                    ),
+                    spread_price,
                 ),
             )
         return signal_was_inserted
@@ -3042,7 +3082,6 @@ class MarketDataRepository:
         save_none_signal: bool = False,
         save_signal_potential: bool = True,
         enqueue_notification: bool = True,
-        spread_price: Decimal | None = None,
     ) -> bool:
         """Zapisuje wynik strategii w jednej transakcji MySQL.
 
@@ -3054,9 +3093,8 @@ class MarketDataRepository:
             record_evaluation: Czy trwale oznaczyć świecę jako ocenioną.
             save_signal: Czy zapisać rekord również w tabeli ``signals``.
             save_none_signal: Czy zapisać ``NONE`` zamiast tylko ewaluacji.
-            save_signal_potential: Czy zapisać potencjał z podanym lub domyślnym spreadem.
+            save_signal_potential: Czy zapisać potencjał z rzeczywistym spreadem IBKR.
             enqueue_notification: Czy po nowym zapisie przygotować dźwięk.
-            spread_price: Opcjonalny spread dla danego sygnału, w jednostkach ceny.
 
         Returns:
             ``True`` tylko wtedy, gdy powstał nowy rekord w ``signals``.
@@ -3098,20 +3136,6 @@ class MarketDataRepository:
             allow_nan=False,
             separators=(",", ":"),
         )
-        potential_spread = None
-        if save_signal and direction != "NONE" and save_signal_potential:
-            if spread_price is None:
-                potential_spread = SignalPotentialCalculator.spread_for_product(
-                    product
-                )
-            else:
-                try:
-                    potential_spread = Decimal(str(spread_price))
-                except (InvalidOperation, TypeError, ValueError) as error:
-                    raise ValueError("Spread sygnału jest nieprawidłowy.") from error
-                if not potential_spread.is_finite() or potential_spread < 0:
-                    raise ValueError("Spread sygnału musi być skończony i nieujemny.")
-
         connection = mysql.connector.connect(**self.database_settings)
         cursor = None
         try:
@@ -3163,7 +3187,15 @@ class MarketDataRepository:
                     ),
                 )
                 inserted = cursor.rowcount == 1
-                if inserted and potential_spread is not None:
+                if inserted and save_signal_potential and direction != "NONE":
+                    potential_spread = self._fetch_ibkr_spread_from_cursor(
+                        cursor, product, source_timestamp
+                    )
+                    if potential_spread is None:
+                        raise ValueError(
+                            "Nie można zapisać potencjału bez spreadu ask-bid "
+                            "świecy źródłowej IBKR."
+                        )
                     cursor.execute(
                         """
                         INSERT INTO signal_potention (signal_id, average_spread)
@@ -3196,6 +3228,9 @@ class MarketDataRepository:
             connection.commit()
             return inserted
         except mysql.connector.Error:
+            connection.rollback()
+            raise
+        except ValueError:
             connection.rollback()
             raise
         finally:
