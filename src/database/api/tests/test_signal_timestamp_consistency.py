@@ -68,6 +68,7 @@ def test_grok_eurusd_stores_close_time_and_keeps_open_epoch_as_deduplication_key
     cursor = Mock()
     cursor.fetchone.return_value = (1,)
     cursor.rowcount = 1
+    cursor.lastrowid = 42
 
     repository._insert_grok45_signal(
         cursor, signal, spread_price=Decimal("0.00045")
@@ -84,3 +85,38 @@ def test_grok_eurusd_stores_close_time_and_keeps_open_epoch_as_deduplication_key
     assert values[7] == opened_epoch
     _, potential_values = cursor.execute.call_args_list[-1].args
     assert potential_values[1] == Decimal("0.00045")
+
+
+def test_grok_signal_keeps_id_when_spread_lookup_uses_the_same_cursor():
+    """Zachowuje ID sygnału, gdy zapytanie o spread nadpisuje lastrowid."""
+    signal = Grok45SignalRecord(
+        instrument="EUR/USD",
+        price=Decimal("1.08"),
+        timestamp=5940,
+        signal="LONG",
+        parameters={"ema9": 1.08},
+    )
+    repository = MarketDataRepository.__new__(MarketDataRepository)
+    cursor = Mock()
+    cursor.fetchone.return_value = (1,)
+    cursor.fetchall.return_value = [
+        (Decimal("1.08"), Decimal("1.08045"))
+    ]
+    cursor.rowcount = 1
+    cursor.lastrowid = 42
+
+    def clear_lastrowid_for_spread_lookup(query, _parameters):
+        if "SELECT bid, ask" in query:
+            cursor.lastrowid = 0
+
+    cursor.execute.side_effect = clear_lastrowid_for_spread_lookup
+
+    repository._insert_grok45_signal(cursor, signal)
+
+    potential_query, potential_values = next(
+        call.args
+        for call in cursor.execute.call_args_list
+        if "INSERT INTO signal_potention" in call.args[0]
+    )
+    assert "INSERT INTO signal_potention" in potential_query
+    assert potential_values == (42, Decimal("0.00045"))

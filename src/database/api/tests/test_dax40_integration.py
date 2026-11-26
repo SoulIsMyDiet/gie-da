@@ -272,6 +272,11 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
 
             def execute(self, query, parameters) -> None:
                 self.calls.append((query, parameters))
+                if "SELECT bid, ask" in query:
+                    self.lastrowid = 0
+
+            def fetchall(self):
+                return [(Decimal("18000"), Decimal("18001.5"))]
 
             def close(self) -> None:
                 pass
@@ -305,12 +310,7 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
             "signal_parameters": {"reason": "no_breakout"},
         }
 
-        with patch("app.mysql.connector.connect", return_value=connection) as connect, \
-                patch.object(
-                    repository,
-                    "_fetch_ibkr_spread_from_cursor",
-                    return_value=Decimal("1.50000"),
-                ):
+        with patch("app.mysql.connector.connect", return_value=connection) as connect:
             inserted = repository.save_algorithm_signal(
                 "GER30",
                 "Chat-gpt6/DAX40StrategyV1",
@@ -321,7 +321,8 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
         self.assertTrue(inserted)
         connect.assert_called_once_with(**repository.database_settings)
         signal_query, signal_parameters = connection.cursor_instance.calls[0]
-        potential_query, potential_parameters = connection.cursor_instance.calls[1]
+        spread_query, _ = connection.cursor_instance.calls[1]
+        potential_query, potential_parameters = connection.cursor_instance.calls[2]
         self.assertIn("INSERT IGNORE INTO signals", signal_query)
         self.assertIn("%s", signal_query)
         self.assertEqual(signal_parameters[1], "GER30")
@@ -334,7 +335,9 @@ class DAX40ApiIntegrationTests(unittest.TestCase):
             signal_parameters[6],
             '{"reason":"no_breakout"}',
         )
+        self.assertIn("SELECT bid, ask", spread_query)
         self.assertIn("INSERT INTO signal_potention", potential_query)
+        self.assertEqual(potential_parameters[0], 42)
         self.assertEqual(potential_parameters[1], Decimal("1.50000"))
         self.assertTrue(connection.committed)
         self.assertTrue(connection.closed)

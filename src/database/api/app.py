@@ -2918,6 +2918,35 @@ class MarketDataRepository:
             connection.close()
 
     @staticmethod
+    def _require_last_inserted_id(
+        cursor: mysql.connector.cursor.MySQLCursor,
+        record_name: str,
+    ) -> int:
+        """Zwraca dodatni identyfikator ostatniego zapisanego rekordu.
+
+        Args:
+            cursor: Kursor MySQL, którym zapisano rekord.
+            record_name: Nazwa rekordu używana w komunikacie błędu.
+
+        Returns:
+            Dodatni identyfikator nadany przez bazę danych.
+
+        Raises:
+            mysql.connector.Error: Gdy kursor nie zwróci dodatniego ID.
+        """
+        inserted_id = cursor.lastrowid
+        if (
+            isinstance(inserted_id, bool)
+            or not isinstance(inserted_id, int)
+            or inserted_id <= 0
+        ):
+            raise mysql.connector.Error(
+                f"Nie udało się odczytać poprawnego identyfikatora "
+                f"{record_name} po zapisie."
+            )
+        return inserted_id
+
+    @staticmethod
     def _insert_signal(
         cursor: mysql.connector.cursor.MySQLCursor,
         signal: Signal,
@@ -2932,6 +2961,10 @@ class MarketDataRepository:
 
         Returns:
             True, jeśli zapisano nowy sygnał; w przeciwnym razie False.
+
+        Raises:
+            mysql.connector.Error: Gdy zapis się nie powiedzie lub baza nie
+                zwróci identyfikatora sygnału.
         """
         signal_payload = signal.to_payload()
         local_signal_time = signal.timestamp.astimezone(
@@ -2965,13 +2998,16 @@ class MarketDataRepository:
         )
         if cursor.rowcount != 1:
             return False
+        signal_id = MarketDataRepository._require_last_inserted_id(
+            cursor, "sygnału"
+        )
         cursor.execute(
             """
             INSERT INTO signal_potention (signal_id, average_spread)
             VALUES (%s, %s)
             """,
             (
-                cursor.lastrowid,
+                signal_id,
                 spread_price,
             ),
         )
@@ -3049,6 +3085,7 @@ class MarketDataRepository:
         )
         signal_was_inserted = cursor.rowcount == 1
         if signal_was_inserted:
+            signal_id = self._require_last_inserted_id(cursor, "sygnału")
             if spread_price is None:
                 spread_price = self._fetch_ibkr_spread_from_cursor(
                     cursor,
@@ -3064,7 +3101,7 @@ class MarketDataRepository:
                 VALUES (%s, %s)
                 """,
                 (
-                    cursor.lastrowid,
+                    signal_id,
                     spread_price,
                 ),
             )
@@ -3158,12 +3195,9 @@ class MarketDataRepository:
                 if cursor.rowcount != 1:
                     connection.commit()
                     return False
-                evaluation_id = cursor.lastrowid
-                if evaluation_id is None:
-                    connection.rollback()
-                    raise RuntimeError(
-                        "Nie udało się odczytać identyfikatora ewaluacji."
-                    )
+                evaluation_id = self._require_last_inserted_id(
+                    cursor, "ewaluacji"
+                )
 
             inserted = False
             if save_signal and (direction != "NONE" or save_none_signal):
@@ -3188,6 +3222,9 @@ class MarketDataRepository:
                 )
                 inserted = cursor.rowcount == 1
                 if inserted and save_signal_potential and direction != "NONE":
+                    signal_id = self._require_last_inserted_id(
+                        cursor, "sygnału"
+                    )
                     potential_spread = self._fetch_ibkr_spread_from_cursor(
                         cursor, product, source_timestamp
                     )
@@ -3202,7 +3239,7 @@ class MarketDataRepository:
                         VALUES (%s, %s)
                         """,
                         (
-                            cursor.lastrowid,
+                            signal_id,
                             potential_spread,
                         ),
                     )
@@ -5597,6 +5634,12 @@ def _process_live_ibkr_candle(
                 updated_grok45_v2_candles
             )
     except mysql.connector.Error as error:
+        logger.error(
+            "Błąd MySQL podczas zapisu świecy IBKR %s (%s): %s",
+            candle.symbol,
+            candle.datetime.isoformat(),
+            error,
+        )
         raise HTTPException(
             status_code=503,
             detail="Nie udało się zapisać świecy w bazie MySQL.",
