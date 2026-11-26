@@ -268,6 +268,12 @@ private:
         lastCompletedCandleTimestampBySymbol_;
     // Backend: przechowuje zamknięte świece do czasu potwierdzenia zapisu.
     std::deque<IBKRCandleData> completedCandlesPendingSave_;
+    // Backend: przechowuje najnowsze świece i stan cyklicznych odczytów IBKR.
+    std::unordered_map<std::string, IBKRCandleData>
+        latestHistoricalPollCandlesBySymbol_;
+    std::unordered_map<std::string, bool> historicalPollInProgressBySymbol_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point>
+        nextHistoricalPollAtBySymbol_;
     std::chrono::steady_clock::time_point nextCandleSaveRetry_{};
     bool completedCandleSaveInProgress_ = false;
     bool historySyncRequested_ = false;

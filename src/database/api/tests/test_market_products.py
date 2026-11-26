@@ -13,6 +13,7 @@ from market_products import (  # noqa: E402
     MARKET_PROFILES,
     get_monitored_symbols,
     get_open_symbols,
+    is_ibkr_product,
     is_market_open,
     is_monitored_product,
 )
@@ -95,6 +96,19 @@ class MarketProductsTests(unittest.TestCase):
             with self.subTest(timestamp=timestamp):
                 self.assertEqual(profile.is_open(timestamp), expected_open)
 
+    def test_sp500_futures_profile_excludes_the_daily_maintenance_window(self) -> None:
+        timestamps = (
+            (datetime(2026, 11, 18, 21, 59, tzinfo=timezone.utc), True),
+            (datetime(2026, 11, 18, 22, 0, tzinfo=timezone.utc), False),
+            (datetime(2026, 11, 18, 22, 30, tzinfo=timezone.utc), False),
+            (datetime(2026, 11, 18, 23, 0, tzinfo=timezone.utc), True),
+            (datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc), False),
+        )
+
+        for timestamp, expected_open in timestamps:
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(is_market_open("ES", timestamp), expected_open)
+
     def test_only_available_products_are_monitored(self) -> None:
         expected_symbols = (
             "EUR/USD",
@@ -103,18 +117,31 @@ class MarketProductsTests(unittest.TestCase):
             "XAU/USD",
             "BTC/USD",
             "AAPL",
+            "GER30",
+            "ES",
         )
         self.assertEqual(get_monitored_symbols(), expected_symbols)
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)),
-            ("EUR/USD", "USD/MXN", "USD/JPY", "XAU/USD", "BTC/USD"),
+            (
+                "EUR/USD",
+                "USD/MXN",
+                "USD/JPY",
+                "XAU/USD",
+                "BTC/USD",
+                "GER30",
+                "ES",
+            ),
         )
         self.assertEqual(
             get_open_symbols(datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)),
             ("BTC/USD",),
         )
-        self.assertFalse(is_monitored_product("GER30"))
-        self.assertFalse(is_monitored_product("ES"))
+        self.assertTrue(is_monitored_product("GER30"))
+        self.assertTrue(is_monitored_product("ES"))
+        self.assertTrue(is_ibkr_product("GER30"))
+        self.assertTrue(is_ibkr_product("ES"))
+        self.assertFalse(is_ibkr_product("EUR/USD"))
         self.assertTrue(is_monitored_product("EUR/USD"))
         self.assertTrue(is_monitored_product("USD/MXN"))
         self.assertTrue(is_monitored_product("USD/JPY"))

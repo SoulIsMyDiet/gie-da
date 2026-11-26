@@ -182,14 +182,16 @@ MySQL przy zmianie kodu.
 Aktywne instrumenty i ich sesje znajdują się w `src/database/api/market_products.py`.
 Nowy symbol dodaj do `MONITORED_PRODUCTS` i przypisz mu profil z `MARKET_PROFILES`.
 Dostępne profile przykładowe to Forex 24/5, akcje USA w podstawowej sesji giełdowej,
-krypto 24/7 oraz GER30. GER30 jest pobierany od poniedziałku do piątku poza
-przerwą: zimą 22:00–01:10, latem 22:00–02:10 czasu Europe/Berlin. Zmiana czasu
-letniego jest rozpoznawana automatycznie. Sesje profilu podawaj według lokalnego
-czasu giełdy jako minuty od północy; początek jest wliczony, a koniec wyłączony.
-Sesję przechodzącą przez północ podziel na przedziały przypisane do odpowiednich
-dni tygodnia. Aktywne są `EURUSD/USD` i `GER30`. Monitor pobiera
-konfigurację z API, wykrywa nowe symbole bez rekompilacji aplikacji i pyta Twelve
-Data wyłącznie o instrumenty z otwartą sesją.
+krypto 24/7, GER30 i ES. GER30 jest pobierany od poniedziałku do piątku poza
+przerwą: zimą 22:00–01:10, latem 22:00–02:10 czasu Europe/Berlin. ES jest
+pobierany na CME od niedzieli do piątku z codzienną przerwą 17:00–18:00 czasu
+Nowego Jorku. Zmiana czasu letniego jest rozpoznawana automatycznie. Sesje
+profilu podawaj według lokalnego czasu giełdy jako minuty od północy; początek
+jest wliczony, a koniec wyłączony. Sesję przechodzącą przez północ podziel na
+przedziały przypisane do odpowiednich dni tygodnia. Aktywne są `EUR/USD`,
+`USD/MXN`, `USD/JPY`, `XAU/USD`, `BTC/USD`, `AAPL`, `GER30` i `ES`. Monitor
+pobiera listę instrumentów i ich otwarte sesje z API. Nowy instrument wymaga
+również wpisu w rejestrze kontraktów IBKR i ponownej kompilacji aplikacji.
 Przy uruchomieniu nadrabia do 1000 brakujących świec dla każdego aktywnego produktu.
 Zmiany w API wymagają `docker compose up -d --build`, a zmiany aplikacji —
 ponownej kompilacji.

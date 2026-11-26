@@ -50,10 +50,11 @@ class MarketProfile:
 
 @dataclass(frozen=True)
 class MarketProduct:
-    """Łączy wewnętrzny symbol produktu z typem rynku i jego harmonogramem."""
+    """Opisuje symbol produktu, jego sesję i źródło danych."""
 
     symbol: str
     profile_name: str
+    data_source: str = "twelve_data"
 
 
 _CLOSED_DAY: tuple[SessionWindow, ...] = ()
@@ -149,6 +150,8 @@ MONITORED_PRODUCTS = (
     MarketProduct("XAU/USD", "gold_spot"),
     MarketProduct("BTC/USD", "crypto_24_7"),
     MarketProduct("AAPL", "us_equity"),
+    MarketProduct("GER30", "dax_index", "ibkr"),
+    MarketProduct("ES", "sp500_futures", "ibkr"),
 )
 
 
@@ -182,6 +185,14 @@ def get_open_symbols(utc_time: datetime) -> tuple[str, ...]:
 def is_monitored_product(symbol: str) -> bool:
     """Sprawdza, czy symbol należy do aktywnej konfiguracji produktów."""
     return any(product.symbol == symbol for product in MONITORED_PRODUCTS)
+
+
+def is_ibkr_product(symbol: str) -> bool:
+    """Sprawdza, czy produkt korzysta ze strumienia danych IBKR."""
+    return any(
+        product.symbol == symbol and product.data_source == "ibkr"
+        for product in MONITORED_PRODUCTS
+    )
 
 
 def _validate_profile_configuration() -> None:

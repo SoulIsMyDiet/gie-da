@@ -18,6 +18,7 @@
 #include <exception>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
@@ -26,6 +27,7 @@ namespace {
 
 constexpr auto connectionHandshakeTimeout = std::chrono::seconds(15);
 constexpr auto candleSaveRetryDelay = std::chrono::seconds(5);
+constexpr auto delayedHistoricalPollInterval = std::chrono::seconds(60);
 constexpr int eurUsdHistoricalRequestId = 9251;
 constexpr int eurUsdQuoteRequestId = 9252;
 constexpr std::size_t maximumHistoryCandlesPerInstrument = 1000;
@@ -43,10 +45,13 @@ struct IBKRInstrumentDefinition {
     const char* currency;
     const char* whatToShow;
     bool useRegularTradingHours;
+    bool rollQuarterly = false;
+    int marketDataType = 1;
+    bool pollHistoricalData = false;
 };
 
 // Rejestr musi odpowiadać instrumentom z market_products.py.
-constexpr std::array<IBKRInstrumentDefinition, 6> ibkrInstrumentRegistry{{
+constexpr std::array<IBKRInstrumentDefinition, 8> ibkrInstrumentRegistry{{
     {
         9251, 9252, "EUR/USD", "EUR", "CASH", "IDEALPRO", "USD",
         "MIDPOINT", false},
@@ -64,17 +69,93 @@ constexpr std::array<IBKRInstrumentDefinition, 6> ibkrInstrumentRegistry{{
         9256, 0, "BTC/USD", "BTC", "CRYPTO", "PAXOS", "USD", "AGGTRADES",
         false},
     {9257, 0, "AAPL", "AAPL", "STK", "SMART", "USD", "TRADES", true},
+    // Dane indeksowe DAX pobieramy z opóźnionego strumienia IBKR.
+    {
+        9261, 9262, "GER30", "IBDE40", "CFD", "SMART", "EUR", "MIDPOINT",
+        false, false, 3, true},
+    // Kontrakt ES używa danych opóźnionych, jeśli konto nie ma subskrypcji live.
+    {
+            9263, 9264, "ES", "ES", "FUT", "CME", "USD", "TRADES", false,
+            true, 3, true},
 }};
 
 /**
  * Wypełnia kontrakt IBKR danymi z rejestru instrumentów.
+ * @param contract Kontrakt, który ma zostać przygotowany do żądania IBKR.
+ * @param instrument Konfiguracja pobieranego instrumentu.
+ * @param contractMonth Miesiąc kontraktu futures w formacie YYYYMM.
+ * @throws std::invalid_argument Jeśli kontrakt z automatycznym rolowaniem nie
+ *     otrzymał miesiąca wygaśnięcia.
  */
 void configureContract(
-    Contract& contract, const IBKRInstrumentDefinition& instrument) {
+    Contract& contract,
+    const IBKRInstrumentDefinition& instrument,
+    const std::string& contractMonth) {
     contract.symbol = instrument.contractSymbol;
     contract.secType = instrument.securityType;
     contract.exchange = instrument.exchange;
     contract.currency = instrument.currency;
+    if (instrument.rollQuarterly) {
+        if (contractMonth.empty()) {
+            throw std::invalid_argument(
+                "Nie podano miesiąca kontraktu futures ES.");
+        }
+        contract.lastTradeDateOrContractMonth = contractMonth;
+        contract.multiplier = "50";
+    }
+}
+
+/**
+ * Formatuje rok i miesiąc dla pola kontraktu futures IBKR.
+ * @param contractYear Rok kontraktu.
+ * @param monthNumber Numer miesiąca kontraktu.
+ * @return Tekst w formacie YYYYMM.
+ */
+std::string formatFuturesContractMonth(
+    std::chrono::year contractYear, unsigned monthNumber) {
+    std::ostringstream result;
+    result << static_cast<int>(contractYear) << std::setw(2)
+           << std::setfill('0') << monthNumber;
+    return result.str();
+}
+
+/**
+ * Wybiera najbliższy kwartalny kontrakt ES przed datą rolowania.
+ * Kontrakt zmienia się osiem dni przed trzecią piątką marca, czerwca,
+ * września lub grudnia, licząc daty kalendarzowe UTC.
+ * @param currentTime Aktualny czas systemowy.
+ * @return Miesiąc aktywnego kontraktu w formacie YYYYMM.
+ */
+std::string activeQuarterlyFutureContractMonth(
+    std::chrono::system_clock::time_point currentTime) {
+    using namespace std::chrono;
+
+    const sys_days currentDate = floor<days>(currentTime);
+    const year_month_day calendarDate{currentDate};
+    constexpr std::array<unsigned, 4> quarterMonths{3, 6, 9, 12};
+
+    for (const unsigned monthNumber : quarterMonths) {
+        const year_month_day firstDay{
+            calendarDate.year(), month{monthNumber}, day{1}};
+        const unsigned firstWeekday =
+            weekday{sys_days{firstDay}}.c_encoding();
+        const unsigned daysUntilFriday =
+            (5U + 7U - firstWeekday) % 7U;
+        const year_month_day thirdFriday{
+            calendarDate.year(),
+            month{monthNumber},
+            day{1U + daysUntilFriday + 14U}};
+        const sys_days rollDate =
+            sys_days{thirdFriday} - days{8};
+
+        if (currentDate < rollDate) {
+            return formatFuturesContractMonth(
+                calendarDate.year(), monthNumber);
+        }
+    }
+
+    return formatFuturesContractMonth(
+        calendarDate.year() + years{1}, quarterMonths.front());
 }
 
 /**
@@ -446,6 +527,16 @@ void IBGatewayClient::error(
             ErrorLogger::warning(
                 "Błąd strumienia IBKR dla " +
                 std::string(instrument->databaseSymbol) + ": " + message);
+            if (instrument->pollHistoricalData) {
+                const std::lock_guard<std::mutex> lock(statusMutex_);
+                historicalPollInProgressBySymbol_[
+                    instrument->databaseSymbol] = false;
+                latestHistoricalPollCandlesBySymbol_.erase(
+                    instrument->databaseSymbol);
+                nextHistoricalPollAtBySymbol_[instrument->databaseSymbol] =
+                    std::chrono::steady_clock::now() +
+                    delayedHistoricalPollInterval;
+            }
         } else {
             bool historyRequestFailed = false;
             {
@@ -554,6 +645,61 @@ void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
     const IBKRInstrumentDefinition* liveInstrument =
         findInstrumentByRequestId(requestId);
     if (liveInstrument != nullptr) {
+        if (liveInstrument->pollHistoricalData) {
+            std::int64_t timestampUtc = 0;
+            if (!parseIbkrTimestamp(bar.time, timestampUtc)) {
+                ErrorLogger::warning(
+                    "IBKR zwróciło nieprawidłowy znacznik czasu świecy dla " +
+                    std::string(liveInstrument->databaseSymbol) + ".");
+                return;
+            }
+
+            const auto currentMinute = std::chrono::floor<
+                std::chrono::minutes>(std::chrono::system_clock::now());
+            const auto currentMinuteUtc = std::chrono::duration_cast<
+                std::chrono::seconds>(currentMinute.time_since_epoch()).count();
+            if (timestampUtc >= currentMinuteUtc) {
+                return;
+            }
+            if (!std::isfinite(bar.open) || !std::isfinite(bar.high) ||
+                !std::isfinite(bar.low) || !std::isfinite(bar.close) ||
+                bar.high < bar.open || bar.high < bar.close ||
+                bar.low > bar.open || bar.low > bar.close ||
+                bar.low > bar.high) {
+                ErrorLogger::warning(
+                    "Pominięto świecę IBKR z nieprawidłowym OHLC dla " +
+                    std::string(liveInstrument->databaseSymbol) + ".");
+                return;
+            }
+
+            IBKRCandleData candle;
+            candle.symbol = liveInstrument->databaseSymbol;
+            candle.timestampUtc = timestampUtc;
+            candle.open = bar.open;
+            candle.high = bar.high;
+            candle.low = bar.low;
+            candle.close = bar.close;
+            candle.volume = formatIbkrVolume(bar);
+            {
+                const std::lock_guard<std::mutex> lock(statusMutex_);
+                const auto requestInProgress =
+                    historicalPollInProgressBySymbol_.find(candle.symbol);
+                if (requestInProgress !=
+                        historicalPollInProgressBySymbol_.end() &&
+                    requestInProgress->second) {
+                    auto latest =
+                        latestHistoricalPollCandlesBySymbol_.find(
+                            candle.symbol);
+                    if (latest ==
+                            latestHistoricalPollCandlesBySymbol_.end() ||
+                        timestampUtc > latest->second.timestampUtc) {
+                        latestHistoricalPollCandlesBySymbol_[candle.symbol] =
+                            std::move(candle);
+                    }
+                }
+            }
+            return;
+        }
         if (requestId != eurUsdHistoricalRequestId) {
             return;
         }
@@ -636,7 +782,7 @@ void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
 void IBGatewayClient::historicalDataUpdate(int requestId, const Bar& bar) {
     const IBKRInstrumentDefinition* instrument =
         findInstrumentByRequestId(requestId);
-    if (instrument == nullptr) {
+    if (instrument == nullptr || instrument->pollHistoricalData) {
         return;
     }
     const std::string symbol = instrument->databaseSymbol;
@@ -861,6 +1007,42 @@ void IBGatewayClient::historicalDataEnd(
         return;
     }
 
+    const IBKRInstrumentDefinition* instrument =
+        findInstrumentByRequestId(requestId);
+    if (instrument != nullptr && instrument->pollHistoricalData) {
+        bool shouldSaveCandle = false;
+        {
+            const std::lock_guard<std::mutex> lock(statusMutex_);
+            const auto latest =
+                latestHistoricalPollCandlesBySymbol_.find(
+                    instrument->databaseSymbol);
+            if (latest != latestHistoricalPollCandlesBySymbol_.end()) {
+                const auto lastCompleted =
+                    lastCompletedCandleTimestampBySymbol_.find(
+                        instrument->databaseSymbol);
+                if (lastCompleted ==
+                        lastCompletedCandleTimestampBySymbol_.end() ||
+                    latest->second.timestampUtc > lastCompleted->second) {
+                    completedCandlesPendingSave_.push_back(latest->second);
+                    lastCompletedCandleTimestampBySymbol_[
+                        instrument->databaseSymbol] =
+                        latest->second.timestampUtc;
+                    shouldSaveCandle = true;
+                }
+                latestHistoricalPollCandlesBySymbol_.erase(latest);
+            }
+            historicalPollInProgressBySymbol_[
+                instrument->databaseSymbol] = false;
+            nextHistoricalPollAtBySymbol_[instrument->databaseSymbol] =
+                std::chrono::steady_clock::now() +
+                delayedHistoricalPollInterval;
+        }
+        if (shouldSaveCandle) {
+            persistNextCompletedCandle();
+        }
+        return;
+    }
+
     if (requestId != eurUsdHistoricalRequestId) {
         return;
     }
@@ -883,6 +1065,8 @@ void IBGatewayClient::runConnection(
     bool disconnected = false;
     std::array<bool, ibkrInstrumentRegistry.size()> historicalRequestsStarted{};
     std::array<bool, ibkrInstrumentRegistry.size()> quoteRequestsStarted{};
+    std::array<std::string, ibkrInstrumentRegistry.size()>
+        activeContractMonths{};
     try {
         client = std::make_unique<EClientSocket>(this, &readerSignal_);
         client->asyncEConnect(true);
@@ -934,19 +1118,131 @@ void IBGatewayClient::runConnection(
                     for (std::size_t index = 0;
                          index < ibkrInstrumentRegistry.size();
                          ++index) {
+                        const IBKRInstrumentDefinition& instrument =
+                            ibkrInstrumentRegistry[index];
+                        const std::string desiredContractMonth =
+                            instrument.rollQuarterly
+                            ? activeQuarterlyFutureContractMonth(
+                                  std::chrono::system_clock::now())
+                            : "";
+                        if (desiredContractMonth !=
+                            activeContractMonths[index]) {
+                            bool historySyncForInstrument = false;
+                            if (!activeContractMonths[index].empty()) {
+                                const std::lock_guard<std::mutex> lock(
+                                    statusMutex_);
+                                historySyncForInstrument =
+                                    historySyncInProgress_ &&
+                                    historySyncInstrumentIndex_ == index;
+                            }
+                            if (historySyncForInstrument) {
+                                continue;
+                            }
+                            if (instrument.pollHistoricalData) {
+                                bool pollInProgress = false;
+                                {
+                                    const std::lock_guard<std::mutex> lock(
+                                        statusMutex_);
+                                    const auto requestInProgress =
+                                        historicalPollInProgressBySymbol_.find(
+                                            instrument.databaseSymbol);
+                                    pollInProgress =
+                                        requestInProgress !=
+                                            historicalPollInProgressBySymbol_
+                                                .end() &&
+                                        requestInProgress->second;
+                                    historicalPollInProgressBySymbol_[
+                                        instrument.databaseSymbol] = false;
+                                    latestHistoricalPollCandlesBySymbol_.erase(
+                                        instrument.databaseSymbol);
+                                    nextHistoricalPollAtBySymbol_[
+                                        instrument.databaseSymbol] =
+                                        std::chrono::steady_clock::now();
+                                }
+                                if (pollInProgress) {
+                                    client->cancelHistoricalData(
+                                        instrument.historicalRequestId);
+                                }
+                            }
+                            if (historicalRequestsStarted[index]) {
+                                client->cancelHistoricalData(
+                                    instrument.historicalRequestId);
+                                historicalRequestsStarted[index] = false;
+                            }
+                            if (quoteRequestsStarted[index]) {
+                                client->cancelMktData(
+                                    instrument.quoteRequestId);
+                                quoteRequestsStarted[index] = false;
+                            }
+                            if (!activeContractMonths[index].empty()) {
+                                const std::lock_guard<std::mutex> lock(
+                                    statusMutex_);
+                                pendingCandlesBySymbol_.erase(
+                                    instrument.databaseSymbol);
+                                quotesBySymbol_.erase(
+                                    instrument.databaseSymbol);
+                            }
+                            activeContractMonths[index] =
+                                desiredContractMonth;
+                        }
+                        Contract contract;
+                        configureContract(
+                            contract, instrument, activeContractMonths[index]);
+                        if (instrument.pollHistoricalData) {
+                            bool shouldPoll = false;
+                            {
+                                const std::lock_guard<std::mutex> lock(
+                                    statusMutex_);
+                                const auto requestInProgress =
+                                    historicalPollInProgressBySymbol_.find(
+                                        instrument.databaseSymbol);
+                                const auto nextPoll =
+                                    nextHistoricalPollAtBySymbol_.find(
+                                        instrument.databaseSymbol);
+                                if ((requestInProgress ==
+                                         historicalPollInProgressBySymbol_
+                                             .end() ||
+                                     !requestInProgress->second) &&
+                                    (nextPoll ==
+                                         nextHistoricalPollAtBySymbol_.end() ||
+                                     std::chrono::steady_clock::now() >=
+                                         nextPoll->second)) {
+                                    historicalPollInProgressBySymbol_[
+                                        instrument.databaseSymbol] = true;
+                                    latestHistoricalPollCandlesBySymbol_.erase(
+                                        instrument.databaseSymbol);
+                                    shouldPoll = true;
+                                }
+                            }
+                            if (!shouldPoll) {
+                                continue;
+                            }
+                            client->reqMarketDataType(
+                                instrument.marketDataType);
+                            client->reqHistoricalData(
+                                instrument.historicalRequestId,
+                                contract,
+                                "",
+                                "1800 S",
+                                "1 min",
+                                instrument.whatToShow,
+                                instrument.useRegularTradingHours ? 1 : 0,
+                                2,
+                                false,
+                                TagValueListSPtr());
+                            continue;
+                        }
                         if (historicalRequestsStarted[index]) {
                             continue;
                         }
-                        const IBKRInstrumentDefinition& instrument =
-                            ibkrInstrumentRegistry[index];
-                        Contract contract;
-                        configureContract(contract, instrument);
                         if (instrument.historicalRequestId ==
                             eurUsdHistoricalRequestId) {
                             updateCandleMessage(
                                 "Pobieranie świec EUR/USD "
                                 "1-minutowych z IBKR...");
                         }
+                        client->reqMarketDataType(
+                            instrument.marketDataType);
                         client->reqHistoricalData(
                             instrument.historicalRequestId,
                             contract,
@@ -974,12 +1270,15 @@ void IBGatewayClient::runConnection(
                         }
 
                         Contract contract;
-                        configureContract(contract, instrument);
+                        configureContract(
+                            contract, instrument, activeContractMonths[index]);
                         if (instrument.quoteRequestId ==
                             eurUsdQuoteRequestId) {
                             updateQuoteMessage(
                                 "Oczekiwanie na kwotowania bid/ask z IBKR...");
                         }
+                        client->reqMarketDataType(
+                            instrument.marketDataType);
                         client->reqMktData(
                             instrument.quoteRequestId,
                             contract,
@@ -1015,10 +1314,15 @@ void IBGatewayClient::runConnection(
                     const IBKRInstrumentDefinition& instrument =
                         ibkrInstrumentRegistry[historyInstrumentIndex];
                     Contract contract;
-                    configureContract(contract, instrument);
+                    configureContract(
+                        contract,
+                        instrument,
+                        activeContractMonths[historyInstrumentIndex]);
                     updateCandleMessage(
                         "Pobieranie 1000 ostatnich zamkniętych świec " +
                         std::string(instrument.databaseSymbol) + " z IBKR...");
+                    client->reqMarketDataType(
+                        instrument.marketDataType);
                     client->reqHistoricalData(
                         historyRequestId,
                         contract,

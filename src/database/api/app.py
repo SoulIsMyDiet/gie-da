@@ -431,6 +431,7 @@ GROK45_CPP_STRATEGY_NAME = "Grok-45/EURUSDC++StrategyV1"
 from market_products import (  # noqa: E402
     get_monitored_symbols,
     get_open_symbols,
+    is_ibkr_product,
     is_market_open,
     is_monitored_product,
 )
@@ -4349,6 +4350,12 @@ async def lifespan(application: FastAPI):
     monitored_symbols = get_monitored_symbols()
     print(f"[Startup] Pobieranie brakujących świec dla {len(monitored_symbols)} symboli...")
     for symbol in monitored_symbols:
+        if is_ibkr_product(symbol):
+            print(
+                f"[Startup] {symbol}: luki obsługuje strumień IBKR; "
+                "pomijam starszą tabelę candles."
+            )
+            continue
         try:
             has_missing, missing_times, total_count = repository.retry_fetch_missing_candles(
                 symbol, limit=50, max_retries=3, retry_delay_seconds=2

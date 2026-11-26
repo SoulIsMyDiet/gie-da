@@ -169,19 +169,27 @@ zapisów, jak i świec dostarczonych w paczce `/api/candles/batch`. Obie strateg
 dźwiękowe jest naliczane wyłącznie dla zapisanych sygnałów.
 Uzupełnianie historii w paczce nie odtwarza dźwięków.
 
-Pobieranie świec dla `GER30` (DAX40) i `ES` (S&P 500) jest tymczasowo wyłączone,
-ponieważ dotychczasowe symbole nie zapewniały danych dla oczekiwanych indeksów.
-API nie zwraca tych instrumentów jako monitorowanych ani otwartych i odrzuca
-nowe zapisy oraz żądania uzupełnienia; zapisane wcześniej świece pozostają
-w bazie. Monitor pobiera obecnie `EUR/USD`, `USD/MXN`, `USD/JPY`, `XAU/USD`,
-`BTC/USD` (całodobowo) i `AAPL` w regularnych godzinach sesji amerykańskiej.
+Monitor IBKR pobiera teraz również `GER30` (CFD DAX40) i `ES` (futures E-mini
+S&P 500; kontrakt CFD DAX40 w IBKR używa symbolu `IBDE40`). Dane trafiają do
+`candles_IBKR`; dla `ES` aplikacja wybiera kontrakt
+kwartalny i przełącza subskrypcje na kolejny kontrakt osiem dni przed trzecią
+piątką miesiąca wygaśnięcia. Wymaga to aktywnych uprawnień do danych rynkowych
+IBKR dla CFD GER30 i kontraktów ES. Dla obu instrumentów aplikacja prosi o dane
+opóźnione, jeśli konto nie ma subskrypcji live, więc takie świece nie
+odzwierciedlają bieżącego rynku. Kalendarze sesji API pomijają przerwę
+techniczną futures ES oraz godziny zamknięcia DAX40.
+Ponieważ IBKR nie wysyła aktualizacji `keepUpToDate` dla tych opóźnionych
+danych bez dodatkowej subskrypcji, aplikacja odpytuje historię świec co minutę
+i zapisuje tylko najnowszą zamkniętą świecę.
+Desktopowy monitor nie odpytuje Twelve Data o te dwa symbole; zapisuje je
+połączenie IBKR. Pozostałe produkty są nadal obsługiwane przez dotychczasowe
+źródło Twelve Data.
 
-Strategia `Claude-sonnet55/S&P500` pozostaje w kodzie. Po ponownym włączeniu
-instrumentu API może uruchamiać ją po zapisaniu pojedynczej zamkniętej świecy
-`ES`, a aplikacja Windows odtwarza dźwięk po nowym zapisie sygnału. Ten tryb nie
-odpytuje samodzielnie bazy i nie wykrywa braku świecy po 20 sekundach ani nie
-analizuje automatycznie uzupełnianej historii. Tryb `--loop` można uruchomić
-osobno; szczegóły i ograniczenia znajdują się w README strategii.
+Po każdej zapisanej, zamkniętej świecy `GER30` API uruchamia strategie Claude
+i Chat-gpt6 DAX40. Dla `ES` uruchamia strategię Claude; dodatkowo włączona jest
+lokalna pętla Grok S&P 500. Ręczna synchronizacja historii zapisuje świece,
+ale nie odtwarza strategii dla całej pobranej historii. Aplikacja Windows
+nalicza dźwięk tylko dla nowych sygnałów zapisanych przez obsługiwane strategie.
 
 Tabela `signal_potention` jest tworzona automatycznie przy uruchomieniu API. Pierwsze 60 sald pojedynczych świec jest przechowywanych kolejno w kolumnach `saldo1can`–`saldo60can`, dzięki czemu również `SELECT *` zwraca je obok siebie. Przy aktualizacji istniejące kolumny pierwszych pięciu świec są przemianowywane, a kolumny 6–60 dodawane. Sygnały o `signal_id <= 5230` są uzupełniane z `candles`, a nowsze z `candles_IBKR`. Kolumna `saldoNcan` opisuje najlepsze wychylenie w N-tej zamkniętej świecy M1 po sygnale: LONG używa `high`, SHORT używa `low`, a od zmiany kursu odejmuje się `average_spread` z tego samego wiersza. Wartości już zapisane nie są nadpisywane; gdy odpowiednia świeca nie jest jeszcze dostępna, saldo pozostaje `NULL`.
 

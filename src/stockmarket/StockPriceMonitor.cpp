@@ -27,6 +27,16 @@ constexpr ULONGLONG fileTimeTicksPerSecond = 10000000ULL;
 constexpr ULONGLONG fileTimeTicksPerMinute = 60ULL * fileTimeTicksPerSecond;
 constexpr ULONGLONG windowsToUnixEpochTicks = 116444736000000000ULL;
 
+// Backend
+/**
+ * Sprawdza, czy świecę pobiera osobny strumień IBKR, a nie Twelve Data.
+ * @param symbol Wewnętrzny symbol produktu.
+ * @return true dla GER30 i ES, które są obsługiwane przez IBKR.
+ */
+bool isIbkrOnlyProduct(const std::string& symbol) {
+    return symbol == "GER30" || symbol == "ES";
+}
+
 /**
  * Buduje czytelny komunikat z liczbą zapisanych świec i czasem operacji.
  */
@@ -538,6 +548,14 @@ void StockPriceMonitor::run() {
     bool backfillSucceeded = true;
     const auto backfillStartedAt = std::chrono::steady_clock::now();
     for (const std::string& symbol : monitoredSymbols_) {
+        if (isIbkrOnlyProduct(symbol)) {
+            if (!deferredBackfillStatus.empty()) {
+                deferredBackfillStatus += " ";
+            }
+            deferredBackfillStatus +=
+                symbol + ": świece pobiera osobny strumień IBKR.";
+            continue;
+        }
         if (std::find(
                 startupOpenSymbols.begin(),
                 startupOpenSymbols.end(),
@@ -776,6 +794,15 @@ void StockPriceMonitor::updateAdditionalProducts() {
     std::string additionalStatus;
     std::size_t savedSignalCount = 0;
     for (const std::string& symbol : openSymbols) {
+        if (isIbkrOnlyProduct(symbol)) {
+            if (!additionalStatus.empty()) {
+                additionalStatus += " | ";
+            }
+            additionalStatus +=
+                symbol + ": świeca jest pobierana przez IBKR.";
+            continue;
+        }
+
         if (backfilledSymbols_.find(symbol) == backfilledSymbols_.end()) {
             const auto retryAfter = backfillRetryAfter_.find(symbol);
             const bool retryBackfill =
