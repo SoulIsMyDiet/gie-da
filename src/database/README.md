@@ -180,7 +180,10 @@ odzwierciedlają bieżącego rynku. Kalendarze sesji API pomijają przerwę
 techniczną futures ES oraz godziny zamknięcia DAX40.
 Ponieważ IBKR nie wysyła aktualizacji `keepUpToDate` dla tych opóźnionych
 danych bez dodatkowej subskrypcji, aplikacja odpytuje historię świec co minutę
-i zapisuje tylko najnowszą zamkniętą świecę.
+i zapisuje tylko najnowszą zamkniętą świecę. Dla każdej nowej świecy GER30 i ES
+aplikacja pobiera osobne historyczne serie `BID` i `ASK` i zapisuje ceny
+zamknięcia tylko wtedy, gdy ich znacznik czasu dokładnie odpowiada świecy OHLC.
+Ręczna synchronizacja starszej historii nadal zapisuje wyłącznie OHLC.
 Desktopowy monitor nie odpytuje Twelve Data o te dwa symbole; zapisuje je
 połączenie IBKR. Pozostałe produkty są nadal obsługiwane przez dotychczasowe
 źródło Twelve Data.

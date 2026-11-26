@@ -9,7 +9,7 @@
 #include "CandlesDataClient.h"
 
 /**
- * Przechowuje zamkniętą świecę i kwotowania IBKR wyłącznie do podglądu.
+ * Przechowuje zamkniętą świecę i kwotowania BID/ASK pobrane z IBKR.
  */
 struct IBKRCandleData {
     std::string symbol;

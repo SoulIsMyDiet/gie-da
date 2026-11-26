@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 enum class IBGatewayConnectionState {
@@ -192,6 +193,18 @@ public:
 
 private:
     /**
+     * Przechowuje części świecy historycznej do połączenia po znaczniku czasu.
+     */
+    struct HistoricalPollCandle {
+        IBKRCandleData candle;
+        bool candleAvailable = false;
+        bool bidAvailable = false;
+        double bid = 0.0;
+        bool askAvailable = false;
+        double ask = 0.0;
+    };
+
+    /**
      * Prowadzi protokół IBKR i przetwarza odpowiedzi serwera w wątku roboczym.
      * @param host Adres serwera Gateway.
      * @param port Port API Gateway.
@@ -221,6 +234,12 @@ private:
      * Przenosi zamknięte świece z bufora symboli do kolejki zapisu.
      */
     void flushClosedPendingCandles();
+
+    /**
+     * Kończy jedną serię odczytu i zapisuje najnowszą kompletną świecę.
+     * @param requestId Identyfikator zakończonego żądania IBKR.
+     */
+    void finishHistoricalPollRequest(int requestId);
 
     /**
      * Zatrzymuje synchronizację historii i pokazuje jej przyczynę.
@@ -268,9 +287,13 @@ private:
         lastCompletedCandleTimestampBySymbol_;
     // Backend: przechowuje zamknięte świece do czasu potwierdzenia zapisu.
     std::deque<IBKRCandleData> completedCandlesPendingSave_;
-    // Backend: przechowuje najnowsze świece i stan cyklicznych odczytów IBKR.
-    std::unordered_map<std::string, IBKRCandleData>
-        latestHistoricalPollCandlesBySymbol_;
+    // Backend: łączy OHLC, BID i ASK według dokładnego czasu świecy.
+    std::unordered_map<
+        std::string,
+        std::unordered_map<std::int64_t, HistoricalPollCandle>>
+        historicalPollCandlesBySymbol_;
+    std::unordered_map<std::string, std::unordered_set<int>>
+        pendingHistoricalPollRequestIdsBySymbol_;
     std::unordered_map<std::string, bool> historicalPollInProgressBySymbol_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point>
         nextHistoricalPollAtBySymbol_;

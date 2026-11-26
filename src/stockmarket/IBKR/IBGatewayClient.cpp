@@ -48,6 +48,15 @@ struct IBKRInstrumentDefinition {
     bool rollQuarterly = false;
     int marketDataType = 1;
     bool pollHistoricalData = false;
+    int bidHistoricalRequestId = 0;
+    int askHistoricalRequestId = 0;
+};
+
+enum class HistoricalPollSeries {
+    None,
+    Candle,
+    Bid,
+    Ask
 };
 
 // Rejestr musi odpowiadać instrumentom z market_products.py.
@@ -72,12 +81,47 @@ constexpr std::array<IBKRInstrumentDefinition, 8> ibkrInstrumentRegistry{{
     // Dane indeksowe DAX pobieramy z opóźnionego strumienia IBKR.
     {
         9261, 9262, "GER30", "IBDE40", "CFD", "SMART", "EUR", "MIDPOINT",
-        false, false, 3, true},
+        false, false, 3, true, 9265, 9266},
     // Kontrakt ES używa danych opóźnionych, jeśli konto nie ma subskrypcji live.
     {
             9263, 9264, "ES", "ES", "FUT", "CME", "USD", "TRADES", false,
-            true, 3, true},
+            true, 3, true, 9267, 9268},
 }};
+
+/**
+ * Zwraca identyfikatory trzech serii wymaganych do kompletnej świecy.
+ * @param instrument Konfiguracja instrumentu odczytywanego cyklicznie.
+ * @return Identyfikatory żądań OHLC, BID i ASK.
+ */
+std::array<int, 3> historicalPollRequestIds(
+    const IBKRInstrumentDefinition& instrument) {
+    return {
+        instrument.historicalRequestId,
+        instrument.bidHistoricalRequestId,
+        instrument.askHistoricalRequestId};
+}
+
+/**
+ * Rozpoznaje typ serii historycznej na podstawie identyfikatora żądania.
+ * @param instrument Konfiguracja instrumentu.
+ * @param requestId Identyfikator żądania z odpowiedzi IBKR.
+ * @return Rodzaj serii albo None, jeśli żądanie nie należy do pollera.
+ */
+HistoricalPollSeries historicalPollSeriesForRequestId(
+    const IBKRInstrumentDefinition& instrument, int requestId) {
+    if (requestId == instrument.historicalRequestId) {
+        return HistoricalPollSeries::Candle;
+    }
+    if (instrument.bidHistoricalRequestId != 0 &&
+        requestId == instrument.bidHistoricalRequestId) {
+        return HistoricalPollSeries::Bid;
+    }
+    if (instrument.askHistoricalRequestId != 0 &&
+        requestId == instrument.askHistoricalRequestId) {
+        return HistoricalPollSeries::Ask;
+    }
+    return HistoricalPollSeries::None;
+}
 
 /**
  * Wypełnia kontrakt IBKR danymi z rejestru instrumentów.
@@ -166,7 +210,8 @@ std::string activeQuarterlyFutureContractMonth(
 const IBKRInstrumentDefinition* findInstrumentByRequestId(int requestId) {
     for (const IBKRInstrumentDefinition& instrument :
          ibkrInstrumentRegistry) {
-        if (instrument.historicalRequestId == requestId) {
+        if (historicalPollSeriesForRequestId(instrument, requestId) !=
+            HistoricalPollSeries::None) {
             return &instrument;
         }
     }
@@ -528,14 +573,7 @@ void IBGatewayClient::error(
                 "Błąd strumienia IBKR dla " +
                 std::string(instrument->databaseSymbol) + ": " + message);
             if (instrument->pollHistoricalData) {
-                const std::lock_guard<std::mutex> lock(statusMutex_);
-                historicalPollInProgressBySymbol_[
-                    instrument->databaseSymbol] = false;
-                latestHistoricalPollCandlesBySymbol_.erase(
-                    instrument->databaseSymbol);
-                nextHistoricalPollAtBySymbol_[instrument->databaseSymbol] =
-                    std::chrono::steady_clock::now() +
-                    delayedHistoricalPollInterval;
+                finishHistoricalPollRequest(id);
             }
         } else {
             bool historyRequestFailed = false;
@@ -646,11 +684,29 @@ void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
         findInstrumentByRequestId(requestId);
     if (liveInstrument != nullptr) {
         if (liveInstrument->pollHistoricalData) {
+            const HistoricalPollSeries series =
+                historicalPollSeriesForRequestId(
+                    *liveInstrument, requestId);
+            if (series == HistoricalPollSeries::None) {
+                return;
+            }
+            const std::string symbol = liveInstrument->databaseSymbol;
+            {
+                const std::lock_guard<std::mutex> lock(statusMutex_);
+                const auto pending =
+                    pendingHistoricalPollRequestIdsBySymbol_.find(symbol);
+                if (pending ==
+                        pendingHistoricalPollRequestIdsBySymbol_.end() ||
+                    pending->second.count(requestId) == 0) {
+                    return;
+                }
+            }
+
             std::int64_t timestampUtc = 0;
             if (!parseIbkrTimestamp(bar.time, timestampUtc)) {
                 ErrorLogger::warning(
                     "IBKR zwróciło nieprawidłowy znacznik czasu świecy dla " +
-                    std::string(liveInstrument->databaseSymbol) + ".");
+                    symbol + ".");
                 return;
             }
 
@@ -661,41 +717,55 @@ void IBGatewayClient::historicalData(int requestId, const Bar& bar) {
             if (timestampUtc >= currentMinuteUtc) {
                 return;
             }
-            if (!std::isfinite(bar.open) || !std::isfinite(bar.high) ||
-                !std::isfinite(bar.low) || !std::isfinite(bar.close) ||
-                bar.high < bar.open || bar.high < bar.close ||
-                bar.low > bar.open || bar.low > bar.close ||
-                bar.low > bar.high) {
+            const bool validCandle =
+                std::isfinite(bar.open) && std::isfinite(bar.high) &&
+                std::isfinite(bar.low) && std::isfinite(bar.close) &&
+                bar.high >= bar.open && bar.high >= bar.close &&
+                bar.low <= bar.open && bar.low <= bar.close &&
+                bar.low <= bar.high;
+            const bool validQuote =
+                std::isfinite(bar.close) && bar.close > 0.0;
+            if ((series == HistoricalPollSeries::Candle && !validCandle) ||
+                (series != HistoricalPollSeries::Candle && !validQuote)) {
                 ErrorLogger::warning(
-                    "Pominięto świecę IBKR z nieprawidłowym OHLC dla " +
-                    std::string(liveInstrument->databaseSymbol) + ".");
+                    series == HistoricalPollSeries::Candle
+                        ? "Pominięto świecę IBKR z nieprawidłowym OHLC dla " +
+                              symbol + "."
+                        : "Pominięto nieprawidłową cenę BID/ASK IBKR dla " +
+                              symbol + ".");
                 return;
             }
 
             IBKRCandleData candle;
-            candle.symbol = liveInstrument->databaseSymbol;
-            candle.timestampUtc = timestampUtc;
-            candle.open = bar.open;
-            candle.high = bar.high;
-            candle.low = bar.low;
-            candle.close = bar.close;
-            candle.volume = formatIbkrVolume(bar);
+            if (series == HistoricalPollSeries::Candle) {
+                candle.symbol = symbol;
+                candle.timestampUtc = timestampUtc;
+                candle.open = bar.open;
+                candle.high = bar.high;
+                candle.low = bar.low;
+                candle.close = bar.close;
+                candle.volume = formatIbkrVolume(bar);
+            }
             {
                 const std::lock_guard<std::mutex> lock(statusMutex_);
-                const auto requestInProgress =
-                    historicalPollInProgressBySymbol_.find(candle.symbol);
-                if (requestInProgress !=
-                        historicalPollInProgressBySymbol_.end() &&
-                    requestInProgress->second) {
-                    auto latest =
-                        latestHistoricalPollCandlesBySymbol_.find(
-                            candle.symbol);
-                    if (latest ==
-                            latestHistoricalPollCandlesBySymbol_.end() ||
-                        timestampUtc > latest->second.timestampUtc) {
-                        latestHistoricalPollCandlesBySymbol_[candle.symbol] =
-                            std::move(candle);
-                    }
+                const auto pending =
+                    pendingHistoricalPollRequestIdsBySymbol_.find(symbol);
+                if (pending ==
+                        pendingHistoricalPollRequestIdsBySymbol_.end() ||
+                    pending->second.count(requestId) == 0) {
+                    return;
+                }
+                HistoricalPollCandle& candleParts =
+                    historicalPollCandlesBySymbol_[symbol][timestampUtc];
+                if (series == HistoricalPollSeries::Candle) {
+                    candleParts.candle = std::move(candle);
+                    candleParts.candleAvailable = true;
+                } else if (series == HistoricalPollSeries::Bid) {
+                    candleParts.bid = bar.close;
+                    candleParts.bidAvailable = true;
+                } else {
+                    candleParts.ask = bar.close;
+                    candleParts.askAvailable = true;
                 }
             }
             return;
@@ -915,6 +985,90 @@ void IBGatewayClient::flushClosedPendingCandles() {
 }
 
 /**
+ * Kończy jedną serię pollera i zapisuje najnowszą świecę z pełnym BID/ASK.
+ * @param requestId Identyfikator zakończonego żądania IBKR.
+ */
+void IBGatewayClient::finishHistoricalPollRequest(int requestId) {
+    const IBKRInstrumentDefinition* instrument =
+        findInstrumentByRequestId(requestId);
+    if (instrument == nullptr || !instrument->pollHistoricalData) {
+        return;
+    }
+
+    const std::string symbol = instrument->databaseSymbol;
+    bool shouldSaveCandle = false;
+    bool missingMatchingCandle = false;
+    {
+        const std::lock_guard<std::mutex> lock(statusMutex_);
+        const auto pendingRequests =
+            pendingHistoricalPollRequestIdsBySymbol_.find(symbol);
+        if (pendingRequests ==
+                pendingHistoricalPollRequestIdsBySymbol_.end() ||
+            pendingRequests->second.erase(requestId) == 0 ||
+            !pendingRequests->second.empty()) {
+            return;
+        }
+
+        const auto candles = historicalPollCandlesBySymbol_.find(symbol);
+        const HistoricalPollCandle* latestCompleteCandle = nullptr;
+        std::int64_t latestTimestampUtc = 0;
+        if (candles != historicalPollCandlesBySymbol_.end()) {
+            for (const auto& [timestampUtc, candleParts] : candles->second) {
+                if (!candleParts.candleAvailable ||
+                    !candleParts.bidAvailable ||
+                    !candleParts.askAvailable ||
+                    !std::isfinite(candleParts.bid) ||
+                    !std::isfinite(candleParts.ask) ||
+                    candleParts.bid <= 0.0 ||
+                    candleParts.ask < candleParts.bid ||
+                    (latestCompleteCandle != nullptr &&
+                     timestampUtc <= latestTimestampUtc)) {
+                    continue;
+                }
+                latestCompleteCandle = &candleParts;
+                latestTimestampUtc = timestampUtc;
+            }
+        }
+
+        if (latestCompleteCandle != nullptr) {
+            IBKRCandleData candle = latestCompleteCandle->candle;
+            candle.bidAvailable = true;
+            candle.bid = latestCompleteCandle->bid;
+            candle.askAvailable = true;
+            candle.ask = latestCompleteCandle->ask;
+
+            const auto lastCompleted =
+                lastCompletedCandleTimestampBySymbol_.find(symbol);
+            if (lastCompleted == lastCompletedCandleTimestampBySymbol_.end() ||
+                candle.timestampUtc > lastCompleted->second) {
+                completedCandlesPendingSave_.push_back(std::move(candle));
+                lastCompletedCandleTimestampBySymbol_[symbol] =
+                    latestCompleteCandle->candle.timestampUtc;
+                shouldSaveCandle = true;
+            }
+        } else {
+            missingMatchingCandle = true;
+        }
+
+        historicalPollCandlesBySymbol_.erase(symbol);
+        pendingHistoricalPollRequestIdsBySymbol_.erase(pendingRequests);
+        historicalPollInProgressBySymbol_[symbol] = false;
+        nextHistoricalPollAtBySymbol_[symbol] =
+            std::chrono::steady_clock::now() +
+            delayedHistoricalPollInterval;
+    }
+
+    if (missingMatchingCandle) {
+        ErrorLogger::warning(
+            "IBKR nie zwróciło wspólnej świecy OHLC, BID i ASK dla " +
+            symbol + "; pominięto zapis tej serii.");
+    }
+    if (shouldSaveCandle) {
+        persistNextCompletedCandle();
+    }
+}
+
+/**
  * Kończy początkowy odczyt lub zapis historii synchronizacyjnej.
  */
 void IBGatewayClient::historicalDataEnd(
@@ -923,6 +1077,13 @@ void IBGatewayClient::historicalDataEnd(
     const std::string& endDateStr) {
     static_cast<void>(startDateStr);
     static_cast<void>(endDateStr);
+
+    const IBKRInstrumentDefinition* pollInstrument =
+        findInstrumentByRequestId(requestId);
+    if (pollInstrument != nullptr && pollInstrument->pollHistoricalData) {
+        finishHistoricalPollRequest(requestId);
+        return;
+    }
 
     std::vector<IBKRCandleData> synchronizedCandles;
     std::size_t instrumentIndex = 0;
@@ -1004,42 +1165,6 @@ void IBGatewayClient::historicalDataEnd(
             }
         }
         notifyStatusChanged();
-        return;
-    }
-
-    const IBKRInstrumentDefinition* instrument =
-        findInstrumentByRequestId(requestId);
-    if (instrument != nullptr && instrument->pollHistoricalData) {
-        bool shouldSaveCandle = false;
-        {
-            const std::lock_guard<std::mutex> lock(statusMutex_);
-            const auto latest =
-                latestHistoricalPollCandlesBySymbol_.find(
-                    instrument->databaseSymbol);
-            if (latest != latestHistoricalPollCandlesBySymbol_.end()) {
-                const auto lastCompleted =
-                    lastCompletedCandleTimestampBySymbol_.find(
-                        instrument->databaseSymbol);
-                if (lastCompleted ==
-                        lastCompletedCandleTimestampBySymbol_.end() ||
-                    latest->second.timestampUtc > lastCompleted->second) {
-                    completedCandlesPendingSave_.push_back(latest->second);
-                    lastCompletedCandleTimestampBySymbol_[
-                        instrument->databaseSymbol] =
-                        latest->second.timestampUtc;
-                    shouldSaveCandle = true;
-                }
-                latestHistoricalPollCandlesBySymbol_.erase(latest);
-            }
-            historicalPollInProgressBySymbol_[
-                instrument->databaseSymbol] = false;
-            nextHistoricalPollAtBySymbol_[instrument->databaseSymbol] =
-                std::chrono::steady_clock::now() +
-                delayedHistoricalPollInterval;
-        }
-        if (shouldSaveCandle) {
-            persistNextCompletedCandle();
-        }
         return;
     }
 
@@ -1153,15 +1278,19 @@ void IBGatewayClient::runConnection(
                                         requestInProgress->second;
                                     historicalPollInProgressBySymbol_[
                                         instrument.databaseSymbol] = false;
-                                    latestHistoricalPollCandlesBySymbol_.erase(
+                                    historicalPollCandlesBySymbol_.erase(
                                         instrument.databaseSymbol);
+                                    pendingHistoricalPollRequestIdsBySymbol_
+                                        .erase(instrument.databaseSymbol);
                                     nextHistoricalPollAtBySymbol_[
                                         instrument.databaseSymbol] =
                                         std::chrono::steady_clock::now();
                                 }
                                 if (pollInProgress) {
-                                    client->cancelHistoricalData(
-                                        instrument.historicalRequestId);
+                                    for (const int requestId :
+                                         historicalPollRequestIds(instrument)) {
+                                        client->cancelHistoricalData(requestId);
+                                    }
                                 }
                             }
                             if (historicalRequestsStarted[index]) {
@@ -1209,8 +1338,16 @@ void IBGatewayClient::runConnection(
                                          nextPoll->second)) {
                                     historicalPollInProgressBySymbol_[
                                         instrument.databaseSymbol] = true;
-                                    latestHistoricalPollCandlesBySymbol_.erase(
+                                    historicalPollCandlesBySymbol_.erase(
                                         instrument.databaseSymbol);
+                                    std::unordered_set<int>& pendingRequests =
+                                        pendingHistoricalPollRequestIdsBySymbol_[
+                                            instrument.databaseSymbol];
+                                    pendingRequests.clear();
+                                    for (const int requestId :
+                                         historicalPollRequestIds(instrument)) {
+                                        pendingRequests.insert(requestId);
+                                    }
                                     shouldPoll = true;
                                 }
                             }
@@ -1219,17 +1356,29 @@ void IBGatewayClient::runConnection(
                             }
                             client->reqMarketDataType(
                                 instrument.marketDataType);
-                            client->reqHistoricalData(
+                            const auto requestHistoricalSeries =
+                                [&](int requestId, const char* dataType) {
+                                    client->reqHistoricalData(
+                                        requestId,
+                                        contract,
+                                        "",
+                                        "1800 S",
+                                        "1 min",
+                                        dataType,
+                                        instrument.useRegularTradingHours
+                                            ? 1
+                                            : 0,
+                                        2,
+                                        false,
+                                        TagValueListSPtr());
+                                };
+                            requestHistoricalSeries(
                                 instrument.historicalRequestId,
-                                contract,
-                                "",
-                                "1800 S",
-                                "1 min",
-                                instrument.whatToShow,
-                                instrument.useRegularTradingHours ? 1 : 0,
-                                2,
-                                false,
-                                TagValueListSPtr());
+                                instrument.whatToShow);
+                            requestHistoricalSeries(
+                                instrument.bidHistoricalRequestId, "BID");
+                            requestHistoricalSeries(
+                                instrument.askHistoricalRequestId, "ASK");
                             continue;
                         }
                         if (historicalRequestsStarted[index]) {
