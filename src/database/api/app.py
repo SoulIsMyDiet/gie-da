@@ -441,7 +441,10 @@ from prompt_templates import (  # noqa: E402
 from ai_verification import AIVerificationWorker  # noqa: E402
 from sound_alert import play_alert  # noqa: E402
 from market_data import Candle  # noqa: E402
-from signal_potential_calculator import SignalPotentialCalculator  # noqa: E402
+from signal_potential_calculator import (  # noqa: E402
+    SINGLE_CANDLE_BALANCE_COLUMNS,
+    SignalPotentialCalculator,
+)
 from signal_serializer import Signal  # noqa: E402
 from transaction_tracker import TransactionTracker  # noqa: E402
 from daily_sentences import (  # noqa: E402
@@ -1254,16 +1257,16 @@ class MarketDataRepository:
                     ) ENGINE=InnoDB
                     """
                 )
+                single_candle_columns = ",\n".join(
+                    f"`{column_name}` DECIMAL(20, 5) NULL DEFAULT NULL"
+                    for column_name in SINGLE_CANDLE_BALANCE_COLUMNS
+                )
                 cursor.execute(
-                    """
+                    f"""
                     CREATE TABLE IF NOT EXISTS signal_potention (
                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
                         signal_id BIGINT UNSIGNED NOT NULL,
-                        saldo_1st_candle DECIMAL(20, 5) NULL DEFAULT NULL,
-                        saldo_2nd_candle DECIMAL(20, 5) NULL DEFAULT NULL,
-                        saldo_3rd_candle DECIMAL(20, 5) NULL DEFAULT NULL,
-                        saldo_4th_candle DECIMAL(20, 5) NULL DEFAULT NULL,
-                        saldo_5th_candle DECIMAL(20, 5) NULL DEFAULT NULL,
+                        {single_candle_columns},
                         saldo_10aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         saldo_20_aggr_candles DECIMAL(20, 5) NULL DEFAULT NULL,
                         best_candle_20_minute INT NULL DEFAULT NULL,
@@ -1763,6 +1766,39 @@ class MarketDataRepository:
         cursor.execute("SHOW COLUMNS FROM signal_potention")
         column_names = {column[0] for column in cursor.fetchall()}
 
+        old_single_candle_columns = (
+            "saldo_1st_candle",
+            "saldo_2nd_candle",
+            "saldo_3rd_candle",
+            "saldo_4th_candle",
+            "saldo_5th_candle",
+        )
+        for old_name, new_name in zip(
+            old_single_candle_columns,
+            SINGLE_CANDLE_BALANCE_COLUMNS[:5],
+        ):
+            if old_name in column_names and new_name not in column_names:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE signal_potention
+                    CHANGE COLUMN `{old_name}` `{new_name}`
+                    DECIMAL(20, 5) NULL DEFAULT NULL
+                    """
+                )
+                column_names.remove(old_name)
+                column_names.add(new_name)
+            elif old_name in column_names and new_name in column_names:
+                cursor.execute(
+                    f"""
+                    UPDATE signal_potention
+                    SET `{new_name}` = COALESCE(`{new_name}`, `{old_name}`)
+                    """
+                )
+                cursor.execute(
+                    f"ALTER TABLE signal_potention DROP COLUMN `{old_name}`"
+                )
+                column_names.remove(old_name)
+
         old_saldo_column = "saldo_10th_candle"
         new_saldo_column = "saldo_10aggr_candles"
         if old_saldo_column in column_names and new_saldo_column not in column_names:
@@ -1934,19 +1970,34 @@ class MarketDataRepository:
             )
             column_names.add("average_spread")
 
+        missing_single_candle_columns = [
+            column_name
+            for column_name in SINGLE_CANDLE_BALANCE_COLUMNS[5:]
+            if column_name not in column_names
+        ]
+        if missing_single_candle_columns:
+            added_columns = ",\n".join(
+                f"ADD COLUMN `{column_name}` "
+                "DECIMAL(20, 5) NULL DEFAULT NULL"
+                for column_name in missing_single_candle_columns
+            )
+            cursor.execute(
+                f"ALTER TABLE signal_potention {added_columns}"
+            )
+            column_names.update(missing_single_candle_columns)
+
         decimal_columns = {
-            "saldo_1st_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
-            "saldo_2nd_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
-            "saldo_3rd_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
-            "saldo_4th_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
-            "saldo_5th_candle": "DECIMAL(20, 5) NULL DEFAULT NULL",
+            column_name: "DECIMAL(20, 5) NULL DEFAULT NULL"
+            for column_name in SINGLE_CANDLE_BALANCE_COLUMNS
+        }
+        decimal_columns.update({
             "saldo_10aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "saldo_20_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "saldo_60_aggr_candles": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "100zl_deal_20": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "100zl_deal_60": "DECIMAL(20, 5) NULL DEFAULT NULL",
             "average_spread": "DECIMAL(20, 5) NOT NULL",
-        }
+        })
         cursor.execute("SHOW COLUMNS FROM signal_potention")
         column_types = {
             column[0]: str(column[1]).replace(" ", "").lower()
@@ -1971,6 +2022,33 @@ class MarketDataRepository:
             )
             cursor.execute(
                 f"ALTER TABLE signal_potention {modified_columns}"
+            )
+
+        cursor.execute("SHOW COLUMNS FROM signal_potention")
+        column_order = [column[0] for column in cursor.fetchall()]
+        first_candle_index = column_order.index(SINGLE_CANDLE_BALANCE_COLUMNS[0])
+        signal_id_index = column_order.index("signal_id")
+        candle_columns_are_contiguous = (
+            first_candle_index == signal_id_index + 1
+            and all(
+                column_order[first_candle_index + candle_number]
+                == column_name
+                for candle_number, column_name in enumerate(
+                    SINGLE_CANDLE_BALANCE_COLUMNS
+                )
+            )
+        )
+        if not candle_columns_are_contiguous:
+            column_moves = []
+            previous_column = "signal_id"
+            for column_name in SINGLE_CANDLE_BALANCE_COLUMNS:
+                column_moves.append(
+                    f"MODIFY COLUMN `{column_name}` "
+                    f"{decimal_columns[column_name]} AFTER `{previous_column}`"
+                )
+                previous_column = column_name
+            cursor.execute(
+                "ALTER TABLE signal_potention " + ", ".join(column_moves)
             )
         cursor.execute(
             "ALTER TABLE signal_potention ALTER COLUMN average_spread DROP DEFAULT"

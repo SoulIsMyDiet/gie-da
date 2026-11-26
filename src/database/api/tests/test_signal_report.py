@@ -70,13 +70,20 @@ def test_signal_report_returns_aggregated_decision_without_price() -> None:
 
 
 def test_signal_potential_schema_migrates_60_minute_datetime_to_rank() -> None:
-    """Zamienia stary znacznik czasu na wyliczany numer świecy."""
-    decimal_columns = {
+    """Zmienia nazwy sald i układa 60 świec kolejno przed agregatami."""
+    old_single_candle_columns = {
         "saldo_1st_candle",
         "saldo_2nd_candle",
         "saldo_3rd_candle",
         "saldo_4th_candle",
         "saldo_5th_candle",
+    }
+    single_candle_columns = {
+        f"saldo{candle_number}can"
+        for candle_number in range(1, 61)
+    }
+    decimal_columns = {
+        *old_single_candle_columns,
         "saldo_10aggr_candles",
         "saldo_20_aggr_candles",
         "saldo_60_aggr_candles",
@@ -88,18 +95,28 @@ def test_signal_potential_schema_migrates_60_minute_datetime_to_rank() -> None:
     }
     initial_columns = {
         *decimal_columns,
+        "id",
         "signal_id",
         "max_candle",
         "best_candle_20_minute",
         "best_candle_60_datetime",
     }
     migrated_columns = initial_columns - {
+        *old_single_candle_columns,
         "max_candle",
         "100zl_deal",
         "spread",
         "best_candle_60_datetime",
     }
+    migrated_columns.update(single_candle_columns)
     migrated_columns.add("best_candle_60_minute")
+    migrated_column_order = [
+        "id",
+        "signal_id",
+        *[f"saldo{index}can" for index in range(1, 6)],
+        *sorted(migrated_columns - single_candle_columns - {"id", "signal_id"}),
+        *[f"saldo{index}can" for index in range(6, 61)],
+    ]
     cursor = Mock()
     cursor.fetchall.side_effect = [
         [
@@ -116,15 +133,29 @@ def test_signal_potential_schema_migrates_60_minute_datetime_to_rank() -> None:
             for column in initial_columns
         ],
         [
-            (column, "decimal(20,5)" if column in decimal_columns else "int")
+            (
+                column,
+                "decimal(20,5)"
+                if column in decimal_columns or column in single_candle_columns
+                else "int",
+            )
             for column in migrated_columns
         ],
+        [(column, "decimal(20,5)") for column in migrated_column_order],
     ]
     repository = MarketDataRepository.__new__(MarketDataRepository)
 
     repository._migrate_signal_potention_schema(cursor)
 
     statements = [call.args[0] for call in cursor.execute.call_args_list]
+    for old_name, new_name in zip(
+        sorted(old_single_candle_columns),
+        [f"saldo{index}can" for index in range(1, 6)],
+    ):
+        assert any(
+            f"CHANGE COLUMN `{old_name}` `{new_name}`" in statement
+            for statement in statements
+        )
     for old_name, new_name in (
         ("max_candle", "best_candle_20_minute"),
         ("100zl_deal", "100zl_deal_20"),
@@ -145,5 +176,10 @@ def test_signal_potential_schema_migrates_60_minute_datetime_to_rank() -> None:
     assert any(
         "CHANGE COLUMN best_candle_60_datetime" in statement
         and "best_candle_60_minute INT NULL DEFAULT NULL" in statement
+        for statement in statements
+    )
+    assert any(
+        "MODIFY COLUMN `saldo60can`" in statement
+        and "AFTER `saldo59can`" in statement
         for statement in statements
     )

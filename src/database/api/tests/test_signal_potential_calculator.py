@@ -31,9 +31,10 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
 
         result = self.calculator.calculate("long", self.entry_price, candles)
 
-        self.assertEqual(result["saldo_1st_candle"], Decimal("-0.0002"))
-        self.assertEqual(result["saldo_2nd_candle"], Decimal("0.0002"))
-        self.assertIsNone(result["saldo_3rd_candle"])
+        self.assertEqual(result["saldo1can"], Decimal("-0.0002"))
+        self.assertEqual(result["saldo2can"], Decimal("0.0002"))
+        self.assertIsNone(result["saldo3can"])
+        self.assertIsNone(result["saldo60can"])
         self.assertIsNone(result["saldo_10aggr_candles"])
         self.assertIsNone(result["saldo_20_aggr_candles"])
 
@@ -62,7 +63,7 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
 
         result = self.calculator.calculate("short", self.entry_price, candles)
 
-        self.assertEqual(result["saldo_1st_candle"], Decimal("-0.0002"))
+        self.assertEqual(result["saldo1can"], Decimal("-0.0002"))
         self.assertEqual(result["saldo_10aggr_candles"], Decimal("0.0017"))
         self.assertEqual(result["saldo_20_aggr_candles"], Decimal("0.0017"))
         self.assertEqual(result["best_candle_20_minute"], 7)
@@ -76,7 +77,7 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
 
         result = self.calculator.calculate("short", self.entry_price, candles)
 
-        self.assertEqual(result["saldo_5th_candle"], Decimal("-0.0002"))
+        self.assertEqual(result["saldo5can"], Decimal("-0.0002"))
         self.assertEqual(result["saldo_10aggr_candles"], Decimal("-0.0002"))
         self.assertIsNone(result["saldo_20_aggr_candles"])
         self.assertIsNone(result["best_candle_20_minute"])
@@ -84,6 +85,29 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         self.assertIsNone(result["saldo_60_aggr_candles"])
         self.assertIsNone(result["best_candle_60_minute"])
         self.assertIsNone(result["100zl_deal_60"])
+
+    def test_calculates_individual_balances_for_all_60_candles(self) -> None:
+        """Liczy osobne saldo dla każdej z pierwszych 60 zamkniętych świec."""
+        candles = [
+            (Decimal("1.1001"), Decimal("1.0999"))
+            for _ in range(60)
+        ]
+        candles[59] = (Decimal("1.1020"), Decimal("1.0999"))
+
+        result = self.calculator.calculate(
+            "long", self.entry_price, candles
+        )
+
+        self.assertEqual(result["saldo1can"], Decimal("-0.0002"))
+        self.assertEqual(result["saldo60can"], Decimal("0.0017"))
+        self.assertEqual(
+            [
+                key
+                for key in result
+                if key.startswith("saldo") and key.endswith("can")
+            ],
+            [f"saldo{candle_number}can" for candle_number in range(1, 61)],
+        )
 
     def test_60_candle_window_records_best_candle_number(self) -> None:
         """Okno 60 świec zapisuje numer świecy z najlepszym ekstremum."""
@@ -143,8 +167,8 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         )
         self.assertEqual(last_candle_result["best_candle_60_minute"], 60)
 
-    def test_update_pending_persists_the_best_60_candle_number(self) -> None:
-        """Zapisuje wyliczoną pozycję świecy w kolumnie bazy danych."""
+    def test_update_pending_uses_candle_source_selected_by_signal_id(self) -> None:
+        """Dobiera źródło świec do granicznego numeru sygnału."""
         cursor = Mock()
         candle_rows = [
             (Decimal("1.1001"), Decimal("1.0999"))
@@ -154,24 +178,49 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
         cursor.fetchall.side_effect = [
             [
                 (
-                    42,
+                    5230,
                     "EUR/USD",
                     Decimal("1.1000"),
                     "long",
                     Decimal("0.00030"),
                     {"timestamp": "2025-01-01T00:00:00Z"},
-                )
+                ),
+                (
+                    5231,
+                    "EUR/USD",
+                    Decimal("1.1000"),
+                    "long",
+                    Decimal("0.00030"),
+                    {"timestamp": "2025-01-01T00:00:00Z"},
+                ),
             ],
+            candle_rows,
             candle_rows,
         ]
 
         self.calculator.update_pending(cursor)
 
         pending_query = cursor.execute.call_args_list[0].args[0]
-        update_query, update_values = cursor.execute.call_args_list[-1].args
+        legacy_query = cursor.execute.call_args_list[1].args[0]
+        legacy_update_query, legacy_update_values = (
+            cursor.execute.call_args_list[2].args
+        )
+        ibkr_query = cursor.execute.call_args_list[3].args[0]
+        ibkr_update_query, ibkr_update_values = (
+            cursor.execute.call_args_list[4].args
+        )
         self.assertIn("p.best_candle_60_minute IS NULL", pending_query)
-        self.assertIn("best_candle_60_minute =", update_query)
-        self.assertEqual(update_values[9], 43)
+        self.assertIn("FROM candles\n", legacy_query)
+        self.assertIn("FROM candles_IBKR\n", ibkr_query)
+        self.assertIn(
+            "`saldo60can` = COALESCE(`saldo60can`, %s)",
+            legacy_update_query,
+        )
+        self.assertIn("best_candle_60_minute", legacy_update_query)
+        self.assertEqual(legacy_update_values[59], Decimal("-0.00020"))
+        self.assertEqual(legacy_update_values[65], Decimal("0.0027"))
+        self.assertEqual(legacy_update_values[-1], 5230)
+        self.assertEqual(ibkr_update_values[-1], 5231)
 
     def test_rejects_invalid_direction_and_entry_price(self) -> None:
         """Nieprawidłowy kierunek lub cena wejścia powodują jawny błąd."""
@@ -193,7 +242,7 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
             Decimal("0.0005"),
         )
 
-        self.assertEqual(result["saldo_1st_candle"], Decimal("0.0000"))
+        self.assertEqual(result["saldo1can"], Decimal("0.0000"))
 
     def test_default_spreads_are_specific_to_each_product(self) -> None:
         """Każdy instrument zwraca własny spread w jednostkach swojej ceny."""
@@ -245,7 +294,7 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
             [(Decimal("1.100423456"), Decimal("1.0998"))],
         )
 
-        self.assertEqual(result["saldo_1st_candle"], Decimal("0.00012"))
+        self.assertEqual(result["saldo1can"], Decimal("0.00012"))
 
         negative_result = self.calculator.calculate(
             "long",
@@ -253,7 +302,7 @@ class SignalPotentialCalculatorTests(unittest.TestCase):
             [(Decimal("1.1000"), Decimal("1.0998"))],
             Decimal("0.000345"),
         )
-        self.assertEqual(negative_result["saldo_1st_candle"], Decimal("-0.00034"))
+        self.assertEqual(negative_result["saldo1can"], Decimal("-0.00034"))
 
 
 if __name__ == "__main__":
