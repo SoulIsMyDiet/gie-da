@@ -421,6 +421,31 @@ btcusd_package = importlib.util.module_from_spec(btcusd_package_spec)
 sys.modules[btcusd_package_name] = btcusd_package
 btcusd_package_spec.loader.exec_module(btcusd_package)
 
+chat_btcusd_algorithm_directory = Path(__file__).resolve().parent / "chat_btc_algorithm"
+if not chat_btcusd_algorithm_directory.is_dir():
+    chat_btcusd_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Chat-gpt6"
+        / "BTCUSD"
+    )
+chat_btcusd_package_name = "chat_gpt6_btcusd"
+chat_btcusd_package_spec = importlib.util.spec_from_file_location(
+    chat_btcusd_package_name,
+    chat_btcusd_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(chat_btcusd_algorithm_directory)],
+)
+if (
+    chat_btcusd_package_spec is None
+    or chat_btcusd_package_spec.loader is None
+):
+    raise ImportError("Nie można załadować strategii Chat-gpt6 BTC/USD.")
+chat_btcusd_package = importlib.util.module_from_spec(
+    chat_btcusd_package_spec
+)
+sys.modules[chat_btcusd_package_name] = chat_btcusd_package
+chat_btcusd_package_spec.loader.exec_module(chat_btcusd_package)
+
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from EURUSDStrategyV2 import (  # noqa: E402
     Candle as Grok45Candle,
@@ -510,6 +535,18 @@ from grok45_btcusd.config import (  # noqa: E402
     STRATEGY_NAME as BTCUSD_STRATEGY_NAME,
 )
 from grok45_btcusd.storage import BTCUSDSignalStorage  # noqa: E402
+from chat_gpt6_btcusd.BTCUSDStrategyV1 import (  # noqa: E402
+    BTCUSDStrategyV1 as ChatGPT6BTCUSDStrategy,
+)
+from chat_gpt6_btcusd.config import (  # noqa: E402
+    BEEP_ENABLED as CHAT_GPT6_BTCUSD_BEEP_ENABLED,
+    DATABASE_SYMBOL as CHAT_GPT6_BTCUSD_DATABASE_SYMBOL,
+    HISTORY_LIMIT as CHAT_GPT6_BTCUSD_HISTORY_LIMIT,
+    STRATEGY_NAME as CHAT_GPT6_BTCUSD_STRATEGY_NAME,
+)
+from chat_gpt6_btcusd.storage import (  # noqa: E402
+    BTCUSDSignalStorage as ChatGPT6BTCUSDSignalStorage,
+)
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
 MAX_BACKFILL_CANDLES = 1000
@@ -4319,6 +4356,8 @@ grok45_usdmxn_strategy = Grok45USDMXNStrategy(market_is_open=is_market_open)
 grok45_usdmxn_storage = Grok45USDMXNSignalStorage(repository)
 btcusd_strategy = BTCUSDStrategyV1()
 btcusd_storage = BTCUSDSignalStorage(repository)
+chat_gpt6_btcusd_strategy = ChatGPT6BTCUSDStrategy()
+chat_gpt6_btcusd_storage = ChatGPT6BTCUSDSignalStorage(repository)
 strategy_lock = Lock()
 
 
@@ -5049,6 +5088,76 @@ def open_products() -> Response:
     )
 
 
+def _process_chat_gpt6_btcusd_candle(
+    request: Request,
+    candle: CandleRecord,
+    now_utc: datetime,
+    *,
+    enqueue_notifications: bool,
+) -> None:
+    """Ocenia BTC/USD niezależnie od innych strategii dla zamkniętej świecy."""
+    repository = request.app.state.repository
+    source_timestamp = int(candle.datetime.astimezone(timezone.utc).timestamp())
+    state_prefix = "chat_gpt6_btcusd"
+    strategy = getattr(request.app.state, f"{state_prefix}_strategy", None)
+    storage = getattr(request.app.state, f"{state_prefix}_storage", None)
+    if strategy is None or storage is None:
+        return
+    last_processed = getattr(
+        request.app.state,
+        f"{state_prefix}_last_processed_timestamp",
+        None,
+    )
+    if last_processed is not None and candle.datetime.astimezone(
+        timezone.utc
+    ) <= last_processed:
+        return
+    try:
+        if repository.has_algorithm_evaluation(
+            CHAT_GPT6_BTCUSD_DATABASE_SYMBOL,
+            CHAT_GPT6_BTCUSD_STRATEGY_NAME,
+            source_timestamp,
+        ):
+            setattr(
+                request.app.state,
+                f"{state_prefix}_last_processed_timestamp",
+                candle.datetime.astimezone(timezone.utc),
+            )
+            return
+
+        candles = repository.fetch_recent_candle_history(
+            CHAT_GPT6_BTCUSD_DATABASE_SYMBOL,
+            CHAT_GPT6_BTCUSD_HISTORY_LIMIT,
+            candle.datetime.astimezone(timezone.utc),
+        )
+        if not candles or candles[-1]["timestamp_utc"] != candle.datetime.astimezone(
+            timezone.utc
+        ):
+            logger.error(
+                "Historia BTC/USD nie zawiera świecy Chat-gpt6 %s.",
+                candle.datetime.isoformat(),
+            )
+            return
+
+        result = strategy.evaluate(candles, now=now_utc)
+        storage.save(
+            result,
+            len(candles),
+            enqueue_notification=(
+                enqueue_notifications and CHAT_GPT6_BTCUSD_BEEP_ENABLED
+            ),
+        )
+        setattr(
+            request.app.state,
+            f"{state_prefix}_last_processed_timestamp",
+            candle.datetime.astimezone(timezone.utc),
+        )
+    except (mysql.connector.Error, RuntimeError, ValueError):
+        logger.exception(
+            "Nie udało się przetworzyć świecy BTC/USD dla Chat-gpt6."
+        )
+
+
 def _process_closed_strategy_candle(
     request: Request,
     candle: CandleRecord,
@@ -5084,6 +5193,12 @@ def _process_closed_strategy_candle(
         return
 
     if candle.symbol == BTCUSD_DATABASE_SYMBOL:
+        _process_chat_gpt6_btcusd_candle(
+            request,
+            candle,
+            now_utc,
+            enqueue_notifications=enqueue_notifications,
+        )
         state_prefix = "grok45_btcusd"
         source_timestamp = int(candle_timestamp.timestamp())
         last_processed = getattr(
@@ -6758,5 +6873,8 @@ app.state.grok45_usdmxn_last_processed_timestamp = None
 app.state.grok45_btcusd_strategy = btcusd_strategy
 app.state.grok45_btcusd_storage = btcusd_storage
 app.state.grok45_btcusd_last_processed_timestamp = None
+app.state.chat_gpt6_btcusd_strategy = chat_gpt6_btcusd_strategy
+app.state.chat_gpt6_btcusd_storage = chat_gpt6_btcusd_storage
+app.state.chat_gpt6_btcusd_last_processed_timestamp = None
 app.state.strategy_ready = False
 app.state.grok45_v2_candles = []
