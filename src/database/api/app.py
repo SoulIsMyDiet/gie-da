@@ -446,6 +446,33 @@ chat_btcusd_package = importlib.util.module_from_spec(
 sys.modules[chat_btcusd_package_name] = chat_btcusd_package
 chat_btcusd_package_spec.loader.exec_module(chat_btcusd_package)
 
+claude_btcusd_algorithm_directory = (
+    Path(__file__).resolve().parent / "claude_btc_algorithm"
+)
+if not claude_btcusd_algorithm_directory.is_dir():
+    claude_btcusd_algorithm_directory = (
+        Path(__file__).resolve().parents[2]
+        / "algorithms"
+        / "Claude-sonnet55"
+        / "BTCUSD"
+    )
+claude_btcusd_package_name = "claude_sonnet55_btcusd"
+claude_btcusd_package_spec = importlib.util.spec_from_file_location(
+    claude_btcusd_package_name,
+    claude_btcusd_algorithm_directory / "__init__.py",
+    submodule_search_locations=[str(claude_btcusd_algorithm_directory)],
+)
+if (
+    claude_btcusd_package_spec is None
+    or claude_btcusd_package_spec.loader is None
+):
+    raise ImportError("Nie można załadować strategii Claude-sonnet55 BTC/USD.")
+claude_btcusd_package = importlib.util.module_from_spec(
+    claude_btcusd_package_spec
+)
+sys.modules[claude_btcusd_package_name] = claude_btcusd_package
+claude_btcusd_package_spec.loader.exec_module(claude_btcusd_package)
+
 from EURUSDStrategyV1 import EURUSDStrategyV1, STRATEGY_NAME  # noqa: E402
 from EURUSDStrategyV2 import (  # noqa: E402
     Candle as Grok45Candle,
@@ -546,6 +573,19 @@ from chat_gpt6_btcusd.config import (  # noqa: E402
 )
 from chat_gpt6_btcusd.storage import (  # noqa: E402
     BTCUSDSignalStorage as ChatGPT6BTCUSDSignalStorage,
+)
+from claude_sonnet55_btcusd.BTCUSDStrategyV1 import (  # noqa: E402
+    BTCUSDStrategyV1 as ClaudeBTCUSDStrategy,
+)
+from claude_sonnet55_btcusd.config import (  # noqa: E402
+    BEEP_ENABLED as CLAUDE_BTCUSD_BEEP_ENABLED,
+    COOLDOWN_MINUTES as CLAUDE_BTCUSD_COOLDOWN_MINUTES,
+    DB_SYMBOL as CLAUDE_BTCUSD_DATABASE_SYMBOL,
+    HISTORY_LIMIT as CLAUDE_BTCUSD_HISTORY_LIMIT,
+    STRATEGY_NAME as CLAUDE_BTCUSD_STRATEGY_NAME,
+)
+from claude_sonnet55_btcusd.storage import (  # noqa: E402
+    BTCUSDStorage as ClaudeBTCUSDStorage,
 )
 
 WARSAW_TIME_ZONE = ZoneInfo("Europe/Warsaw")
@@ -4358,6 +4398,8 @@ btcusd_strategy = BTCUSDStrategyV1()
 btcusd_storage = BTCUSDSignalStorage(repository)
 chat_gpt6_btcusd_strategy = ChatGPT6BTCUSDStrategy()
 chat_gpt6_btcusd_storage = ChatGPT6BTCUSDSignalStorage(repository)
+claude_btcusd_strategy = ClaudeBTCUSDStrategy()
+claude_btcusd_storage = ClaudeBTCUSDStorage(repository)
 strategy_lock = Lock()
 
 
@@ -5158,6 +5200,92 @@ def _process_chat_gpt6_btcusd_candle(
         )
 
 
+def _process_claude_btcusd_candle(
+    request: Request,
+    candle: CandleRecord,
+    now_utc: datetime,
+    *,
+    enqueue_notifications: bool,
+) -> None:
+    """Ocenia BTC/USD strategią Claude i zapisuje wynik przez wspólne API."""
+    repository = request.app.state.repository
+    candle_timestamp = candle.datetime.astimezone(timezone.utc)
+    source_timestamp = int(candle_timestamp.timestamp())
+    state_prefix = "claude_btcusd"
+    try:
+        last_processed = getattr(
+            request.app.state,
+            f"{state_prefix}_last_processed_timestamp",
+            None,
+        )
+        if last_processed is not None and candle_timestamp <= last_processed:
+            return
+        if repository.has_algorithm_evaluation(
+            CLAUDE_BTCUSD_DATABASE_SYMBOL,
+            CLAUDE_BTCUSD_STRATEGY_NAME,
+            source_timestamp,
+        ):
+            setattr(
+                request.app.state,
+                f"{state_prefix}_last_processed_timestamp",
+                candle_timestamp,
+            )
+            return
+
+        candles = repository.fetch_recent_candle_history(
+            CLAUDE_BTCUSD_DATABASE_SYMBOL,
+            CLAUDE_BTCUSD_HISTORY_LIMIT,
+            candle_timestamp,
+        )
+        if not candles or candles[-1]["timestamp_utc"] != candle_timestamp:
+            logger.error(
+                "Historia BTC/USD nie zawiera świecy Claude %s.",
+                candle_timestamp.isoformat(),
+            )
+            return
+
+        strategy = getattr(
+            request.app.state,
+            f"{state_prefix}_strategy",
+            claude_btcusd_strategy,
+        )
+        storage = getattr(
+            request.app.state,
+            f"{state_prefix}_storage",
+            claude_btcusd_storage,
+        )
+        result = strategy.evaluate(candles, now=now_utc)
+        if str(result.get("signal", "")).upper() in {"LONG", "SHORT"}:
+            last_signal_timestamp = (
+                repository.fetch_recent_algorithm_signal_timestamp(
+                    CLAUDE_BTCUSD_DATABASE_SYMBOL,
+                    CLAUDE_BTCUSD_STRATEGY_NAME,
+                    source_timestamp,
+                    CLAUDE_BTCUSD_COOLDOWN_MINUTES * 60,
+                )
+            )
+            if last_signal_timestamp is not None:
+                result = strategy.evaluate(
+                    candles,
+                    now=now_utc,
+                    last_signal_timestamp=last_signal_timestamp,
+                )
+        storage.save(
+            result,
+            len(candles),
+            enqueue_notification=(
+                enqueue_notifications and CLAUDE_BTCUSD_BEEP_ENABLED
+            ),
+        )
+        setattr(
+            request.app.state,
+            f"{state_prefix}_last_processed_timestamp",
+            candle_timestamp,
+        )
+    except (mysql.connector.Error, RuntimeError, ValueError):
+        logger.exception("Nie udało się przetworzyć świecy BTC/USD dla Claude.")
+
+
 def _process_closed_strategy_candle(
     request: Request,
     candle: CandleRecord,
@@ -5194,6 +5322,12 @@ def _process_closed_strategy_candle(
 
     if candle.symbol == BTCUSD_DATABASE_SYMBOL:
         _process_chat_gpt6_btcusd_candle(
+            request,
+            candle,
+            now_utc,
+            enqueue_notifications=enqueue_notifications,
+        )
+        _process_claude_btcusd_candle(
             request,
             candle,
             now_utc,
@@ -6876,5 +7010,8 @@ app.state.grok45_btcusd_last_processed_timestamp = None
 app.state.chat_gpt6_btcusd_strategy = chat_gpt6_btcusd_strategy
 app.state.chat_gpt6_btcusd_storage = chat_gpt6_btcusd_storage
 app.state.chat_gpt6_btcusd_last_processed_timestamp = None
+app.state.claude_btcusd_strategy = claude_btcusd_strategy
+app.state.claude_btcusd_storage = claude_btcusd_storage
+app.state.claude_btcusd_last_processed_timestamp = None
 app.state.strategy_ready = False
 app.state.grok45_v2_candles = []

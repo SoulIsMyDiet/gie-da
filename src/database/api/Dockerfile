@@ -37,6 +37,7 @@ COPY algorithms/Claude-sonnet55/USDJPY/ ./claude_usdjpy_algorithm/
 COPY algorithms/Grok-45/USDMXN/ ./grok_usdmxn_algorithm/
 COPY algorithms/Grok-45/BTCUSD/ ./btc_algorithm/
 COPY algorithms/Chat-gpt6/BTCUSD/ ./chat_btc_algorithm/
+COPY algorithms/Claude-sonnet55/BTCUSD/ ./claude_btc_algorithm/
 COPY algorithms/Claude-sonnet55/S&P500/ ./sp500_algorithm/
 COPY algorithms/Grok-45/S&P500/ ./grok_sp500_algorithm/
 COPY algorithms/Chat-gpt6/XAUUSD/ ./xauusd_algorithm/
