@@ -143,9 +143,10 @@ def _normalize_candles(
 
 
 def _blackout_reasons(closed: datetime) -> list[str]:
-    """Zwraca aktywne blokady otwarcia USA i ręcznie wskazanych wydarzeń."""
+    """Zwraca blokady związane z sesją i skonfigurowanymi wydarzeniami."""
     local = closed.astimezone(config.NEW_YORK)
     day = local.date()
+    closed_utc = closed.astimezone(config.UTC)
     reasons = []
     opening = event_time_utc(day, config.US_CASH_OPEN)
     if abs((closed - opening).total_seconds()) <= (
@@ -158,13 +159,32 @@ def _blackout_reasons(closed: datetime) -> list[str]:
         for event in config.US_DATA_RELEASE_TIMES
     ):
         reasons.append("us_data_release")
-    if day in config.FOMC_DATES and abs(
-        (
-            closed
-            - event_time_utc(day, config.FOMC_ANNOUNCEMENT_TIME)
+    for blackout_day, event_time in config.NEWS_BLACKOUTS:
+        if blackout_day == day and abs(
+            (closed - event_time_utc(blackout_day, event_time)).total_seconds()
+        ) <= config.NEWS_BLACKOUT_MINUTES * config.SECONDS_PER_MINUTE:
+            reasons.append("scheduled_news")
+            break
+    if day in config.FOMC_DATES:
+        fomc_delta = (
+            closed - event_time_utc(day, config.FOMC_ANNOUNCEMENT_TIME)
         ).total_seconds()
-    ) <= config.NEWS_BLACKOUT_MINUTES * config.SECONDS_PER_MINUTE:
-        reasons.append("fomc")
+        if (
+            -config.NEWS_BLACKOUT_MINUTES * config.SECONDS_PER_MINUTE
+            <= fomc_delta
+            <= config.FOMC_BLACKOUT_AFTER_MINUTES * config.SECONDS_PER_MINUTE
+        ):
+            reasons.append("fomc")
+    if day in config.HIGH_IMPACT_DAYS:
+        reasons.append("high_impact_day")
+    if (
+        closed_utc.weekday() == config.OPTIONS_EXPIRY_WEEKDAY
+        and closed_utc.hour == config.OPTIONS_EXPIRY_TIME_UTC.hour
+        and closed_utc.minute == config.OPTIONS_EXPIRY_TIME_UTC.minute
+    ):
+        reasons.append("options_expiry")
+    if closed_utc.minute < config.HOUR_START_BLACKOUT_MINUTES:
+        reasons.append("hour_start")
     return reasons
 
 
@@ -187,7 +207,7 @@ def _candidate_setups(
     previous_close = params.get("previous_close")
     candidates = []
 
-    if (
+    if len(candles) >= config.SQUEEZE_BREAKOUT_WARMUP_CANDLES and (
         params.get("bb_width_percentile") is not None
         and params["bb_width_percentile"] <= config.SQUEEZE_MAX_PERCENTILE
         and params.get("donchian_high_20") is not None
@@ -483,6 +503,10 @@ def generate_signal(
     params, segment = calculate_indicators(ordered, reference)
     session = session_name(closed)
     weekend = is_weekend(closed)
+    if not config.OFFHOURS_ENABLED and (
+        weekend or session in {"ASIA", "LATE"}
+    ):
+        result["blocked_by"].append("offhours_disabled")
     params.update(
         session_name=session,
         is_weekend=weekend,
@@ -517,6 +541,8 @@ def generate_signal(
     )
     if "stale_data" in result["blocked_by"]:
         result["reason"] = "Ostatnia zamknięta świeca jest zbyt stara."
+    elif "offhours_disabled" in result["blocked_by"]:
+        result["reason"] = "Handel poza główną sesją jest wyłączony."
     elif any(reason.startswith("news_blackout:") for reason in result["blocked_by"]):
         result["reason"] = "Czas sygnału pokrywa się z zaplanowaną blokadą wydarzenia."
     elif (

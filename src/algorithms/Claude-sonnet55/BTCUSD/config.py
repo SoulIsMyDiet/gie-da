@@ -1,6 +1,6 @@
 """Backend: ustawienia strategii mikrotransakcji BTC/USD."""
 
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -50,7 +50,9 @@ STATE_FILE = Path(
 M1_WARMUP_CANDLES = 100
 M5_WARMUP_CANDLES = 100
 FIVE_MINUTE_PERIOD = 5
+MINIMUM_M1_CANDLES_PER_M5 = 4
 FIVE_MINUTE_EMA = 20
+SQUEEZE_BREAKOUT_WARMUP_CANDLES = 240
 UTC_SESSION_RANGES = (
     ("ASIA", time(0), time(7)),
     ("EUROPE", time(7), time(13)),
@@ -87,6 +89,8 @@ BONUS_SCORE = 10
 MIN_SCORE = 70
 WEEKEND_MIN_SCORE = 80
 THIN_SESSION_MIN_SCORE = 80
+# Wartość False blokuje weekend oraz sesje ASIA i LATE.
+OFFHOURS_ENABLED = True
 BONUS_RELATIVE_VOLUME = 1.2
 BONUS_BODY_RATIO = 0.65
 BONUS_EFFICIENCY_RATIO = 0.5
@@ -100,9 +104,20 @@ US_DATA_RELEASE_DATES = ()
 FOMC_DATES = ()
 NEWS_BLACKOUT_MINUTES = 5
 US_CASH_OPEN = time(9, 30)
-US_DATA_RELEASE_TIMES = (time(8, 30), time(10, 0))
+US_DATA_RELEASE_TIMES = (time(8, 30), time(9, 30), time(10, 0))
 FOMC_ANNOUNCEMENT_TIME = time(14, 0)
 US_CASH_OPEN_BLACKOUT_MINUTES = 2
+# Uwzględnia scenariusz blokady do 14:10 ET po komunikacie o 14:00 ET.
+FOMC_BLACKOUT_AFTER_MINUTES = 10
+# NEWS_BLACKOUTS zawiera pary: data i godzina wydarzenia w strefie Nowego Jorku.
+NEWS_BLACKOUTS: tuple[tuple[date, time], ...] = ()
+# HIGH_IMPACT_DAYS zawiera dni kalendarzowe strefy Nowego Jorku blokowane w całości.
+HIGH_IMPACT_DAYS: tuple[date, ...] = ()
+# Dzień tygodnia używa numeracji datetime: poniedziałek=0, piątek=4.
+OPTIONS_EXPIRY_WEEKDAY = 4
+OPTIONS_EXPIRY_TIME_UTC = time(8, 0)
+# Blokuje pierwszą minutę każdej godziny UTC.
+HOUR_START_BLACKOUT_MINUTES = 1
 
 SIGNAL_PARAMS_EXTRA_KEYS = (
     "setup",

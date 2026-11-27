@@ -246,6 +246,8 @@ class BTCUSDStorage:
         direction = str(result.get("signal", "")).upper()
         if direction not in {"LONG", "SHORT", "NONE"}:
             raise ValueError("Sygnał musi mieć wartość LONG, SHORT albo NONE.")
+        # TYMCZASOWE: przełącznik pozwala czasowo zapisywać także oceny NONE.
+        save_none_signals = config.SAVE_NONE_SIGNALS
         required = (
             "price",
             "timestamp",
@@ -275,9 +277,9 @@ class BTCUSDStorage:
                 repository_signal,
                 candles_count,
                 record_evaluation=True,
-                save_signal=(direction != "NONE" or config.SAVE_NONE_SIGNALS),
+                save_signal=(direction != "NONE" or save_none_signals),
                 save_none_signal=(
-                    direction == "NONE" and config.SAVE_NONE_SIGNALS
+                    direction == "NONE" and save_none_signals
                 ),
                 save_signal_potential=False,
                 enqueue_notification=(
@@ -306,7 +308,7 @@ class BTCUSDStorage:
             if cursor.rowcount != 1:
                 connection.commit()
                 return False
-            if direction != "NONE" or config.SAVE_NONE_SIGNALS:
+            if direction != "NONE" or save_none_signals:
                 close_time = datetime.fromisoformat(
                     str(result["candle_close_time"]).replace("Z", "+00:00")
                 )

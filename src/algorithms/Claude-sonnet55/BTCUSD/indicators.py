@@ -85,7 +85,7 @@ def atr_wilder(candles: list[dict], period: int = config.ATR_PERIOD) -> list[flo
 def completed_five_minute_candles(
     candles: list[dict], cutoff: datetime
 ) -> list[dict]:
-    """Składa M5 wyłącznie z pięciu rzeczywistych świec M1 i zamkniętych koszyków."""
+    """Składa zamknięte M5 z co najmniej czterech rzeczywistych świec M1."""
     cutoff_utc = as_utc(cutoff)
     buckets: dict[int, dict[int, dict]] = {}
     for candle in candles:
@@ -112,9 +112,12 @@ def completed_five_minute_candles(
             first_minute + offset
             for offset in range(config.FIVE_MINUTE_PERIOD)
         ]
-        if any(minute not in members for minute in expected):
+        present_minutes = [
+            minute for minute in expected if minute in members
+        ]
+        if len(present_minutes) < config.MINIMUM_M1_CANDLES_PER_M5:
             continue
-        rows = [members[minute] for minute in expected]
+        rows = [members[minute] for minute in present_minutes]
         volumes = [row.get("volume") for row in rows]
         completed.append(
             {

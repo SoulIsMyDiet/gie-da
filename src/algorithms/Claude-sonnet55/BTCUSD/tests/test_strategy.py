@@ -1,10 +1,16 @@
 """Testy wskaźników, czasu, luk i decyzji kierunkowych BTC/USD."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 
-from claude_btcusd_test import config, indicators, schedule, signal_logic
+from claude_btcusd_test import (
+    config,
+    indicators,
+    schedule,
+    signal_logic,
+    strategy_context,
+)
 
 UTC = timezone.utc
 
@@ -126,18 +132,94 @@ def test_single_missing_minute_keeps_segment_but_two_missing_start_a_new_one() -
     assert [len(segment) for segment in indicators.split_segments(two_missing)] == [2, 1]
 
 
-def test_m5_requires_all_five_closed_minutes_and_excludes_future_bucket() -> None:
-    """Niekompletny koszyk M5 i koszyk jeszcze niezakończony są pomijane."""
+def test_m5_requires_four_closed_minutes_and_excludes_future_bucket() -> None:
+    """Koszyk M5 wymaga czterech minut; koszyk niezakończony jest pomijany."""
     start = datetime(2026, 4, 15, 10, 0, tzinfo=UTC)
     complete = history(5, start)
     missing_one = complete[:3] + complete[4:]
+    missing_two = complete[:2] + complete[4:]
     cutoff = start + timedelta(minutes=5)
 
     assert len(indicators.completed_five_minute_candles(complete, cutoff)) == 1
-    assert indicators.completed_five_minute_candles(missing_one, cutoff) == []
+    assert len(indicators.completed_five_minute_candles(missing_one, cutoff)) == 1
+    assert indicators.completed_five_minute_candles(missing_two, cutoff) == []
     assert indicators.completed_five_minute_candles(
         complete, start + timedelta(minutes=4, seconds=59)
     ) == []
+
+
+def test_configured_release_and_fomc_blackouts_cover_required_times(
+    monkeypatch,
+) -> None:
+    """Blokuje publikację danych o 08:30 i komunikat FOMC po 10 minutach."""
+    event_day = date(2026, 6, 15)
+    monkeypatch.setattr(config, "US_DATA_RELEASE_DATES", (event_day,))
+    monkeypatch.setattr(config, "FOMC_DATES", (event_day,))
+
+    release_reasons = signal_logic._blackout_reasons(
+        datetime(2026, 6, 15, 12, 32, tzinfo=UTC)
+    )
+    cash_open_release_reasons = signal_logic._blackout_reasons(
+        datetime(2026, 6, 15, 13, 34, tzinfo=UTC)
+    )
+    fomc_reasons = signal_logic._blackout_reasons(
+        datetime(2026, 6, 15, 18, 10, tzinfo=UTC)
+    )
+
+    assert "us_data_release" in release_reasons
+    assert "us_data_release" in cash_open_release_reasons
+    assert "fomc" in fomc_reasons
+
+
+def test_manual_news_and_high_impact_day_are_blocked(monkeypatch) -> None:
+    """Blokuje skonfigurowane wydarzenie oraz cały dzień wysokiego ryzyka."""
+    event_day = date(2026, 6, 15)
+    monkeypatch.setattr(config, "NEWS_BLACKOUTS", ((event_day, time(9, 0)),))
+    monkeypatch.setattr(config, "HIGH_IMPACT_DAYS", (event_day,))
+
+    reasons = signal_logic._blackout_reasons(
+        datetime(2026, 6, 15, 13, 2, tzinfo=UTC)
+    )
+
+    assert "scheduled_news" in reasons
+    assert "high_impact_day" in reasons
+
+
+def test_friday_expiry_and_hour_start_are_blocked() -> None:
+    """Blokuje piątkowe wygaśnięcie opcji i początek godziny UTC."""
+    expiry_reasons = signal_logic._blackout_reasons(
+        datetime(2026, 6, 19, 8, 0, tzinfo=UTC)
+    )
+    hour_start_reasons = signal_logic._blackout_reasons(
+        datetime(2026, 6, 18, 17, 0, tzinfo=UTC)
+    )
+
+    assert "options_expiry" in expiry_reasons
+    assert "hour_start" in hour_start_reasons
+
+
+def test_offhours_disabled_blocks_weekend_evaluation(monkeypatch) -> None:
+    """Wyłączenie sesji pozaszczytowej blokuje ocenę także w weekend."""
+    monkeypatch.setattr(config, "OFFHOURS_ENABLED", False)
+    candles = history(5, datetime(2026, 4, 18, 0, 0, tzinfo=UTC))
+
+    result = signal_logic.generate_signal(
+        candles,
+        now=candles[-1]["timestamp_utc"] + timedelta(minutes=1),
+    )
+
+    assert result["signal"] == "NONE"
+    assert "offhours_disabled" in result["blocked_by"]
+
+
+def test_strategy_context_matches_config_and_extra_parameter_keys() -> None:
+    """Kontekst opisuje progi strategii i wszystkie pola dodatkowe."""
+    context = strategy_context.build_strategy_context()
+
+    assert 1200 <= len(context) <= 2000
+    assert str(config.SQUEEZE_BREAKOUT_WARMUP_CANDLES) in context
+    assert str(config.TP_ATR) in context
+    assert all(key in context for key in config.SIGNAL_PARAMS_EXTRA_KEYS)
 
 
 def test_indicators_use_wilder_initialization_and_handle_flat_rsi() -> None:
@@ -216,6 +298,7 @@ def test_generate_signal_emits_long_and_short_with_compact_payload(
         ("SHORT", 99.0, 100.0, -0.5, 101.0, 99.5),
     ],
 )
+@pytest.mark.parametrize("history_count", [239, 240])
 def test_squeeze_breakout_detects_both_directions(
     direction: str,
     close: float,
@@ -223,9 +306,10 @@ def test_squeeze_breakout_detects_both_directions(
     histogram: float,
     donchian_high: float,
     donchian_low: float,
+    history_count: int,
 ) -> None:
-    """Setup squeeze wymaga wybicia rzeczywistego zakresu i MACD zgodnego z ruchem."""
-    candles = history(100)
+    """Setup squeeze wymaga 240 świec i wybicia zgodnego z kierunkiem MACD."""
+    candles = history(history_count)
     candles[-1].update(
         open=open_price,
         high=max(open_price, close) + 0.1,
@@ -242,9 +326,12 @@ def test_squeeze_breakout_detects_both_directions(
 
     candidates = signal_logic._candidate_setups(candles, params, "EUROPE")
 
-    assert candidates == [
-        {"setup": "SQUEEZE_BREAKOUT", "signal": direction, "session": "EUROPE"}
-    ]
+    expected = (
+        [{"setup": "SQUEEZE_BREAKOUT", "signal": direction, "session": "EUROPE"}]
+        if history_count >= config.SQUEEZE_BREAKOUT_WARMUP_CANDLES
+        else []
+    )
+    assert candidates == expected
 
 
 @pytest.mark.parametrize(
