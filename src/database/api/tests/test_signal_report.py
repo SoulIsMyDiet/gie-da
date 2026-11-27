@@ -14,7 +14,7 @@ os.environ.setdefault("MYSQL_PASSWORD", "test")
 os.environ.setdefault("MYSQL_DATABASE", "test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import MarketDataRepository  # noqa: E402
+from app import GROK45_V2_STRATEGY_NAME, MarketDataRepository  # noqa: E402
 
 
 def test_signal_report_returns_aggregated_decision_without_price() -> None:
@@ -67,6 +67,41 @@ def test_signal_report_returns_aggregated_decision_without_price() -> None:
     assert "verification_job.status = 'completed'" in query
     assert "ELSE 'OCZEKUJE'" in query
     assert "THEN 'ODRZUCENIE'" in query
+
+
+def test_signal_report_recovers_grok_name_from_legacy_spread_value() -> None:
+    """Rozpoznaje stare rekordy, w których spread trafił do nazwy Groka."""
+    connection = Mock()
+    cursor = Mock()
+    connection.cursor.return_value = cursor
+    cursor.fetchall.return_value = [
+        (
+            43,
+            datetime(2026, 11, 27, 14, 53, 0),
+            "EUR/USD",
+            "short",
+            GROK45_V2_STRATEGY_NAME,
+            "OCZEKUJE",
+            "--",
+            100,
+            (
+                '{"instrument":"EUR/USD","price":1.095,"timestamp":1795787580,'
+                '"signal":"SHORT","parameters":{"ema9":1.095}}'
+            ),
+            "",
+        )
+    ]
+    repository = MarketDataRepository.__new__(MarketDataRepository)
+    repository.database_settings = {}
+
+    with patch("app.mysql.connector.connect", return_value=connection):
+        rows, _ = repository.fetch_signal_page(0)
+
+    assert rows[0][4] == GROK45_V2_STRATEGY_NAME
+    query, parameters = cursor.execute.call_args.args
+    assert "REGEXP '^[0-9]+([.][0-9]+)?$'" in query
+    assert "JSON_CONTAINS_PATH" in query
+    assert parameters[0] == GROK45_V2_STRATEGY_NAME
 
 
 def test_signal_potential_schema_migrates_60_minute_datetime_to_rank() -> None:

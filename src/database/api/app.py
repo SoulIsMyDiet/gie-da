@@ -2320,7 +2320,9 @@ class MarketDataRepository:
             ):
                 signal_save_count += 1
             if grok45_v2_signal is not None and self._insert_grok45_signal(
-                cursor, grok45_v2_signal, candle_spread
+                cursor,
+                grok45_v2_signal,
+                spread_price=candle_spread,
             ):
                 signal_save_count += 1
             self.signal_potential_calculator.update_pending(
@@ -4268,7 +4270,18 @@ class MarketDataRepository:
                         s.`datetime`,
                         s.product,
                         s.`signal`,
-                        s.algorithm_name,
+                        CASE
+                            WHEN s.algorithm_name
+                                REGEXP '^[0-9]+([.][0-9]+)?$'
+                                AND JSON_UNQUOTE(JSON_EXTRACT(
+                                    s.signal_parameters, '$.instrument'
+                                )) = s.product
+                                AND JSON_CONTAINS_PATH(
+                                    s.signal_parameters, 'one', '$.parameters'
+                                ) = 1
+                                THEN %s
+                            ELSE s.algorithm_name
+                        END,
                         CASE
                             WHEN COALESCE(ai_summary.accept_count, 0) > 0
                                 THEN 'ZGODA'
@@ -4315,7 +4328,7 @@ class MarketDataRepository:
                     ORDER BY s.`datetime` DESC, s.id DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (page_size + 1, offset),
+                    (GROK45_V2_STRATEGY_NAME, page_size + 1, offset),
                 )
                 rows = cursor.fetchall()
                 has_next_page = len(rows) > page_size

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("MYSQL_HOST", "localhost")
 os.environ.setdefault("MYSQL_USER", "test")
@@ -139,6 +139,52 @@ class Grok45V2IntegrationTests(unittest.TestCase):
             )
             self.assertTrue(was_inserted)
             self.assertEqual(signal_insert[1][4], expected_name)
+
+    def test_live_candle_passes_spread_without_overwriting_algorithm_name(self) -> None:
+        opened = datetime(2026, 11, 27, 14, 53, tzinfo=timezone.utc)
+        candle = IBKRCandleRecord(
+            symbol="EUR/USD",
+            datetime=opened,
+            open=Decimal("1.095"),
+            high=Decimal("1.096"),
+            low=Decimal("1.094"),
+            close=Decimal("1.095"),
+            volume=None,
+            bid=Decimal("1.0949"),
+            ask=Decimal("1.0951"),
+        )
+        signal = Grok45SignalRecord(
+            instrument="EUR/USD",
+            price="1.095",
+            timestamp=int(opened.timestamp()),
+            signal="SHORT",
+            parameters={"ema9": 1.095},
+        )
+        repository = MarketDataRepository.__new__(MarketDataRepository)
+        repository.database_settings = {}
+        repository._is_market_open = Mock(return_value=True)
+        repository.signal_potential_calculator = Mock()
+        repository._insert_grok45_signal = Mock(return_value=True)
+        connection = Mock()
+        cursor = Mock()
+        connection.cursor.return_value = cursor
+        tracker = Mock()
+
+        with (
+            patch("app.mysql.connector.connect", return_value=connection),
+            patch("app.TransactionTracker", return_value=tracker),
+        ):
+            result = repository.save_ibkr_candle(
+                candle,
+                grok45_v2_signal=signal,
+            )
+
+        self.assertEqual(result, (True, 1))
+        repository._insert_grok45_signal.assert_called_once_with(
+            cursor,
+            signal,
+            spread_price=Decimal("0.0002"),
+        )
 
     def test_api_saves_chat_and_python_grok_signals_from_same_candle(self) -> None:
         candles = create_market_candles(0.000025)
