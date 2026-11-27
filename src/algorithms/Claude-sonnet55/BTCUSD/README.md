@@ -14,7 +14,7 @@ zmieniono schematu. Zapis sygnału i trwały marker ewaluacji używają istniej�
 repozytorium i unikalnego identyfikatora produktu, algorytmu oraz otwarcia
 świecy.
 
-`candles.datetime` jest lokalnym `DATETIME(6)` Warszawy, a
+`candles_IBKR.datetime` jest lokalnym `DATETIME(6)` Warszawy, a
 `utc_offset_minutes` pozwala jednoznacznie odtworzyć UTC, także przy jesiennym
 cofnięciu zegara. Czas wyniku `timestamp` to epoch sekundy zamknięcia świecy;
 `candle_open_time` i `candle_close_time` są ISO-8601 z offsetem Warszawy.
@@ -48,18 +48,32 @@ FOMC wymagają dopisania konkretnych dat do `config.py`; nie ma bezpłatnego
 kalendarza wydarzeń ani automatycznego pobierania danych makro. Weekend i
 sesje ASIA/LATE podnoszą minimalny próg score zamiast blokować sygnały.
 
-Nie ma wiarygodnych danych BID/ASK ani potwierdzonej jednostki wolumenu IBKR.
-Dlatego `VOLUME_RELIABLE = False`, a wolumen nie wpływa na sygnały. Nie jest
-tworzony sztuczny spread. `ASSUMED_COST_BPS = 5.0` to założenie kosztu
-wejścia i wyjścia, używane wyłącznie do filtra opłacalności i backtestu.
-`PRICE_DECIMALS = 2` jest konfigurowalnym założeniem formatu BTC/USD.
+Wolumen IBKR nie zawsze jest dostępny i jego jednostka nie jest potwierdzona.
+`VOLUME_RELIABLE = False` wyłącza filtry wolumenowe; wszystkie sygnały są
+obliczane z cen OHLC, więc brak wolumenu nie jest błędem.
+
+Strategia pobiera `bid` i `ask` z ocenianej świecy IBKR i używa różnicy
+`ask - bid` w filtrze opłacalności, jeśli oba kwotowania są dostępne. Nie
+podstawia szacowanego spreadu. Bez kwotowań pomija filtr kosztu, pozostawiając
+sygnał oceną techniczną bez potwierdzenia opłacalności po kosztach. Backtest
+odejmuje średni spread z rzeczywistych świec wejścia i wyjścia; jeśli brakuje
+któregoś kwotowania, wynik netto pozostaje nierozstrzygnięty. Opcja
+`--cost-bps` pozwala świadomie podać ręczny koszt zamiast danych spreadu.
+
+`PRICE_DECIMALS = 2` ogranicza liczbę miejsc po przecinku w prezentowanej cenie
+oraz poziomach TP/SL. Nie potwierdza rzeczywistego tick size instrumentu.
+Typ kontraktu i funding nie są używane do generowania sygnałów; strategia nie
+przyjmuje, czy BTC/USD jest spotem czy instrumentem pochodnym.
 
 Wynik pełny trafia na stdout lub do logiki lokalnej aplikacji. Baza otrzymuje
 kompaktowy JSON: zawsze pięć pierwszych pól `price`, `signal`, `timestamp`,
 `instrument`, `reason`; dla `LONG`/`SHORT` także wybrane płaskie pola z
 `SIGNAL_PARAMS_EXTRA_KEYS`. JSON jest ograniczony do 512 bajtów UTF-8.
-`SAVE_NONE_SIGNALS = False` pomija rekordy NONE, ale API zapisuje marker
-ewaluacji, aby ta sama świeca nie była wielokrotnie analizowana.
+`SAVE_NONE_SIGNALS = False` pomija rekordy NONE w tabeli `signals`, ale API
+zapisuje dla każdej ocenionej świecy wpis w `algorithm_evaluations`. Ten wpis
+jest trwałą notatką „ta minuta została już sprawdzona”; po restarcie zapobiega
+ponownej analizie tej samej świecy i tworzeniu duplikatów. `BEEP_ENABLED = True`
+wysyła powiadomienie przez istniejący outbox dla nowego sygnału LONG/SHORT.
 
 ## Uruchamianie
 
@@ -94,6 +108,6 @@ score i nigdy nie modyfikuje automatycznie konfiguracji.
 
 Kalendarz wydarzeń USA jest ręczny; brak dat oznacza brak blokady dla
 konkretnych publikacji makro lub FOMC. Nieznana jednostka wolumenu wyłącza
-filtry wolumenowe. Koszt 5 bps, precyzja 2 miejsca oraz potraktowanie
-instrumentu jako spotu są założeniami wymagającymi potwierdzenia. Sygnały nie
-uwzględniają spreadu, płynności rzeczywistej, funding ani wykonania zlecenia.
+filtry wolumenowe. Brak kwotowań BID/ASK uniemożliwia ocenę kosztu spreadu;
+strategia nie zastępuje ich założoną wartością. Sygnały nie uwzględniają
+płynności rzeczywistej, funding ani wykonania zlecenia.

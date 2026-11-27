@@ -2623,7 +2623,8 @@ class MarketDataRepository:
             try:
                 cursor.execute(
                     """
-                    SELECT datetime, utc_offset_minutes, open, high, low, close, volume
+                    SELECT datetime, utc_offset_minutes, open, high, low, close,
+                           volume, bid, ask
                     FROM candles_IBKR
                     WHERE symbol = %s
                     ORDER BY DATE_SUB(
@@ -2697,6 +2698,8 @@ class MarketDataRepository:
                     low,
                     close,
                     volume,
+                    bid,
+                    ask,
                 ) in rows:
                     opened_utc = local_datetime.replace(
                         tzinfo=timezone(timedelta(minutes=int(offset_minutes)))
@@ -2709,6 +2712,8 @@ class MarketDataRepository:
                             "low": float(low),
                             "close": float(close),
                             "volume": float(volume) if volume is not None else None,
+                            "bid": float(bid) if bid is not None else None,
+                            "ask": float(ask) if ask is not None else None,
                         }
                     )
                 return candles

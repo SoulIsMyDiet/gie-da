@@ -66,7 +66,8 @@ class BTCUSDStorage:
         try:
             cursor = connection.cursor(dictionary=True)
             cursor.execute(
-                """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume
+                """SELECT `datetime`, utc_offset_minutes, `open`, high, low, `close`, volume,
+                          bid, ask
                    FROM candles_IBKR
                    WHERE symbol = %s
                      AND DATE_SUB(`datetime`, INTERVAL utc_offset_minutes MINUTE) <= %s
@@ -95,6 +96,8 @@ class BTCUSDStorage:
                             if row["volume"] is not None
                             else None
                         ),
+                        "bid": float(row["bid"]) if row["bid"] is not None else None,
+                        "ask": float(row["ask"]) if row["ask"] is not None else None,
                     }
                 )
             normalized.sort(key=lambda candle: candle["timestamp_utc"])

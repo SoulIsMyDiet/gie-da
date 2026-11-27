@@ -8,8 +8,6 @@ from zoneinfo import ZoneInfo
 DB_SYMBOL = "BTC/USD"
 INSTRUMENT_NAME = "BTCUSD"
 INSTRUMENT_PARAMS_NAME = "BTC/USD"
-INSTRUMENT_TYPE = "spot"
-HAS_FUNDING = False
 STRATEGY_NAME = "Claude-sonnet55/BTCUSD"
 WARSAW = ZoneInfo("Europe/Warsaw")
 UTC = ZoneInfo("UTC")
@@ -17,7 +15,6 @@ NEW_YORK = ZoneInfo("America/New_York")
 
 PRICE_DECIMALS = 2
 VOLUME_RELIABLE = False
-ASSUMED_COST_BPS = 5.0
 CANDLE_DURATION = timedelta(minutes=1)
 SECONDS_PER_MINUTE = 60
 SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE
@@ -112,6 +109,8 @@ SIGNAL_PARAMS_EXTRA_KEYS = (
     "score",
     "tp_price",
     "sl_price",
+    "spread_bps",
+    "net_reward_risk",
     "atr14_bps",
     "rsi5",
     "efficiency_ratio_30",

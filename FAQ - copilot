@@ -1,0 +1,102 @@
+# Algorytmy
+## Pytania i założenia — BTCUSDStrategyV1
+
+### Przyjęte założenia
+
+1. W repozytorium aktywnym symbolem BTC jest `BTC/USD` (tak jest skonfigurowany produkt i tabela `candles`), natomiast żądany obiekt JSON zawiera `instrument: "BTCUSD"`. Strategia zapisuje do produktu `BTC/USD`, a w JSON używa `BTCUSD`.
+Odp. developera: zgadza sie.
+2. Timestamp JSON wskazuje moment zamknięcia ocenianej świecy (`czas otwarcia + 1 minuta`). Do deduplikacji w bazie nadal używany jest timestamp jej otwarcia.
+   Odp. developera: "Do deduplikacji w bazie nadal używany jest timestamp jej otwarcia" - nie rozumiem tego zdania, ale timestamp JSON wskazuje moment zamknięcia ocenianej świecy (`czas otwarcia + 1 minuta`).
+   Odp. Copilota: To dwa różne zastosowania czasu. JSON i widoczna data sygnału wskazują zamknięcie świecy, natomiast czas jej otwarcia służy jako identyfikator ocenionej świecy, aby ponowne przetworzenie tej samej minuty nie tworzyło duplikatu.
+3. Wolumen nie jest niezbędny do wytworzenia sygnałów, więc strategia może go ignorować. Wcześniej wolumen był wymagany i brak danych powodował błąd i wpis do `LogError`.
+   Odp. developera: zgadza sie.
+4. Historia wskaźników składa się z ostatnich maksymalnie 60 dostępnych świec. Przerwy nie są uzupełniane ani nie resetują wskaźników; ATR uwzględnia różnicę między poprzednim dostępnym zamknięciem a kolejną świecą.
+   Odp. developera: w porządku. Pamietać należy że to może być wyjątek bo każda strategia ma troche inaczej. Wydaje mi sie że wskazniki w wiekszosci przypadków sie resetują po luce trwajacej wiecej niż 1 świeca, ale nie jestem pewien.
+5. Cooldown dotyczy sygnałów LONG/SHORT tej samej strategii i instrumentu, zapisanych w poprzednich 4 minutach. Sygnały NONE nie uruchamiają cooldownu.
+   Odp. developera: w porządku.
+6. Wysyłanie powiadomień/dźwięków jest wyłączone, bo nie było wymagane. Sygnały LONG/SHORT trafiają do `signals`, a sygnały NONE są pomijane. Ewaluacja świecy nadal trafia do `algorithm_evaluations`, żeby ta sama świeca nie była wielokrotnie przetwarzana.
+   Odp. developera: w porządku.
+### Pytania do decyzji
+
+1. Czy w bazie BTC ma pozostać zapisany jako `BTC/USD`, zgodnie z obecnym rejestrem instrumentów, czy należy zmienić cały przepływ na `BTCUSD`? Sama zmiana strategii nie wystarczy do zmiany produktu używanego przez API.
+   Odp. developera: w bazie nazwa ma brzmiec BTC/USD analogicznie do innych instrumentów
+2. Czy timestamp JSON ma wskazywać zamknięcie świecy, jak obecnie, czy czas otwarcia świecy?
+   Odp. developera: Jesli masz na myśli czas zamknicie swiecy która spowodowała wygenerowanie sygnału, to timestamp JSON ma wskazywać zamknięcie świecy, jak obecnie.
+3. Czy porównanie wolumenu ma używać średniej SMA20 liczonej razem z bieżącą świecą, czy średniej z 20 poprzednich świec?
+   Odp. developera: NIech średnia SMA20 liczy się razem z bieżącą świecą, tak jak jest obecnie.
+   Odp. Copilota: Po wyłączeniu wolumenu z reguł BTC/USD SMA20 nie jest już obliczana dla tej strategii. Zmiana dotyczy tylko BTC/USD.
+4. Czy pożądane są powiadomienia dźwiękowe/outbox dla sygnałów LONG i SHORT BTC/USD?
+   Odp. developera: Poki co nie.
+5. Strategia generuje sygnały i opisuje maksymalny czas trzymania ~20 minut, ale nie ustawia automatycznego SL/TP ani nie zamyka pozycji. Czy w przyszłości ma obsługiwać poziomy wyjścia?
+   Odp. developera: Strategia nigdy nie będzie miała takich możliwości.
+   Odp. Copilota: Przyjęte. Limit około 20 minut jest tylko horyzontem opisu/pomiaru potencjału; strategia nie otwiera ani nie zamyka pozycji i nie ustawia SL/TP.
+6. Przy zmianie czasu lokalny czas w `Europe/Warsaw` może być niejednoznaczny albo nie istnieć. Gdy wejście zawiera tylko naiwny `datetime` bez `utc_offset_minutes`, strategia odrzuca taką minutę; czy źródło danych zawsze może przekazać przesunięcie UTC?
+   Odp. developera: nie jestem pewien czy rozumiem pytanie, ale jesli chodzi o to czy źródło danych zawsze może przekazać przesunięcie UTC, to nie. Źródło danych nie zawsze może przekazać przesunięcie UTC.
+   Odp. Copilota: Dla lokalnych godzin, które występują tylko raz, strategia sama wylicza właściwe przesunięcie `Europe/Warsaw`. W powtórzonej godzinie jesiennej lub nieistniejącej godzinie wiosennej bez dodatkowego offsetu nie da się ustalić poprawnego momentu UTC, dlatego taka świeca jest odrzucana zamiast zgadywania i może zostać przetworzona ponownie, gdy dostępne będą poprawne dane.
+   Odp. developera: w porządku. NIe tzreba zapisywac swiec w momencie kiedy nie ma pewności co do przesunięcia UTC.
+
+## Założenia — Claude-sonnet55 BTC/USD
+
+1. Strategia korzysta z zamkniętych świec `candles_IBKR` produktu `BTC/USD`,
+   istniejącego zapisu sygnałów i markera ewaluacji.
+   Odp. developera: tak, i będzie to dotyczyć już wszystkich następnych strategii.
+   Odp. Copilota: Potwierdzone. Nie używam tu starszej tabeli `candles`.
+
+2. Rynek BTC/USD działa 24/7, także w weekendy; nie dodaję przerw sesyjnych.
+   Odp. developera: w przypadku BTC jest to prawda.
+   Odp. Copilota: To znaczy, że sobota, niedziela ani noc nie zatrzymują analizy.
+   Nadal mogą wtedy obowiązywać ostrzejsze progi punktacji, ale rynek nie jest
+   uznawany za zamknięty.
+
+3. Wolumen IBKR nie zawsze przychodzi, więc nie jest uznawany za wiarygodny.
+   Odp. developera: nie wiem co było w instrukcji, ale wiem że wolumen nie
+   zawsze przychodzi. Potwierdź mi więc, czy w tej strategii wolumen jest
+   niezbędny do obliczeń. Jeśli nie, brak wolumenu nie ma być błędem i sygnał
+   ma być liczony normalnie.
+   Odp. Copilota: Wolumen nie jest niezbędny. Wskaźniki kierunku i setupy
+   korzystają z cen OHLC; `VOLUME_RELIABLE = False` wyłącza dodatkowe filtry
+   oparte o wolumen. Brak wolumenu nie blokuje świecy ani sygnału.
+
+4. `PRICE_DECIMALS = 2` jest roboczą precyzją prezentacji BTC/USD; rzeczywisty
+   tick size nie został potwierdzony.
+   Odp. developera: w porządku.
+   Odp. Copilota: Ta wartość zaokrągla cenę wyniku oraz poziomy TP/SL. Nie
+   potwierdza, że broker przyjmuje zlecenia dokładnie z taką precyzją; strategia
+   nie składa zleceń.
+
+5. Poprzednie `ASSUMED_COST_BPS = 5.0` zakładało koszt, zamiast odczytywać spread.
+   Odp. developera: czy w instrukcji od Claude tak było? Jeśli tak, to jest tam
+   błąd. Spread mamy już wyciągany z zamkniętych świec, więc niczego nie trzeba
+   zakładać.
+   Odp. Copilota: Masz rację — usunąłem stałe założenie 5 bps. Strategia pobiera
+   `bid` i `ask` z ocenianej świecy i używa różnicy `ask - bid` do filtra
+   opłacalności. Backtest korzysta ze spreadu świecy wejścia i wyjścia. Jeśli
+   brakuje kwotowań, nie wstawia wymyślonej wartości: sygnał pozostaje oceną
+   techniczną, a wynik netto backtestu nie jest wyliczany. Ręczny koszt w
+   backteście jest możliwy tylko po jawnym podaniu `--cost-bps`.
+
+6. Wcześniej instrument był roboczo opisywany jako spot bez funding, choć typ
+   kontraktu nie był potwierdzony.
+   Odp. developera: a jakie ma to znaczenie dla generowania sygnału?
+   Odp. Copilota: Obecnie żadne — konfiguracja typu kontraktu ani funding nie
+   uczestniczy w wyliczaniu sygnału, który opiera się na cenach i wskaźnikach.
+   Funding ma znaczenie przy ocenie kosztu utrzymywania pozycji na instrumentach
+   pochodnych, ale ta strategia nie zarządza pozycjami. Usunąłem niepotwierdzone
+   oznaczenie „spot”; nie dodaję też założenia o funding.
+
+7. Daty publikacji danych USA i FOMC są wpisywane ręcznie; nie dodaję
+   zewnętrznego kalendarza ani zapytań API.
+   Odp. developera: w porządku.
+   Odp. Copilota: Zostawiam obecne rozwiązanie. Strategia korzysta tylko z dat
+   wpisanych w konfiguracji i nie wykonuje dodatkowych zapytań do API.
+
+8. `SAVE_NONE_SIGNALS = False` pomija rekordy NONE w `signals`, ale marker
+   ewaluacji nadal jest zapisywany. `BEEP_ENABLED = True` wysyła powiadomienie
+   dla nowego LONG/SHORT przez istniejący outbox API.
+   Odp. developera: niestety nie rozumiem, co oznacza „trwały marker ewaluacji”.
+   Wytłumaczysz łopatologicznie powyższy punkt?
+   Odp. Copilota: To osobny zapis mówiący „tę konkretną minutę już sprawdzono”.
+   Jeśli wynik to `NONE`, nie tworzymy rekordu sygnału, ale ten znacznik zostaje
+   w bazie. Dzięki temu po restarcie aplikacja nie analizuje tej samej minuty
+   ponownie i nie tworzy duplikatów. Dla nowego `LONG` lub `SHORT` pozostaje
+   włączone powiadomienie przez istniejący outbox.

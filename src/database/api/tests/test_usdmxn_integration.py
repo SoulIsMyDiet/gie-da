@@ -259,6 +259,8 @@ class USDMXNIntegrationTests(unittest.TestCase):
                         Decimal("16"),
                         Decimal("17.5"),
                         None,
+                        Decimal("17.4"),
+                        Decimal("17.6"),
                     ),
                     (
                         datetime(2026, 1, 5, 11),
@@ -268,6 +270,8 @@ class USDMXNIntegrationTests(unittest.TestCase):
                         Decimal("16"),
                         Decimal("17.5"),
                         Decimal("10"),
+                        None,
+                        None,
                     ),
                 ]
 
@@ -300,6 +304,10 @@ class USDMXNIntegrationTests(unittest.TestCase):
             ],
         )
         self.assertIsNone(candles[1]["volume"])
+        self.assertEqual(candles[1]["bid"], 17.4)
+        self.assertEqual(candles[1]["ask"], 17.6)
+        self.assertIsNone(candles[0]["bid"])
+        self.assertIsNone(candles[0]["ask"])
         self.assertIn("DATE_SUB", connection.cursor_value.query)
         self.assertEqual(connection.cursor_value.parameters[0], "USD/MXN")
 

@@ -152,7 +152,7 @@ def test_indicators_use_wilder_initialization_and_handle_flat_rsi() -> None:
 def test_generate_signal_emits_long_and_short_with_compact_payload(
     monkeypatch: pytest.MonkeyPatch, direction: str, trend: str
 ) -> None:
-    """Gotowy setup zwraca kierunek i wymagane pola JSON w poprawnej kolejności."""
+    """Setup działa bez wolumenu i zwraca pola JSON w poprawnej kolejności."""
     candles = history(100)
     current = candles[-1]
     if direction == "LONG":
@@ -196,6 +196,17 @@ def test_generate_signal_emits_long_and_short_with_compact_payload(
     ) <= config.SIGNAL_PARAMS_MAX_BYTES
     assert result["tp_price"] is not None
     assert result["sl_price"] is not None
+    assert result["params"]["spread_bps"] is None
+    assert result["params"]["net_reward_risk"] is None
+
+    current.update(bid=current["close"] - 0.01, ask=current["close"] + 0.01)
+    with_quotes = signal_logic.generate_signal(candles, now=closed)
+
+    assert with_quotes["signal"] == direction
+    assert with_quotes["params"]["spread_bps"] == pytest.approx(
+        0.02 / current["close"] * config.BASIS_POINTS_PER_UNIT
+    )
+    assert with_quotes["params"]["net_reward_risk"] is not None
 
 
 @pytest.mark.parametrize(

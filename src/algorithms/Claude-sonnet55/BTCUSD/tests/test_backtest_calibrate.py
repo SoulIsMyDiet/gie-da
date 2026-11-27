@@ -43,6 +43,78 @@ def test_simultaneous_stop_and_target_is_resolved_as_stop() -> None:
     assert trade["exit_price"] == 98
 
 
+def test_backtest_uses_observed_entry_and_exit_spreads() -> None:
+    """Koszt netto korzysta z kwotowań obu świec zamiast stałego założenia."""
+    opened = datetime(2026, 4, 15, 12, 0, tzinfo=UTC)
+    candles = [
+        {
+            "timestamp_utc": opened,
+            "open": 100,
+            "high": 101,
+            "low": 99,
+            "close": 100,
+            "bid": 99.95,
+            "ask": 100.05,
+        },
+        {
+            "timestamp_utc": opened + timedelta(minutes=1),
+            "open": 100,
+            "high": 103,
+            "low": 99,
+            "close": 102,
+            "bid": 101.9,
+            "ask": 102.1,
+        },
+    ]
+    signal = {
+        "signal": "LONG",
+        "setup": "SQUEEZE_BREAKOUT",
+        "price": 100,
+        "tp_price": 102,
+        "sl_price": 98,
+    }
+
+    trade = simulate_trade(candles, 0, signal, BacktestSettings())
+
+    assert trade["outcome"] == "take_profit"
+    assert trade["applied_cost_bps"] == pytest.approx(15.0)
+    assert trade["pnl_bps"] == pytest.approx(185.0)
+
+
+def test_backtest_does_not_invent_spread_when_quotes_are_missing() -> None:
+    """Bez ręcznego kosztu i kwotowań wynik netto pozostaje nierozstrzygnięty."""
+    opened = datetime(2026, 4, 15, 12, 0, tzinfo=UTC)
+    candles = [
+        {
+            "timestamp_utc": opened,
+            "open": 100,
+            "high": 101,
+            "low": 99,
+            "close": 100,
+        },
+        {
+            "timestamp_utc": opened + timedelta(minutes=1),
+            "open": 100,
+            "high": 103,
+            "low": 99,
+            "close": 102,
+        },
+    ]
+    signal = {
+        "signal": "LONG",
+        "setup": "SQUEEZE_BREAKOUT",
+        "price": 100,
+        "tp_price": 102,
+        "sl_price": 98,
+    }
+
+    trade = simulate_trade(candles, 0, signal, BacktestSettings())
+
+    assert trade["outcome"] == "take_profit"
+    assert trade["applied_cost_bps"] is None
+    assert trade["pnl_bps"] is None
+
+
 def test_calibration_rejects_insufficient_history() -> None:
     """Kalibracja nie zgaduje progu, gdy historia nie wystarcza."""
     with pytest.raises(ValueError, match="Za mało danych"):

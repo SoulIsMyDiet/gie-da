@@ -116,6 +116,19 @@ def _normalize_candles(
                 low=prices[2],
                 close=prices[3],
             )
+            bid, ask = row.get("bid"), row.get("ask")
+            if bid is None or ask is None:
+                row.update(bid=None, ask=None)
+            else:
+                bid, ask = float(bid), float(ask)
+                if (
+                    not isfinite(bid)
+                    or not isfinite(ask)
+                    or bid <= 0
+                    or ask < bid
+                ):
+                    raise ValueError("Świeca zawiera nieprawidłowe kwotowania BID/ASK.")
+                row.update(bid=bid, ask=ask)
             latest_by_open[opened] = row
         except (KeyError, TypeError, ValueError, OverflowError):
             invalid_count += 1
@@ -330,6 +343,8 @@ def _compact_signal_parameters(result: dict) -> dict:
             "score": result.get("score"),
             "tp_price": result.get("tp_price"),
             "sl_price": result.get("sl_price"),
+            "spread_bps": result.get("params", {}).get("spread_bps"),
+            "net_reward_risk": result.get("params", {}).get("net_reward_risk"),
             "atr14_bps": result.get("params", {}).get("atr14_bps"),
             "rsi5": result.get("params", {}).get("rsi5"),
             "efficiency_ratio_30": result.get("params", {}).get(
@@ -435,7 +450,7 @@ def generate_signal(
                 config.WARSAW
             ).isoformat(),
             blocked_by=["invalid_candle"],
-            reason="Najnowsza zamknięta świeca zawiera nieprawidłowe dane OHLC.",
+            reason="Najnowsza zamknięta świeca zawiera nieprawidłowe dane OHLC lub BID/ASK.",
         )
         result["signal_parameters"] = _fit_compact_payload(result)
         return result
@@ -474,6 +489,14 @@ def generate_signal(
         missing_candles_60m=params.get("missing_candles_60m"),
         data_age_minutes=max(0.0, age),
     )
+    bid, ask = current.get("bid"), current.get("ask")
+    spread_price = ask - bid if bid is not None and ask is not None else None
+    spread_bps = (
+        spread_price / float(current["close"]) * config.BASIS_POINTS_PER_UNIT
+        if spread_price is not None
+        else None
+    )
+    params["spread_bps"] = spread_bps
     result["params"] = {
         key: value
         for key, value in params.items()
@@ -543,22 +566,24 @@ def generate_signal(
                 else 0.0
             )
             net_reward_risk = (
-                (
-                    target_distance
-                    - price
-                    * config.ASSUMED_COST_BPS
-                    / config.BASIS_POINTS_PER_UNIT
-                )
-                / (
-                    stop_distance
-                    + price
-                    * config.ASSUMED_COST_BPS
-                    / config.BASIS_POINTS_PER_UNIT
-                )
+                (target_distance - spread_price)
+                / (stop_distance + spread_price)
+                if spread_price is not None
+                else None
             )
-            if target_bps < config.MIN_TARGET_BPS or net_reward_risk < config.MIN_NET_REWARD_RISK:
+            result["params"]["net_reward_risk"] = net_reward_risk
+            target_too_small = target_bps < config.MIN_TARGET_BPS
+            spread_makes_trade_unattractive = (
+                net_reward_risk is not None
+                and net_reward_risk < config.MIN_NET_REWARD_RISK
+            )
+            if target_too_small or spread_makes_trade_unattractive:
                 result["blocked_by"].append("target_too_small")
-                result["reason"] = "Potencjalny zasięg nie pokrywa przyjętego kosztu."
+                result["reason"] = (
+                    "Potencjalny zasięg jest za mały w stosunku do rzeczywistego spreadu."
+                    if spread_makes_trade_unattractive
+                    else "Potencjalny zasięg jest mniejszy od minimalnego celu."
+                )
             elif score < required_score:
                 result["blocked_by"].append("score_below_threshold")
                 result["reason"] = "Ocena setupu nie osiągnęła progu dla tej sesji."
@@ -589,9 +614,7 @@ def generate_signal(
                     ),
                     blocked_by=[],
                 )
-                result["params"]["assumed_cost_bps"] = config.ASSUMED_COST_BPS
                 result["params"]["target_bps"] = target_bps
-                result["params"]["net_reward_risk"] = net_reward_risk
 
     result["signal_parameters"] = _fit_compact_payload(result)
     return result
