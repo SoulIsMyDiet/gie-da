@@ -2626,7 +2626,7 @@ class MarketDataRepository:
                 cursor.execute(
                     """
                     SELECT datetime, utc_offset_minutes, open, high, low, close,
-                           volume, bid, ask
+                           volume
                     FROM candles_IBKR
                     WHERE symbol = %s
                     ORDER BY DATE_SUB(

@@ -59,6 +59,53 @@ class CandleBackfillTimestampTests(unittest.TestCase):
 class IBKRCandlePersistenceTests(unittest.TestCase):
     """Weryfikuje zapis świec IBKR w osobnej tabeli i czasie warszawskim."""
 
+    def test_strategy_history_reads_only_candle_fields(self) -> None:
+        """Pobiera OHLCV zgodne z polami używanymi przez strategię."""
+        repository = app.MarketDataRepository()
+        connection = Mock()
+        cursor = Mock()
+        connection.cursor.return_value = cursor
+        cursor.fetchall.return_value = [
+            (
+                datetime(2026, 1, 15, 13, 34),
+                60,
+                Decimal("1.10000"),
+                Decimal("1.10100"),
+                Decimal("1.09900"),
+                Decimal("1.10050"),
+                Decimal("10"),
+            )
+        ]
+
+        with patch(
+            "app.mysql.connector.connect", return_value=connection
+        ):
+            candles = repository.fetch_candle_history("EUR/USD")
+
+        query = cursor.execute.call_args.args[0]
+        self.assertIn(
+            "SELECT datetime, utc_offset_minutes, open, high, low, close",
+            query,
+        )
+        self.assertIn("volume\n                    FROM candles_IBKR", query)
+        self.assertNotIn("bid, ask", query)
+        self.assertEqual(len(candles), 1)
+        self.assertEqual(
+            candles[0].timestamp,
+            datetime(2026, 1, 15, 12, 34, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            (
+                candles[0].open,
+                candles[0].high,
+                candles[0].low,
+                candles[0].close,
+                candles[0].volume,
+            ),
+            (1.1, 1.101, 1.099, 1.1005, 10.0),
+        )
+        connection.close.assert_called_once()
+
     def test_spread_uses_the_exact_ibkr_bar_for_the_signal_open_time(self) -> None:
         """Oblicza ask-bid z dokładnego znacznika źródłowej świecy UTC."""
         repository = app.MarketDataRepository()
