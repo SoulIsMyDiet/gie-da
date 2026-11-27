@@ -45,9 +45,9 @@ constexpr wchar_t usdjpyNotificationsPath[] =
     L"/api/signals/usdjpy/notifications?limit=100";
 constexpr std::size_t usdjpyNotificationPageSize = 100;
 constexpr DWORD maxResponseSize = 64 * 1024;
-// Pozostałe żądania mają limit 3 s; zapis ES ma 70 s na analizę do 60 s i bufor.
+// Zapis świecy może uruchomić analizę trwającą do 60 s; zostawiamy 10 s buforu.
 constexpr DWORD apiRequestTimeoutMs = 3000;
-constexpr DWORD singleCandleReceiveTimeoutMs = 70000;
+constexpr DWORD longRunningCandleReceiveTimeoutMs = 70000;
 constexpr DWORD ibkrBatchReceiveTimeoutMs = 30000;
 constexpr std::size_t maximumIbkrBatchSize = 1000;
 constexpr std::size_t pageSize = 20;
@@ -395,8 +395,9 @@ bool sendApiRequest(
         return false;
     }
     const DWORD receiveTimeoutMs =
-        std::wstring_view(path) == singleCandleApiPath
-        ? singleCandleReceiveTimeoutMs
+        std::wstring_view(path) == singleCandleApiPath ||
+        std::wstring_view(path) == ibkrCandleApiPath
+        ? longRunningCandleReceiveTimeoutMs
         : std::wstring_view(path) == ibkrCandleBatchApiPath
         ? ibkrBatchReceiveTimeoutMs
         : apiRequestTimeoutMs;
