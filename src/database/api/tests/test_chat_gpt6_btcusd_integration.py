@@ -112,6 +112,7 @@ def test_closed_candle_is_processed_once_through_shared_repository() -> None:
         api.CHAT_GPT6_BTCUSD_HISTORY_LIMIT,
         opened,
     )
+    repository.fetch_recent_algorithm_signal_timestamp.assert_not_called()
     strategy.evaluate.assert_called_once_with(
         repository.fetch_recent_candle_history.return_value,
         now=opened + timedelta(minutes=1),
@@ -122,6 +123,79 @@ def test_closed_candle_is_processed_once_through_shared_repository() -> None:
         enqueue_notification=False,
     )
     assert state.chat_gpt6_btcusd_last_processed_timestamp == opened
+
+
+def test_recent_directional_signal_is_rechecked_with_cooldown_timestamp() -> None:
+    """Przekazuje ostatni sygnał kierunkowy do ponownej oceny cooldownu."""
+    opened = datetime(2026, 11, 16, 15, 0, tzinfo=UTC)
+    previous_signal_open = int((opened - timedelta(minutes=2)).timestamp())
+    directional_result = {
+        "signal": "LONG",
+        "price": 67_000.0,
+        "candle_open_epoch": int(opened.timestamp()),
+        "candle_close_time": (opened + timedelta(minutes=1)).isoformat(),
+        "signal_parameters": {},
+    }
+    suppressed_result = {
+        **directional_result,
+        "signal": "NONE",
+    }
+    repository = Mock()
+    repository.has_algorithm_evaluation.return_value = False
+    repository.fetch_recent_candle_history.return_value = [
+        {
+            "timestamp_utc": opened,
+            "open": 67_000.0,
+            "high": 67_100.0,
+            "low": 66_900.0,
+            "close": 67_000.0,
+            "volume": None,
+        }
+    ]
+    repository.fetch_recent_algorithm_signal_timestamp.return_value = (
+        previous_signal_open
+    )
+    strategy = Mock()
+    strategy.evaluate.side_effect = [directional_result, suppressed_result]
+    storage = Mock()
+    state = SimpleNamespace(
+        repository=repository,
+        chat_gpt6_btcusd_strategy=strategy,
+        chat_gpt6_btcusd_storage=storage,
+        chat_gpt6_btcusd_last_processed_timestamp=None,
+    )
+    candle = CandleRecord(
+        symbol=DATABASE_SYMBOL,
+        datetime=opened,
+        open="67000",
+        high="67100",
+        low="66900",
+        close="67000",
+        volume=None,
+    )
+
+    api._process_chat_gpt6_btcusd_candle(
+        create_request(state),
+        candle,
+        opened + timedelta(minutes=1),
+        enqueue_notifications=True,
+    )
+
+    repository.fetch_recent_algorithm_signal_timestamp.assert_called_once_with(
+        DATABASE_SYMBOL,
+        STRATEGY_NAME,
+        int(opened.timestamp()),
+        api.CHAT_GPT6_BTCUSD_COOLDOWN_MINUTES * 60,
+    )
+    assert strategy.evaluate.call_count == 2
+    assert strategy.evaluate.call_args_list[1].kwargs[
+        "last_signal_timestamp"
+    ] == previous_signal_open
+    storage.save.assert_called_once_with(
+        suppressed_result,
+        1,
+        enqueue_notification=False,
+    )
 
 
 def test_existing_evaluation_prevents_strategy_rerun() -> None:

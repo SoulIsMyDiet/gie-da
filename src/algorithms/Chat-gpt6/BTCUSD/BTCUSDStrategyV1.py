@@ -18,6 +18,7 @@ if __package__:
     from .config import (
         ATR_PERIOD,
         CANDLE_DURATION,
+        COOLDOWN_MINUTES,
         DATABASE_SYMBOL,
         EMA_FAST_PERIOD,
         EMA_SLOW_PERIOD,
@@ -49,6 +50,7 @@ else:
     from config import (  # type: ignore[no-redef]
         ATR_PERIOD,
         CANDLE_DURATION,
+        COOLDOWN_MINUTES,
         DATABASE_SYMBOL,
         EMA_FAST_PERIOD,
         EMA_SLOW_PERIOD,
@@ -106,12 +108,15 @@ class BTCUSDStrategyV1:
         self,
         candles: CandleInput,
         now: datetime | None = None,
+        last_signal_timestamp: int | None = None,
     ) -> dict[str, Any]:
         """Liczy wskaźniki, warunki kierunku i zwraca wynik dla API.
 
         Args:
             candles: Świece OHLCV zwrócone przez istniejące repozytorium.
             now: Bieżący czas ze strefą; domyślnie aktualny czas UTC.
+            last_signal_timestamp: Opcjonalny czas otwarcia poprzedniego sygnału
+                kierunkowego, podany jako sekundy Unix.
 
         Returns:
             Pełny wynik analizy i krótki JSON do kolumny signal_parameters.
@@ -310,6 +315,17 @@ class BTCUSDStrategyV1:
                 if significant_gap_seen and len(segment) < MINIMUM_M1_CANDLES
                 else "Warunki LONG ani SHORT nie zostały spełnione."
             )
+
+        if signal in {"LONG", "SHORT"} and last_signal_timestamp is not None:
+            seconds_since_last_signal = (
+                current["timestamp_utc"].timestamp() - last_signal_timestamp
+            )
+            if 0 <= seconds_since_last_signal < COOLDOWN_MINUTES * 60:
+                signal = "NONE"
+                reason = (
+                    f"Sygnał wstrzymano na {COOLDOWN_MINUTES} min po "
+                    "poprzednim sygnale kierunkowym."
+                )
 
         open_time = current["timestamp_utc"]
         close_time = open_time + CANDLE_DURATION

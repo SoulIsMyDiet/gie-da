@@ -567,6 +567,7 @@ from chat_gpt6_btcusd.BTCUSDStrategyV1 import (  # noqa: E402
 )
 from chat_gpt6_btcusd.config import (  # noqa: E402
     BEEP_ENABLED as CHAT_GPT6_BTCUSD_BEEP_ENABLED,
+    COOLDOWN_MINUTES as CHAT_GPT6_BTCUSD_COOLDOWN_MINUTES,
     DATABASE_SYMBOL as CHAT_GPT6_BTCUSD_DATABASE_SYMBOL,
     HISTORY_LIMIT as CHAT_GPT6_BTCUSD_HISTORY_LIMIT,
     STRATEGY_NAME as CHAT_GPT6_BTCUSD_STRATEGY_NAME,
@@ -5200,6 +5201,21 @@ def _process_chat_gpt6_btcusd_candle(
             return
 
         result = strategy.evaluate(candles, now=now_utc)
+        if str(result.get("signal", "")).upper() in {"LONG", "SHORT"}:
+            last_signal_timestamp = (
+                repository.fetch_recent_algorithm_signal_timestamp(
+                    CHAT_GPT6_BTCUSD_DATABASE_SYMBOL,
+                    CHAT_GPT6_BTCUSD_STRATEGY_NAME,
+                    source_timestamp,
+                    CHAT_GPT6_BTCUSD_COOLDOWN_MINUTES * 60,
+                )
+            )
+            if last_signal_timestamp is not None:
+                result = strategy.evaluate(
+                    candles,
+                    now=now_utc,
+                    last_signal_timestamp=last_signal_timestamp,
+                )
         storage.save(
             result,
             len(candles),

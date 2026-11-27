@@ -125,7 +125,7 @@ def test_strategy_emits_close_timestamp_and_numeric_parameters(
     )
     assert DATABASE_SYMBOL == "BTC/USD"
     assert STRATEGY_NAME == "Chat-gpt6/BTCUSDStrategyV1"
-    assert SAVE_NONE_SIGNALS is True
+    assert SAVE_NONE_SIGNALS is False
     assert {
         "ema9_1m",
         "ema21_1m",
@@ -233,7 +233,7 @@ def test_future_candle_does_not_change_signal() -> None:
 
 
 def test_none_storage_is_idempotent_and_does_not_require_spread() -> None:
-    """Zapis NONE używa wspólnego repozytorium bez sztucznego spreadu."""
+    """Domyślne NONE zapisuje marker ewaluacji, ale nie tworzy sygnału."""
     repository = Mock()
     repository.save_algorithm_signal.return_value = True
     storage = BTCUSDSignalStorage(repository)
@@ -256,6 +256,10 @@ def test_none_storage_is_idempotent_and_does_not_require_spread() -> None:
     repository.save_algorithm_signal.assert_called_once()
     assert repository.save_algorithm_signal.call_args.kwargs[
         "save_none_signal"
+    ] is False
+    assert repository.save_algorithm_signal.call_args.kwargs["save_signal"] is False
+    assert repository.save_algorithm_signal.call_args.kwargs[
+        "record_evaluation"
     ] is True
     assert repository.save_algorithm_signal.call_args.kwargs[
         "save_signal_potential"
@@ -288,3 +292,92 @@ def test_save_none_flag_false_suppresses_signal_row(monkeypatch) -> None:
     assert repository.save_algorithm_signal.call_args.kwargs[
         "record_evaluation"
     ] is True
+
+
+@pytest.mark.parametrize(
+    ("minutes_since_previous", "expected_signal"),
+    [(3, "NONE"), (4, "LONG")],
+)
+def test_directional_signal_respects_four_minute_cooldown(
+    monkeypatch, minutes_since_previous: int, expected_signal: str
+) -> None:
+    """Blokuje sygnał w trakcie cooldownu, ale zwalnia go po 4 minutach."""
+    candles = build_trending_candles("LONG")
+    gate_results = iter([True, False, False, False])
+    monkeypatch.setattr(
+        BTCUSDStrategyV1,
+        "_direction_conditions",
+        lambda self, *args: next(gate_results),
+    )
+    previous_signal_open = candles[-1]["timestamp_utc"] - timedelta(
+        minutes=minutes_since_previous
+    )
+
+    result = evaluate(
+        candles,
+        last_signal_timestamp=int(previous_signal_open.timestamp()),
+    )
+
+    assert result["signal"] == expected_signal
+
+
+def test_directional_signal_rearms_after_inactive_candle(monkeypatch) -> None:
+    """Aktywny setup emituje ponownie sygnał po nieaktywnej świecy."""
+    candles = build_trending_candles("LONG")
+    gate_results = iter(
+        [
+            True, False, False, False,
+            True, False, True, False,
+            False, False, False, False,
+            True, False, False, False,
+        ]
+    )
+    monkeypatch.setattr(
+        BTCUSDStrategyV1,
+        "_direction_conditions",
+        lambda self, *args: next(gate_results),
+    )
+
+    signals = [evaluate(candles)["signal"] for _ in range(4)]
+
+    assert signals == ["LONG", "NONE", "NONE", "LONG"]
+
+
+def test_strategy_requires_one_hundred_complete_m5_candles(monkeypatch) -> None:
+    """99 koszyków M5 nie wystarcza, a 100 umożliwia ocenę setupu."""
+    monkeypatch.setattr(
+        BTCUSDStrategyV1,
+        "_direction_conditions",
+        lambda self, *args: False,
+    )
+
+    result_with_99_m5 = evaluate(
+        build_trending_candles("LONG", count=495)
+    )
+    result_with_100_m5 = evaluate(
+        build_trending_candles("LONG", count=500)
+    )
+
+    assert "Niewystarczający warm-up" in result_with_99_m5["reason"]
+    assert "Niewystarczający warm-up" not in result_with_100_m5["reason"]
+
+
+def test_strategy_requires_one_hundred_m1_candles(monkeypatch) -> None:
+    """99 świec M1 nie wystarcza, a 100 przechodzi próg M1."""
+    strategy_module = sys.modules[BTCUSDStrategyV1.__module__]
+    monkeypatch.setattr(strategy_module, "MINIMUM_M5_CANDLES", 0)
+    monkeypatch.setattr(
+        BTCUSDStrategyV1,
+        "_direction_conditions",
+        lambda self, *args: False,
+    )
+
+    result_with_99_m1 = evaluate(
+        build_trending_candles("LONG", count=99)
+    )
+    result_with_100_m1 = evaluate(
+        build_trending_candles("LONG", count=100)
+    )
+
+    assert "Niewystarczający warm-up" in result_with_99_m1["reason"]
+    assert "Niewystarczający warm-up" not in result_with_100_m1["reason"]
