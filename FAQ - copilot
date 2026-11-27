@@ -100,3 +100,4 @@ Odp. developera: zgadza sie.
    w bazie. Dzięki temu po restarcie aplikacja nie analizuje tej samej minuty
    ponownie i nie tworzy duplikatów. Dla nowego `LONG` lub `SHORT` pozostaje
    włączone powiadomienie przez istniejący outbox.
+   odp developera: w porzadku.
